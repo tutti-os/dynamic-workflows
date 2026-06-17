@@ -1,0 +1,50 @@
+{
+  "name": "dynamic-workflows",
+  "version": "1.0.0",
+  "description": "Script-first dynamic workflow orchestrator for local ACP agents.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tutti-os/dynamic-workflows.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/tutti-os/dynamic-workflows/issues"
+  },
+  "homepage": "https://github.com/tutti-os/dynamic-workflows#readme",
+  "dependencies": {
+    "@babel/parser": "^7.29.7",
+    "@babel/traverse": "^7.29.7",
+    "@monaco-editor/react": "^4.7.0",
+    "@tutti-os/agent-acp-kit": "^0.1.12",
+    "@tutti-os/ui-system": "^0.0.12",
+    "@xyflow/react": "^12.11.0",
+    "better-sqlite3": "^12.11.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.18.0",
+    "nanoid": "^5.1.11",
+    "next": "^16.2.9",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.9.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^10.5.0",
+    "tailwindcss": "^4.3.1",
+    "typescript": "^6.0.3"
+  }
+}

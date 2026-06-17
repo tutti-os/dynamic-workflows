@@ -1,0 +1,15 @@
+.next
+node_modules
+out
+dist
+coverage
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+*.tsbuildinfo
+.DS_Store
+.agent-acp-kit-codex-root
+.data
