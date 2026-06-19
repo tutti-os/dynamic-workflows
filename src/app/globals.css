@@ -74,14 +74,6 @@ a {
   letter-spacing: 0;
 }
 
-.home-settings {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--border-1);
-  border-radius: 8px;
-  background: var(--background-fronted);
-}
-
 .home-hero {
   display: grid;
   justify-items: center;
@@ -189,15 +181,13 @@ a {
   align-items: end;
 }
 
-.control-field,
-.detail-control-field {
+.control-field {
   display: grid;
   min-width: 0;
   gap: 7px;
 }
 
-.control-field > span,
-.detail-control-field > span {
+.control-field > span {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1;
@@ -246,15 +236,6 @@ a {
   background: color-mix(in srgb, var(--state-danger) 8%, transparent);
 }
 
-.delete-workflow-button {
-  border-color: color-mix(in srgb, var(--state-danger) 38%, var(--border-1));
-  color: var(--state-danger);
-}
-
-.delete-workflow-button:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--state-danger) 8%, transparent);
-}
-
 .ornament-divider {
   display: grid;
   grid-template-columns: minmax(80px, 1fr) auto minmax(80px, 1fr);
@@ -279,6 +260,19 @@ a {
   gap: 16px;
 }
 
+.section-heading-main {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.section-heading-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .section-heading h2 {
   margin: 0;
   color: var(--foreground);
@@ -301,39 +295,18 @@ a {
   gap: 12px;
 }
 
-.import-panel {
+.import-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: min(680px, calc(100vw - 32px));
+}
+
+.import-dialog-body {
   display: grid;
-  width: min(1260px, 100%);
   gap: 12px;
-  border: 1px solid var(--border-1);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--background-fronted) 92%, transparent);
-  padding: 14px;
-}
-
-.import-panel-heading {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.import-panel h3 {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.import-panel p {
-  margin: 4px 0 0;
-  color: var(--text-secondary);
-  font-size: 12px;
 }
 
 .import-textarea {
-  min-height: 132px;
+  min-height: 260px;
   resize: vertical;
   border: 1px solid var(--border-1);
   background: var(--background-fronted);
@@ -355,6 +328,12 @@ a {
   width: min(1260px, 100%);
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 28px;
+}
+
+.workflow-grid > .empty-state {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  width: 100%;
 }
 
 .workflow-card-shell,
@@ -469,6 +448,20 @@ a {
   padding-left: 12px;
 }
 
+.detail-heading-title {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: calc(100% - 34px);
+  align-items: center;
+  width: fit-content;
+}
+
+.detail-heading-title h1 {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .detail-heading h1 {
   overflow: hidden;
   margin: 0;
@@ -478,6 +471,23 @@ a {
   font-size: 20px;
   font-weight: 600;
   letter-spacing: 0;
+}
+
+.workflow-details-edit-button {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 6px);
+  transform: translateY(-50%);
+  opacity: 0;
+  transition:
+    opacity 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.detail-heading:hover .workflow-details-edit-button,
+.detail-heading:focus-within .workflow-details-edit-button {
+  opacity: 1;
 }
 
 .detail-meta {
@@ -516,19 +526,27 @@ a {
   gap: 10px;
 }
 
-.detail-control-field {
-  width: 170px;
-}
-
-.detail-control-field:last-of-type {
-  width: 210px;
+.workflow-actions-menu {
+  min-width: 210px;
 }
 
 .workspace {
   display: grid;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(330px, 0.88fr) minmax(440px, 1.18fr) minmax(340px, 0.86fr);
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 32vw, 430px);
+}
+
+.app-shell > .workspace {
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 32vw, 430px);
+}
+
+.main-preview-pane {
+  grid-column: 1;
+}
+
+.inspector-pane {
+  grid-column: 2;
 }
 
 .pane {
@@ -557,6 +575,25 @@ a {
 
 .pane-title {
   min-width: 0;
+}
+
+.main-preview-header {
+  min-height: 58px;
+}
+
+.main-preview-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.main-preview-tabs {
+  min-width: 168px;
+}
+
+.main-preview-tabs [role="tab"] {
+  min-width: 76px;
 }
 
 .pane-title h2 {
@@ -635,6 +672,7 @@ a {
 
 .workflow-node {
   width: 230px;
+  min-height: 132px;
   border: 1px solid var(--border-1);
   border-radius: 8px;
   background: color-mix(in srgb, var(--background-fronted) 96%, transparent);
@@ -651,6 +689,11 @@ a {
 
 .workflow-node.failed {
   border-color: color-mix(in srgb, var(--state-danger) 42%, var(--border-1));
+}
+
+.workflow-node-side-handle {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .workflow-node-inner {
@@ -817,13 +860,95 @@ a {
   gap: 12px;
 }
 
-.metadata-panel {
+.run-node-detail {
   display: grid;
   gap: 10px;
   border: 1px solid var(--border-1);
   border-radius: 7px;
   background: var(--background-fronted);
   padding: 10px;
+}
+
+.workflow-input-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-width: min(640px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 40px));
+}
+
+.workflow-details-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
+}
+
+.workflow-details-dialog-body {
+  display: grid;
+  gap: 12px;
+}
+
+.workflow-input-dialog-status {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-input-dialog-status span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.workflow-input-dialog-body {
+  display: grid;
+  max-height: min(480px, calc(100vh - 220px));
+  gap: 14px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.workflow-run-settings,
+.workflow-run-inputs {
+  display: grid;
+  gap: 12px;
+}
+
+.workflow-run-settings {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.workflow-run-settings > .field-heading,
+.run-dialog-control-field-wide {
+  grid-column: 1 / -1;
+}
+
+.run-dialog-control-field {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.run-dialog-control-field > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.workflow-run-inputs {
+  border-top: 1px solid var(--border-1);
+  padding-top: 12px;
+}
+
+.run-node-detail > .field-heading label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.workflow-input-dialog textarea[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--state-danger) 54%, var(--border-1));
 }
 
 .field {
@@ -850,6 +975,11 @@ a {
   flex: 0 0 auto;
 }
 
+.run-text-note {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .event-log,
 .output-box {
   max-height: 214px;
@@ -860,6 +990,11 @@ a {
   font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.run-node-detail .event-log,
+.run-node-detail .output-box {
+  max-height: 184px;
 }
 
 .run-list {
@@ -992,6 +1127,8 @@ a {
 
 .empty-state {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
   min-height: 154px;
   place-items: center;
   gap: 10px;
@@ -1016,7 +1153,7 @@ a {
   }
 }
 
-@media (max-width: 1260px) {
+@media (max-width: 980px) {
   .detail-topbar {
     grid-template-columns: 1fr;
   }
@@ -1027,6 +1164,15 @@ a {
 
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .app-shell > .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .main-preview-pane,
+  .inspector-pane {
+    grid-column: 1;
   }
 
   .pane {
@@ -1074,11 +1220,6 @@ a {
     grid-template-columns: 1fr;
   }
 
-  .import-panel-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
   .create-button {
     width: 100%;
   }
@@ -1093,6 +1234,11 @@ a {
     flex-direction: column;
   }
 
+  .section-heading-actions,
+  .import-dialog-trigger {
+    width: 100%;
+  }
+
   .detail-titlebar {
     flex-wrap: wrap;
   }
@@ -1102,14 +1248,10 @@ a {
     padding-left: 0;
   }
 
-  .detail-control-field,
-  .detail-control-field:last-of-type {
-    width: 100%;
-  }
-
   .detail-controls {
-    display: grid;
-    grid-template-columns: 1fr;
+    display: flex;
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .status-strip {

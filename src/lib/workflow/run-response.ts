@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { ApiErrorCode } from "@/lib/api/errors";
 import {
   createWorkflowRun,
@@ -10,6 +8,10 @@ import {
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
 import { runWorkflow } from "@/lib/workflow/executor";
 import { WorkflowScriptSyntaxError } from "@/lib/workflow/parser";
+import {
+  appendRunLogEvent,
+  ensureRunLogDirectory,
+} from "@/lib/workflow/run-log";
 import type { WorkflowRunEvent } from "@/lib/workflow/types";
 
 export type WorkflowRunStreamOptions = {
@@ -20,6 +22,7 @@ export type WorkflowRunStreamOptions = {
   model?: string;
   cwd: string;
   executorKind: string;
+  inputs: Record<string, string>;
   input: unknown;
 };
 
@@ -36,9 +39,7 @@ export function createWorkflowRunStreamResponse(
     request: options.input,
   });
 
-  if (run.logPath) {
-    fs.mkdirSync(path.dirname(run.logPath), { recursive: true });
-  }
+  ensureRunLogDirectory(run.logPath);
 
   const encoder = new TextEncoder();
   const abortController = new AbortController();
@@ -70,9 +71,10 @@ export function createWorkflowRunStreamResponse(
           provider: options.provider,
           model: options.model,
           cwd: options.cwd,
+          inputs: options.inputs,
           signal: abortController.signal,
         })) {
-          writeRunLog(run.logPath, event);
+          appendRunLogEvent(run.logPath, event);
           captureRunSummary(event, nodeStatuses, (nextOutputs) => {
             outputs = nextOutputs;
           });
@@ -108,7 +110,7 @@ export function createWorkflowRunStreamResponse(
           error: finalError,
           errorCode: finalErrorCode,
         };
-        writeRunLog(run.logPath, failedEvent);
+        appendRunLogEvent(run.logPath, failedEvent);
         enqueueEvent(failedEvent);
       } finally {
         updateWorkflowRun({
@@ -207,13 +209,6 @@ function captureRunSummary(
   if (event.type === "run_completed") {
     setOutputs(event.outputs);
   }
-}
-
-function writeRunLog(logPath: string | null, event: unknown) {
-  if (!logPath) {
-    return;
-  }
-  fs.appendFileSync(logPath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 function jsonStream(events: unknown[]) {

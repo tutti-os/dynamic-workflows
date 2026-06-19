@@ -17,6 +17,7 @@ export function extractTemplateRefs(prompt: string | undefined): string[] {
 export function renderPrompt(
   node: WorkflowNode,
   outputs: Record<string, string>,
+  workflowInputs: Record<string, string> = {},
 ): string {
   const prompt = node.prompt ?? "";
   const bindings = new Map(
@@ -26,7 +27,7 @@ export function renderPrompt(
   return prompt.replace(TEMPLATE_REF_PATTERN, (_match, name: string) => {
     const sourceNodeId = bindings.get(name);
     if (!sourceNodeId) {
-      return "";
+      return workflowInputs[name] ?? "";
     }
     return outputs[sourceNodeId] ?? "";
   });

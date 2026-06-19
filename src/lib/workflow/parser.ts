@@ -90,6 +90,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
       nodes: [],
       edges: [],
       phases: [],
+      externalInputs: [],
       diagnostics: [
         parseErrorToDiagnostic(error),
       ],
@@ -107,12 +108,14 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   }
 
   connectTemplateRefs(state);
+  const externalInputs = collectExternalInputs(state);
 
   return {
     meta,
     nodes: state.nodes,
     edges: state.edges,
     phases: state.phases,
+    externalInputs,
     diagnostics: state.diagnostics,
     variableToNodeId: state.variableToNodeId,
   };
@@ -345,6 +348,22 @@ function connectTemplateRefs(state: ParserState): void {
   }
 }
 
+function collectExternalInputs(state: ParserState): string[] {
+  const refs = new Set<string>();
+
+  for (const node of state.nodes) {
+    for (const ref of node.templateRefs) {
+      const boundInput = node.inputs.find((input) => input.name === ref);
+      if (boundInput?.sourceNodeId) {
+        continue;
+      }
+      refs.add(ref);
+    }
+  }
+
+  return [...refs];
+}
+
 function addInputEdges(node: WorkflowNode, state: ParserState): void {
   for (const input of node.inputs) {
     if (input.sourceNodeId) {
@@ -367,10 +386,13 @@ function addEdge(
 }
 
 function enterPhase(title: string, state: ParserState): void {
-  const id = slugify(title);
   state.currentPhase = title;
-  if (!state.phases.some((phase) => phase.id === id)) {
-    state.phases.push({ id, title, nodeIds: [] });
+  if (!state.phases.some((phase) => phase.title === title)) {
+    state.phases.push({
+      id: createUniquePhaseId(title, state.phases),
+      title,
+      nodeIds: [],
+    });
   }
 }
 
@@ -590,6 +612,19 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function createUniquePhaseId(title: string, phases: WorkflowPhase[]): string {
+  const baseId = slugify(title) || `phase-${phases.length + 1}`;
+  const existingIds = new Set(phases.map((phase) => phase.id));
+  let id = baseId;
+  let suffix = 2;
+
+  while (existingIds.has(id)) {
+    id = `${baseId}-${suffix++}`;
+  }
+
+  return id;
 }
 
 function humanize(value: string): string {

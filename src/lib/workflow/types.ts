@@ -68,6 +68,7 @@ export type ParsedWorkflow = {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   phases: WorkflowPhase[];
+  externalInputs: string[];
   diagnostics: WorkflowDiagnostic[];
   variableToNodeId: Record<string, string>;
 };
@@ -78,6 +79,7 @@ export type WorkflowRunRequest = {
   provider?: string;
   model?: string;
   cwd?: string;
+  inputs?: Record<string, string>;
   signal?: AbortSignal;
 };
 

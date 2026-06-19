@@ -177,7 +177,7 @@ async function* runNode(input: {
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
-  const prompt = renderPrompt(input.node, input.outputs);
+  const prompt = renderPrompt(input.node, input.outputs, input.request.inputs);
   const nodeRunId = `${input.runId}:${input.node.id}`;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
   const model = input.node.model ?? input.request.model;

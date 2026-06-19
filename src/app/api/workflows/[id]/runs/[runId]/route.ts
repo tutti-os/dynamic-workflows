@@ -1,7 +1,10 @@
-import fs from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api/errors";
 import { getWorkflowDetail, getWorkflowRun } from "@/lib/db/workflows";
+import {
+  EMPTY_LOG_PREVIEW,
+  readRunLogPreview,
+} from "@/lib/workflow/run-log";
 
 export async function GET(
   _request: Request,
@@ -17,14 +20,9 @@ export async function GET(
     return NextResponse.json(apiError("RUN_NOT_FOUND"), { status: 404 });
   }
 
-  let log = "";
-  if (run.logPath) {
-    try {
-      log = await fs.readFile(run.logPath, "utf8");
-    } catch {
-      log = "";
-    }
-  }
+  const logPreview = run.logPath
+    ? await readRunLogPreview(run.logPath)
+    : EMPTY_LOG_PREVIEW;
 
-  return NextResponse.json({ run, log });
+  return NextResponse.json({ run, ...logPreview });
 }
