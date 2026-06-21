@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getApiErrorMessage, readApiError } from "@/lib/api/errors";
 import {
   downloadTextFile,
   sanitizeFilename,
 } from "@/components/workflow/workflowClientUtils";
+import {
+  apiJson,
+  readApiJsonError,
+} from "@/components/workflow/workflowApiClient";
 import type {
   WorkflowDetail,
   WorkflowVersionRecord,
@@ -107,12 +110,11 @@ export function useWorkflowDocument(input: {
 
   const loadWorkflow = useCallback(
     async (options?: { resetScript?: boolean }) => {
-      const response = await fetch(`/api/workflows/${workflowId}`);
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(getApiErrorMessage(data, "WORKFLOW_NOT_FOUND"));
-      }
-      const nextDetail = (await response.json()) as WorkflowDetail;
+      const nextDetail = await apiJson<WorkflowDetail>(
+        `/api/workflows/${workflowId}`,
+        undefined,
+        "WORKFLOW_NOT_FOUND",
+      );
       setDetail(nextDetail);
       setMetadataName(nextDetail.workflow.name);
       setMetadataDescription(nextDetail.workflow.description);
@@ -167,16 +169,17 @@ export function useWorkflowDocument(input: {
     setIsSaving(true);
     clearScriptSaveFeedback();
     try {
-      const response = await fetch(`/api/workflows/${workflowId}/versions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script }),
-      });
-      const data = (await response.json()) as { detail?: WorkflowDetail };
-      if (!response.ok || !data.detail) {
-        const apiError = readApiError(data, "WORKFLOW_SAVE_FAILED");
-        setScriptSaveFailure(apiError.message, apiError.diagnostics ?? []);
-        throw new Error(apiError.message);
+      const data = await apiJson<{ detail?: WorkflowDetail }>(
+        `/api/workflows/${workflowId}/versions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script }),
+        },
+        "WORKFLOW_SAVE_FAILED",
+      );
+      if (!data.detail) {
+        throw new Error("Workflow save failed");
       }
       setDetail(data.detail);
       setSelectedVersionId(data.detail.currentVersion.id);
@@ -186,11 +189,10 @@ export function useWorkflowDocument(input: {
       );
       clearScriptSaveFeedback();
     } catch (error) {
-      setScriptSaveFailure(
-        error instanceof Error ? error.message : "Save failed",
-      );
+      const apiError = readApiJsonError(error, "WORKFLOW_SAVE_FAILED");
+      setScriptSaveFailure(apiError.message, apiError.diagnostics ?? []);
       onLogEvent(
-        `save failed: ${error instanceof Error ? error.message : "unknown"}`,
+        `save failed: ${apiError.message}`,
       );
     } finally {
       setIsSaving(false);
@@ -205,17 +207,20 @@ export function useWorkflowDocument(input: {
 
     setIsSavingMetadata(true);
     try {
-      const response = await fetch(`/api/workflows/${workflowId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: metadataName,
-          description: metadataDescription,
-        }),
-      });
-      const data = (await response.json()) as WorkflowDetail;
-      if (!response.ok || !data.workflow) {
-        throw new Error(getApiErrorMessage(data, "WORKFLOW_UPDATE_FAILED"));
+      const data = await apiJson<WorkflowDetail>(
+        `/api/workflows/${workflowId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: metadataName,
+            description: metadataDescription,
+          }),
+        },
+        "WORKFLOW_UPDATE_FAILED",
+      );
+      if (!data.workflow) {
+        throw new Error("Workflow update failed");
       }
       setDetail(data);
       setMetadataName(data.workflow.name);
@@ -223,8 +228,9 @@ export function useWorkflowDocument(input: {
       onLogEvent("details: saved");
       return true;
     } catch (error) {
+      const apiError = readApiJsonError(error, "WORKFLOW_UPDATE_FAILED");
       onLogEvent(
-        `details failed: ${error instanceof Error ? error.message : "unknown"}`,
+        `details failed: ${apiError.message}`,
       );
       return false;
     } finally {
@@ -258,21 +264,25 @@ export function useWorkflowDocument(input: {
   async function duplicateCurrentWorkflow() {
     setIsDuplicatingWorkflow(true);
     try {
-      const response = await fetch(`/api/workflows/${workflowId}/duplicate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          versionId: selectedVersion?.id,
-        }),
-      });
-      const data = (await response.json()) as WorkflowDetail;
-      if (!response.ok || !data.workflow) {
-        throw new Error(getApiErrorMessage(data, "WORKFLOW_DUPLICATE_FAILED"));
+      const data = await apiJson<WorkflowDetail>(
+        `/api/workflows/${workflowId}/duplicate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            versionId: selectedVersion?.id,
+          }),
+        },
+        "WORKFLOW_DUPLICATE_FAILED",
+      );
+      if (!data.workflow) {
+        throw new Error("Workflow duplication failed");
       }
       router.push(`/workflows/${data.workflow.id}`);
     } catch (error) {
+      const apiError = readApiJsonError(error, "WORKFLOW_DUPLICATE_FAILED");
       onLogEvent(
-        `duplicate failed: ${error instanceof Error ? error.message : "unknown"}`,
+        `duplicate failed: ${apiError.message}`,
       );
     } finally {
       setIsDuplicatingWorkflow(false);
@@ -293,17 +303,18 @@ export function useWorkflowDocument(input: {
 
     setIsDeletingWorkflow(true);
     try {
-      const response = await fetch(`/api/workflows/${workflowId}`, {
-        method: "DELETE",
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(getApiErrorMessage(data, "WORKFLOW_DELETE_FAILED"));
-      }
+      await apiJson<{ ok: boolean }>(
+        `/api/workflows/${workflowId}`,
+        {
+          method: "DELETE",
+        },
+        "WORKFLOW_DELETE_FAILED",
+      );
       router.push("/");
     } catch (error) {
+      const apiError = readApiJsonError(error, "WORKFLOW_DELETE_FAILED");
       onLogEvent(
-        `delete failed: ${error instanceof Error ? error.message : "unknown"}`,
+        `delete failed: ${apiError.message}`,
       );
       setIsDeletingWorkflow(false);
     }
@@ -317,16 +328,17 @@ export function useWorkflowDocument(input: {
     setIsSaving(true);
     clearScriptSaveFeedback();
     try {
-      const response = await fetch(`/api/workflows/${workflowId}/versions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script: selectedVersion.script }),
-      });
-      const data = (await response.json()) as { detail?: WorkflowDetail };
-      if (!response.ok || !data.detail) {
-        const apiError = readApiError(data, "WORKFLOW_SAVE_FAILED");
-        setScriptSaveFailure(apiError.message, apiError.diagnostics ?? []);
-        throw new Error(apiError.message);
+      const data = await apiJson<{ detail?: WorkflowDetail }>(
+        `/api/workflows/${workflowId}/versions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script: selectedVersion.script }),
+        },
+        "WORKFLOW_SAVE_FAILED",
+      );
+      if (!data.detail) {
+        throw new Error("Workflow restore failed");
       }
       setDetail(data.detail);
       setSelectedVersionId(data.detail.currentVersion.id);
@@ -336,11 +348,10 @@ export function useWorkflowDocument(input: {
       );
       clearScriptSaveFeedback();
     } catch (error) {
-      setScriptSaveFailure(
-        error instanceof Error ? error.message : "Restore failed",
-      );
+      const apiError = readApiJsonError(error, "WORKFLOW_SAVE_FAILED");
+      setScriptSaveFailure(apiError.message, apiError.diagnostics ?? []);
       onLogEvent(
-        `restore failed: ${error instanceof Error ? error.message : "unknown"}`,
+        `restore failed: ${apiError.message}`,
       );
     } finally {
       setIsSaving(false);

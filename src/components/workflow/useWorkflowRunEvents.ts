@@ -6,11 +6,11 @@ import type {
 } from "@/lib/db/workflows";
 import {
   applyRunEventToDetail,
-  limitRunText,
-  RUN_TEXT_PREVIEW_CHARS,
-  serializeRunEvent,
+  applyWorkflowRunEvent,
+  createInitialRunSummary,
+  createRunDetailFromStartedEvent,
   type RunDetail,
-} from "@/lib/workflow/run-detail";
+} from "@/lib/workflow/run-state";
 import type {
   ParsedWorkflow,
   WorkflowNodeStatus,
@@ -96,12 +96,10 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
       pendingRunContextRef.current = options.runContext;
       setLiveRun(null);
       setNodeOutputs({});
-      setNodeStatuses(
-        Object.fromEntries(input.parsed.nodes.map((node) => [node.id, "queued"])),
-      );
+      setNodeStatuses(createInitialRunSummary(input.parsed).nodeStatuses);
       setEventLog([options.initialLog]);
     },
-    [input.parsed.nodes],
+    [input.parsed],
   );
 
   const markPendingNodesSkipped = useCallback(() => {
@@ -142,6 +140,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
 
   function handleRunEvent(event: WorkflowRunEvent) {
     syncLiveRunEvent(event);
+    syncLiveGraphState(event);
 
     if (event.type === "run_started") {
       input.replaceParsed(event.parsed);
@@ -150,10 +149,6 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     }
 
     if (event.type === "node_started") {
-      setNodeStatuses((statuses) => ({
-        ...statuses,
-        [event.nodeId]: "running",
-      }));
       setEventLog((events) => [
         ...events,
         `${event.nodeId}: started via ${event.provider}${event.model ? ` / ${event.model}` : ""}`,
@@ -168,12 +163,6 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
         name?: string;
         message?: string;
       };
-      if (agentEvent.type === "text_delta" && agentEvent.text) {
-        setNodeOutputs((outputs) => ({
-          ...outputs,
-          [event.nodeId]: `${outputs[event.nodeId] ?? ""}${agentEvent.text}`,
-        }));
-      }
       if (agentEvent.type === "status" && agentEvent.message) {
         setEventLog((events) => [
           ...events,
@@ -190,23 +179,11 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     }
 
     if (event.type === "node_completed") {
-      setNodeStatuses((statuses) => ({
-        ...statuses,
-        [event.nodeId]: "completed",
-      }));
-      setNodeOutputs((outputs) => ({
-        ...outputs,
-        [event.nodeId]: event.output,
-      }));
       setEventLog((events) => [...events, `${event.nodeId}: completed`]);
       return;
     }
 
     if (event.type === "node_failed") {
-      setNodeStatuses((statuses) => ({
-        ...statuses,
-        [event.nodeId]: "failed",
-      }));
       setEventLog((events) => [
         ...events,
         `${event.nodeId}: failed: ${event.error}`,
@@ -238,40 +215,54 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     }
   }
 
+  function syncLiveGraphState(event: WorkflowRunEvent) {
+    if (event.type === "run_started") {
+      const initialSummary = createInitialRunSummary(event.parsed);
+      setNodeStatuses(initialSummary.nodeStatuses);
+      setNodeOutputs(initialSummary.outputs);
+      return;
+    }
+
+    setNodeStatuses((statuses) =>
+      applyWorkflowRunEvent(
+        {
+          status: "running",
+          outputs: {},
+          nodeStatuses: statuses,
+        },
+        event,
+      ).nodeStatuses,
+    );
+    setNodeOutputs((outputs) =>
+      applyWorkflowRunEvent(
+        {
+          status: "running",
+          outputs,
+          nodeStatuses: {},
+        },
+        event,
+      ).outputs,
+    );
+  }
+
   function syncLiveRunEvent(event: WorkflowRunEvent) {
     if (event.type === "run_started") {
       activeRunIdRef.current = event.runId;
       const context = pendingRunContextRef.current;
-      const initialLog = serializeRunEvent(event);
-      const nextLiveRun: RunDetail = {
-        run: {
-          id: event.runId,
-          workflowId: input.workflowId,
-          workflowVersionId:
-            context?.workflowVersionId ??
-            input.selectedVersion?.id ??
-            input.detail?.currentVersion.id ??
-            "",
-          executorKind: context?.executorKind ?? "local-agent",
-          externalRunId: null,
-          status: "running",
-          provider: context?.provider ?? null,
-          model: context?.model ?? null,
-          cwd: context?.cwd ?? null,
-          input: context?.input ?? {},
-          result: {
-            outputs: {},
-            nodeStatuses: {},
-          },
-          logPath: null,
-          startedAt: new Date().toISOString(),
-          finishedAt: null,
-        },
-        log: limitRunText(initialLog),
-        logSizeBytes: 0,
-        logReturnedBytes: 0,
-        logTruncated: initialLog.length > RUN_TEXT_PREVIEW_CHARS,
-      };
+      const nextLiveRun = createRunDetailFromStartedEvent({
+        event,
+        workflowId: input.workflowId,
+        workflowVersionId:
+          context?.workflowVersionId ??
+          input.selectedVersion?.id ??
+          input.detail?.currentVersion.id ??
+          "",
+        executorKind: context?.executorKind ?? "local-agent",
+        provider: context?.provider,
+        model: context?.model,
+        cwd: context?.cwd,
+        runInput: context?.input ?? {},
+      });
       setLiveRun(nextLiveRun);
       setSelectedRun(nextLiveRun);
       return;

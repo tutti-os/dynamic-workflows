@@ -107,6 +107,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
     visitTopLevelStatement(statement, state);
   }
 
+  addDuplicateNodeIdDiagnostics(state);
   connectTemplateRefs(state);
   const externalInputs = collectExternalInputs(state);
 
@@ -345,6 +346,23 @@ function connectTemplateRefs(state: ParserState): void {
       });
       addEdge(sourceNodeId, node.id, ref, state);
     }
+  }
+}
+
+function addDuplicateNodeIdDiagnostics(state: ParserState): void {
+  const firstNodeById = new Map<string, WorkflowNode>();
+  for (const node of state.nodes) {
+    const firstNode = firstNodeById.get(node.id);
+    if (!firstNode) {
+      firstNodeById.set(node.id, node);
+      continue;
+    }
+
+    state.diagnostics.push({
+      severity: "error",
+      message: `Duplicate workflow node id "${node.id}". Node ids must be unique.`,
+      range: node.sourceRange,
+    });
   }
 }
 

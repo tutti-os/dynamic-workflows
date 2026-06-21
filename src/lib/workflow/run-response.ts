@@ -1,8 +1,8 @@
 import type { ApiErrorCode } from "@/lib/api/errors";
+import { getWorkflowApiErrorCode } from "@/lib/api/server-errors";
 import {
   createWorkflowRun,
   updateWorkflowRun,
-  type WorkflowRunStatus,
   type WorkflowVersionRecord,
 } from "@/lib/db/workflows";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
@@ -12,6 +12,11 @@ import {
   appendRunLogEvent,
   ensureRunLogDirectory,
 } from "@/lib/workflow/run-log";
+import {
+  applyWorkflowRunEvent,
+  createInitialRunSummary,
+  toWorkflowRunResult,
+} from "@/lib/workflow/run-state";
 import type { WorkflowRunEvent } from "@/lib/workflow/types";
 
 export type WorkflowRunStreamOptions = {
@@ -49,11 +54,10 @@ export function createWorkflowRunStreamResponse(
     abortController.abort();
   }
 
-  const nodeStatuses: Record<string, string> = {};
-  let outputs: Record<string, string> = {};
-  let finalStatus: WorkflowRunStatus = "completed";
-  let finalError: string | undefined;
-  let finalErrorCode: ApiErrorCode | undefined;
+  let summary = createInitialRunSummary(undefined, {
+    status: "running",
+    queueExecutableNodes: false,
+  });
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -75,53 +79,34 @@ export function createWorkflowRunStreamResponse(
           signal: abortController.signal,
         })) {
           appendRunLogEvent(run.logPath, event);
-          captureRunSummary(event, nodeStatuses, (nextOutputs) => {
-            outputs = nextOutputs;
-          });
-
-          if (event.type === "node_failed") {
-            finalStatus = abortController.signal.aborted ? "canceled" : "failed";
-            finalError = event.error;
-            finalErrorCode = "WORKFLOW_RUN_FAILED";
-          }
-          if (event.type === "run_completed") {
-            finalStatus = event.status;
-            outputs = event.outputs;
-            finalError = event.error ?? finalError;
-            finalErrorCode = event.errorCode ?? finalErrorCode;
-          }
+          summary = applyWorkflowRunEvent(summary, event);
 
           enqueueEvent(event);
         }
       } catch (error) {
-        finalStatus = abortController.signal.aborted ? "canceled" : "failed";
-        finalError = abortController.signal.aborted
+        const finalStatus = abortController.signal.aborted ? "canceled" : "failed";
+        const finalError = abortController.signal.aborted
           ? "Run canceled."
           : formatRunError(error);
-        finalErrorCode = abortController.signal.aborted
+        const finalErrorCode = abortController.signal.aborted
           ? "WORKFLOW_RUN_FAILED"
           : getRunErrorCode(error);
-        const eventStatus = finalStatus === "canceled" ? "canceled" : "failed";
         const failedEvent: WorkflowRunEvent = {
           type: "run_completed",
           runId: run.id,
-          status: eventStatus,
-          outputs,
+          status: finalStatus,
+          outputs: summary.outputs,
           error: finalError,
           errorCode: finalErrorCode,
         };
         appendRunLogEvent(run.logPath, failedEvent);
+        summary = applyWorkflowRunEvent(summary, failedEvent);
         enqueueEvent(failedEvent);
       } finally {
         updateWorkflowRun({
           runId: run.id,
-          status: finalStatus,
-          result: {
-            outputs,
-            nodeStatuses,
-            error: finalError,
-            errorCode: finalErrorCode,
-          },
+          status: summary.status,
+          result: toWorkflowRunResult(summary),
         });
         options.request.signal.removeEventListener("abort", abortFromRequest);
         try {
@@ -171,44 +156,8 @@ export function formatRunError(error: unknown): string {
   return error instanceof Error ? error.message : "Workflow run failed";
 }
 
-function getRunErrorCode(error: unknown): ApiErrorCode {
-  if (error instanceof WorkflowScriptSyntaxError) {
-    return "WORKFLOW_SCRIPT_INVALID";
-  }
-  if (error instanceof WorkflowCwdError) {
-    return "WORKFLOW_CWD_INVALID";
-  }
-  if (error instanceof Error) {
-    if (error.message === "Workflow not found") {
-      return "WORKFLOW_NOT_FOUND";
-    }
-    if (error.message === "Run not found") {
-      return "RUN_NOT_FOUND";
-    }
-    if (error.message === "Workflow version not found") {
-      return "WORKFLOW_VERSION_NOT_FOUND";
-    }
-  }
-  return "WORKFLOW_RUN_FAILED";
-}
-
-function captureRunSummary(
-  event: WorkflowRunEvent,
-  nodeStatuses: Record<string, string>,
-  setOutputs: (outputs: Record<string, string>) => void,
-) {
-  if (event.type === "node_started") {
-    nodeStatuses[event.nodeId] = "running";
-  }
-  if (event.type === "node_completed") {
-    nodeStatuses[event.nodeId] = "completed";
-  }
-  if (event.type === "node_failed") {
-    nodeStatuses[event.nodeId] = "failed";
-  }
-  if (event.type === "run_completed") {
-    setOutputs(event.outputs);
-  }
+export function getRunErrorCode(error: unknown): ApiErrorCode {
+  return getWorkflowApiErrorCode(error, "WORKFLOW_RUN_FAILED");
 }
 
 function jsonStream(events: unknown[]) {

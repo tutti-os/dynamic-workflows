@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { apiJson } from "@/components/workflow/workflowApiClient";
 import type { AgentProviderOption } from "@/lib/agents/types";
 
 export const DEFAULT_MODEL_VALUE = "__default__";
@@ -29,8 +30,11 @@ export function useWorkflowRunSettings(): {
   const [cwd, setCwd] = useState("");
 
   useEffect(() => {
-    fetch("/api/agents/providers")
-      .then((response) => response.json())
+    apiJson<{ providers?: AgentProviderOption[] }>(
+      "/api/agents/providers",
+      undefined,
+      "PROVIDER_DETECTION_FAILED",
+    )
       .then((data: { providers?: AgentProviderOption[] }) => {
         const nextProviders =
           data.providers && data.providers.length > 0

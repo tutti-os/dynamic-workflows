@@ -3,6 +3,7 @@ import {
   patchNodeFieldInScript,
   type EditableNodeRanges,
 } from "@/lib/workflow/script-patch";
+import { apiJson } from "@/components/workflow/workflowApiClient";
 import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
@@ -58,6 +59,7 @@ export function useWorkflowScriptEditing(input: {
     WorkflowDiagnostic[]
   >([]);
   const scriptRef = useRef(script);
+  const parseRequestIdRef = useRef(0);
   const editableNodeRangesRef = useRef<EditableNodeRanges | undefined>(
     undefined,
   );
@@ -120,16 +122,27 @@ export function useWorkflowScriptEditing(input: {
   );
 
   const parseScript = useCallback(async (nextScript: string) => {
+    const requestId = parseRequestIdRef.current + 1;
+    parseRequestIdRef.current = requestId;
+
     try {
-      const response = await fetch("/api/workflows/parse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script: nextScript }),
-      });
-      const nextParsed = (await response.json()) as ParsedWorkflow;
+      const nextParsed = await apiJson<ParsedWorkflow>(
+        "/api/workflows/parse",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script: nextScript }),
+        },
+      );
+      if (requestId !== parseRequestIdRef.current) {
+        return;
+      }
       setParsed(nextParsed);
       setParseError(undefined);
     } catch (error) {
+      if (requestId !== parseRequestIdRef.current) {
+        return;
+      }
       setParseError(error instanceof Error ? error.message : "Parse failed");
     }
   }, []);

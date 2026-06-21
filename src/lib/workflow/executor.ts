@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
 import { resolveWorkflowCwd } from "./cwd";
+import { createWorkflowExecutionPlan } from "./execution-plan";
 import { assertWorkflowScriptValid } from "./parser";
 import { renderPrompt } from "./templates";
 import type {
@@ -19,7 +20,7 @@ export async function* runWorkflow(
     ...request,
     cwd: resolveWorkflowCwd(request.cwd),
   };
-  const executableNodes = parsed.nodes.filter((node) => node.kind === "agent");
+  const { executableNodes } = createWorkflowExecutionPlan(parsed);
   const outputs: Record<string, string> = {};
   const failed = new Set<string>();
   const completed = new Set<string>();

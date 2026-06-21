@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api/errors";
+import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 import {
   deleteWorkflow,
   getWorkflowDetail,
@@ -60,14 +61,7 @@ export async function PATCH(
     });
     return NextResponse.json(detail);
   } catch (error) {
-    const notFound =
-      error instanceof Error && error.message === "Workflow not found";
-    return NextResponse.json(
-      apiError(notFound ? "WORKFLOW_NOT_FOUND" : "WORKFLOW_UPDATE_FAILED", {
-        message: error instanceof Error ? error.message : undefined,
-      }),
-      { status: 404 },
-    );
+    return toWorkflowApiErrorResponse(error, "WORKFLOW_UPDATE_FAILED");
   }
 }
 

@@ -1,5 +1,8 @@
 import { useRef, useState } from "react";
-import { getApiErrorMessage } from "@/lib/api/errors";
+import {
+  apiJson,
+  readApiJsonError,
+} from "@/components/workflow/workflowApiClient";
 import type {
   WorkflowDetail,
   WorkflowVersionRecord,
@@ -266,15 +269,19 @@ export function useWorkflowRunController(input: {
   }
 
   async function loadRun(runId: string) {
-    const response = await fetch(`/api/workflows/${input.workflowId}/runs/${runId}`);
-    const data = (await response.json()) as RunDetail;
-    if (!response.ok) {
-      appendEventLog(
-        `run detail failed: ${getApiErrorMessage(data, "RUN_NOT_FOUND")}`,
+    try {
+      const data = await apiJson<RunDetail>(
+        `/api/workflows/${input.workflowId}/runs/${runId}`,
+        undefined,
+        "RUN_NOT_FOUND",
       );
-      return;
+      selectRunDetail(data);
+    } catch (error) {
+      const apiError = readApiJsonError(error, "RUN_NOT_FOUND");
+      appendEventLog(
+        `run detail failed: ${apiError.message}`,
+      );
     }
-    selectRunDetail(data);
   }
 
   function selectRun(runId: string) {
