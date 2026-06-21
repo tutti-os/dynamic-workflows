@@ -3,7 +3,10 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { migrateDb } from "@/lib/db/migrations";
 
-const DATA_DIR = path.join(process.cwd(), ".data");
+const DATA_DIR =
+  process.env.DYNAMIC_WORKFLOWS_DATA_DIR ??
+  process.env.TUTTI_APP_DATA_DIR ??
+  path.join(process.cwd(), ".data");
 const DB_PATH = path.join(DATA_DIR, "dynamic-workflows.sqlite");
 
 let db: Database.Database | undefined;

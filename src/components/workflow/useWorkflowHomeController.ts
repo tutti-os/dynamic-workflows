@@ -74,10 +74,15 @@ export function useWorkflowHomeController(
   const [actionError, setActionError] = useState<string | undefined>();
 
   const loadWorkflows = useCallback(async () => {
-    const data = await apiJson<{ workflows?: WorkflowListItem[] }>(
-      "/api/workflows",
-    );
-    setWorkflows(data.workflows ?? []);
+    try {
+      const data = await apiJson<{ workflows?: WorkflowListItem[] }>(
+        "/api/workflows",
+      );
+      setWorkflows(data.workflows ?? []);
+      setActionError(undefined);
+    } catch (caught) {
+      setActionError(readApiJsonError(caught, "UNKNOWN_ERROR").message);
+    }
   }, []);
 
   useEffect(() => {
