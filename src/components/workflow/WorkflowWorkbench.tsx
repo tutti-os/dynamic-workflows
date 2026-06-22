@@ -152,6 +152,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     cancelCurrentRun,
     selectRun,
     copyRunText,
+    openAgentSession,
   } = useWorkflowRunController({
     workflowId,
     detail,
@@ -352,6 +353,9 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           onSelectRun={selectRun}
           onRetryRun={(runId) => void retryRun(runId)}
           onCopyRunText={(key, text) => void copyRunText(key, text)}
+          onOpenAgentSession={(agentSessionId) =>
+            void openAgentSession(agentSessionId)
+          }
         />
       </section>
     </main>

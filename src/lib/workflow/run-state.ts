@@ -7,6 +7,8 @@ import { createWorkflowExecutionPlan } from "./execution-plan";
 import { RUN_TEXT_PREVIEW_CHARS } from "./run-constants";
 import type {
   ParsedWorkflow,
+  WorkflowNodeSessionRef,
+  WorkflowNodeSessionStatus,
   WorkflowNodeStatus,
   WorkflowRunEvent,
 } from "./types";
@@ -16,6 +18,7 @@ export { RUN_TEXT_PREVIEW_CHARS };
 export type WorkflowRunResult = {
   outputs: Record<string, string>;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
+  nodeSessions: Record<string, WorkflowNodeSessionRef>;
   error?: string;
   errorCode?: ApiErrorCode;
 };
@@ -50,6 +53,7 @@ export function createInitialRunSummary(
     status: options?.status ?? "running",
     outputs: {},
     nodeStatuses,
+    nodeSessions: {},
   };
 }
 
@@ -61,6 +65,7 @@ export function applyWorkflowRunEvent(
     status: summary.status,
     outputs: { ...summary.outputs },
     nodeStatuses: { ...summary.nodeStatuses },
+    nodeSessions: { ...summary.nodeSessions },
     error: summary.error,
     errorCode: summary.errorCode,
   };
@@ -79,10 +84,43 @@ export function applyWorkflowRunEvent(
   }
 
   if (event.type === "node_event") {
-    const agentEvent = event.event as { type?: string; text?: string };
+    const agentEvent = event.event as {
+      type?: string;
+      text?: string;
+      message?: string;
+      session?: unknown;
+    };
     if (agentEvent.type === "text_delta" && agentEvent.text) {
       next.outputs[event.nodeId] =
         `${next.outputs[event.nodeId] ?? ""}${agentEvent.text}`;
+      if (next.nodeSessions[event.nodeId]) {
+        next.nodeSessions[event.nodeId] = withNodeSessionPatch(
+          next.nodeSessions[event.nodeId],
+          {
+            nodeId: event.nodeId,
+            lastText: next.outputs[event.nodeId],
+          },
+        );
+      }
+    }
+    if (agentEvent.type === "session_ref") {
+      const session = readNodeSessionRef(event.nodeId, agentEvent.session);
+      if (session) {
+        next.nodeSessions[event.nodeId] = withNodeSessionPatch(
+          next.nodeSessions[event.nodeId],
+          session,
+        );
+      }
+    }
+    if (agentEvent.type === "error" && agentEvent.message) {
+      next.nodeSessions[event.nodeId] = withNodeSessionPatch(
+        next.nodeSessions[event.nodeId],
+        {
+          nodeId: event.nodeId,
+          status: "failed",
+          lastError: agentEvent.message,
+        },
+      );
     }
     return next;
   }
@@ -90,6 +128,16 @@ export function applyWorkflowRunEvent(
   if (event.type === "node_completed") {
     next.nodeStatuses[event.nodeId] = "completed";
     next.outputs[event.nodeId] = event.output;
+    if (next.nodeSessions[event.nodeId]) {
+      next.nodeSessions[event.nodeId] = withNodeSessionPatch(
+        next.nodeSessions[event.nodeId],
+        {
+          nodeId: event.nodeId,
+          status: "completed",
+          lastText: event.output,
+        },
+      );
+    }
     return next;
   }
 
@@ -98,6 +146,16 @@ export function applyWorkflowRunEvent(
     next.nodeStatuses[event.nodeId] = "failed";
     next.error = event.error;
     next.errorCode = "WORKFLOW_RUN_FAILED";
+    if (next.nodeSessions[event.nodeId]) {
+      next.nodeSessions[event.nodeId] = withNodeSessionPatch(
+        next.nodeSessions[event.nodeId],
+        {
+          nodeId: event.nodeId,
+          status: isCancellationMessage(event.error) ? "canceled" : "failed",
+          lastError: event.error,
+        },
+      );
+    }
     return next;
   }
 
@@ -106,6 +164,16 @@ export function applyWorkflowRunEvent(
     ...next.outputs,
     ...event.outputs,
   };
+  if (event.status === "canceled") {
+    next.nodeSessions = Object.fromEntries(
+      Object.entries(next.nodeSessions).map(([nodeId, session]) => [
+        nodeId,
+        session.status === "running"
+          ? { ...session, status: "canceled" as const }
+          : session,
+      ]),
+    );
+  }
   if (event.error !== undefined || event.status === "completed") {
     next.error = event.error;
   }
@@ -121,6 +189,7 @@ export function toWorkflowRunResult(
   return {
     outputs: summary.outputs,
     nodeStatuses: summary.nodeStatuses,
+    nodeSessions: summary.nodeSessions,
     ...(summary.error === undefined ? {} : { error: summary.error }),
     ...(summary.errorCode === undefined ? {} : { errorCode: summary.errorCode }),
   };
@@ -128,12 +197,13 @@ export function toWorkflowRunResult(
 
 export function readRunResult(result: unknown): WorkflowRunResult {
   if (!result || typeof result !== "object") {
-    return { outputs: {}, nodeStatuses: {} };
+    return { outputs: {}, nodeStatuses: {}, nodeSessions: {} };
   }
 
   const raw = result as {
     outputs?: unknown;
     nodeStatuses?: unknown;
+    nodeSessions?: unknown;
     error?: unknown;
     errorCode?: unknown;
   };
@@ -142,6 +212,9 @@ export function readRunResult(result: unknown): WorkflowRunResult {
     outputs: isStringRecord(raw.outputs) ? raw.outputs : {},
     nodeStatuses: isWorkflowNodeStatusRecord(raw.nodeStatuses)
       ? raw.nodeStatuses
+      : {},
+    nodeSessions: isWorkflowNodeSessionRecord(raw.nodeSessions)
+      ? raw.nodeSessions
       : {},
     error: typeof raw.error === "string" ? raw.error : undefined,
     errorCode:
@@ -300,6 +373,112 @@ function isWorkflowNodeStatus(value: unknown): value is WorkflowNodeStatus {
     value === "failed" ||
     value === "skipped"
   );
+}
+
+function isWorkflowNodeSessionRecord(
+  value: unknown,
+): value is Record<string, WorkflowNodeSessionRef> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.entries(value).every(
+    ([nodeId, session]) =>
+      typeof nodeId === "string" && isWorkflowNodeSessionRef(session),
+  );
+}
+
+function isWorkflowNodeSessionRef(
+  value: unknown,
+): value is WorkflowNodeSessionRef {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.nodeId === "string" &&
+    typeof raw.agentSessionId === "string" &&
+    typeof raw.provider === "string" &&
+    isWorkflowNodeSessionStatus(raw.status) &&
+    optionalString(raw.providerSessionId) &&
+    optionalString(raw.model) &&
+    optionalString(raw.title) &&
+    optionalString(raw.lastText) &&
+    optionalString(raw.lastError)
+  );
+}
+
+function isWorkflowNodeSessionStatus(
+  value: unknown,
+): value is WorkflowNodeSessionStatus {
+  return (
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "canceled"
+  );
+}
+
+function optionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function readNodeSessionRef(
+  nodeId: string,
+  value: unknown,
+): (Partial<WorkflowNodeSessionRef> & { nodeId: string }) | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as Record<string, unknown>;
+  const agentSessionId =
+    typeof raw.agentSessionId === "string" ? raw.agentSessionId.trim() : "";
+  const provider = typeof raw.provider === "string" ? raw.provider.trim() : "";
+  if (!agentSessionId || !provider) {
+    return undefined;
+  }
+  const status = isWorkflowNodeSessionStatus(raw.status)
+    ? raw.status
+    : "running";
+  return {
+    nodeId,
+    agentSessionId,
+    provider,
+    status,
+    ...readOptionalStringProperty(raw, "providerSessionId"),
+    ...readOptionalStringProperty(raw, "model"),
+    ...readOptionalStringProperty(raw, "title"),
+  };
+}
+
+function readOptionalStringProperty(
+  value: Record<string, unknown>,
+  key: keyof WorkflowNodeSessionRef,
+): Partial<WorkflowNodeSessionRef> {
+  const raw = value[key];
+  return typeof raw === "string" && raw.trim() ? { [key]: raw.trim() } : {};
+}
+
+function withNodeSessionPatch(
+  current: WorkflowNodeSessionRef | undefined,
+  patch: Partial<WorkflowNodeSessionRef> & { nodeId: string },
+): WorkflowNodeSessionRef {
+  const next = {
+    ...(current ?? {
+      nodeId: patch.nodeId,
+      agentSessionId: "",
+      provider: "",
+      status: "running" as const,
+    }),
+    ...patch,
+  };
+  return {
+    ...next,
+    status: next.status ?? "running",
+  };
+}
+
+function isCancellationMessage(value: string): boolean {
+  return value.toLowerCase().includes("cancel");
 }
 
 function isWorkflowRunEvent(value: unknown): value is WorkflowRunEvent {

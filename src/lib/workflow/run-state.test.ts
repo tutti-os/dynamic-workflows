@@ -77,6 +77,69 @@ describe("workflow run state", () => {
     expect(toWorkflowRunResult(summary)).toEqual({
       outputs: { scan: "final" },
       nodeStatuses: { scan: "completed" },
+      nodeSessions: {},
+    });
+  });
+
+  it("stores compact node session refs and final text", () => {
+    if (!scanNode) {
+      throw new Error("scan node missing");
+    }
+
+    let summary = createInitialRunSummary(undefined, {
+      queueExecutableNodes: false,
+    });
+    const events: WorkflowRunEvent[] = [
+      { type: "run_started", runId: "run-1", parsed },
+      {
+        type: "node_started",
+        runId: "run-1",
+        nodeId: "scan",
+        node: scanNode,
+        provider: "codex",
+        model: "gpt-5",
+      },
+      {
+        type: "node_event",
+        runId: "run-1",
+        nodeId: "scan",
+        event: {
+          type: "session_ref",
+          session: {
+            agentSessionId: "session-1",
+            provider: "codex",
+            model: "gpt-5",
+            status: "running",
+            title: "Scan",
+          },
+        },
+      },
+      {
+        type: "node_event",
+        runId: "run-1",
+        nodeId: "scan",
+        event: { type: "text_delta", text: "final text" },
+      },
+      {
+        type: "node_completed",
+        runId: "run-1",
+        nodeId: "scan",
+        output: "final text",
+      },
+    ];
+
+    for (const event of events) {
+      summary = applyWorkflowRunEvent(summary, event);
+    }
+
+    expect(toWorkflowRunResult(summary).nodeSessions.scan).toEqual({
+      nodeId: "scan",
+      agentSessionId: "session-1",
+      provider: "codex",
+      model: "gpt-5",
+      status: "completed",
+      title: "Scan",
+      lastText: "final text",
     });
   });
 

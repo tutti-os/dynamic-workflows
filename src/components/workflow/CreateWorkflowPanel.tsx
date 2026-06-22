@@ -17,6 +17,7 @@ import {
 import type { ReactNode } from "react";
 import { DiagnosticsPanel } from "@/components/workflow/DiagnosticsPanel";
 import { DEFAULT_MODEL_VALUE } from "@/components/workflow/useWorkflowRunSettings";
+import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
 import type { AgentProviderOption } from "@/lib/agents/types";
 import type { WorkflowDiagnostic } from "@/lib/workflow/types";
 
@@ -92,12 +93,10 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
             />
           )}
         </ControlField>
-        <ControlField label="CWD">
-          <Input
+        <ControlField label="Project">
+          <WorkflowProjectSelect
             value={props.cwd}
-            placeholder="server workspace"
-            aria-label="Agent working directory"
-            onChange={(event) => props.onCwdChange(event.target.value)}
+            onChange={props.onCwdChange}
           />
         </ControlField>
         <Button

@@ -61,6 +61,7 @@ export function useWorkflowRunController(input: {
   cancelCurrentRun: () => void;
   selectRun: (runId: string) => void;
   copyRunText: (key: string, text: string) => Promise<void>;
+  openAgentSession: (agentSessionId: string) => Promise<void>;
 } {
   const [isRunning, setIsRunning] = useState(false);
   const [isCancellingRun, setIsCancellingRun] = useState(false);
@@ -307,6 +308,24 @@ export function useWorkflowRunController(input: {
     }
   }
 
+  async function openAgentSession(agentSessionId: string) {
+    try {
+      await apiJson<{ ok: boolean }>(
+        "/api/agent-sessions/open",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agentSessionId }),
+        },
+        "WORKFLOW_RUN_FAILED",
+      );
+      appendEventLog(`agent session opened: ${agentSessionId}`);
+    } catch (error) {
+      const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
+      appendEventLog(`agent session open failed: ${apiError.message}`);
+    }
+  }
+
   async function refreshWorkflowAfterAbort() {
     const runId = getActiveRunId();
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -340,5 +359,6 @@ export function useWorkflowRunController(input: {
     cancelCurrentRun,
     selectRun,
     copyRunText,
+    openAgentSession,
   };
 }

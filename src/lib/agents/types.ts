@@ -16,6 +16,21 @@ export type AgentRunInput = {
   metadata?: Record<string, unknown>;
 };
 
+export type AgentSessionStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type AgentSessionRef = {
+  agentSessionId: string;
+  providerSessionId?: string;
+  provider: string;
+  model?: string;
+  status?: AgentSessionStatus;
+  title?: string;
+};
+
 export type AgentRuntimeEvent =
   | {
       type: "status";
@@ -60,6 +75,10 @@ export type AgentRuntimeEvent =
       path: string;
     }
   | {
+      type: "session_ref";
+      session: AgentSessionRef;
+    }
+  | {
       type: "stderr";
       text: string;
     }
@@ -84,4 +103,5 @@ export type AgentRuntimeAdapter = {
   listProviders(): Promise<AgentProviderOption[]>;
   run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent>;
   cancel?(runId: string): Promise<void>;
+  openSession?(agentSessionId: string): Promise<void>;
 };

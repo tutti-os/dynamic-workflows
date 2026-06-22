@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Dynamic Workflows",
-  description: "Script-first dynamic workflows for local ACP agents.",
+  description: "Script-first dynamic workflows for local Nextop agents.",
 };
 
 export default function RootLayout({

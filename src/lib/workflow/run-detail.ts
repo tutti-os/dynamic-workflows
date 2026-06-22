@@ -9,6 +9,7 @@ import { renderPrompt } from "@/lib/workflow/templates";
 import type {
   ParsedWorkflow,
   WorkflowNode,
+  WorkflowNodeSessionRef,
   WorkflowNodeStatus,
   WorkflowRunEvent,
 } from "@/lib/workflow/types";
@@ -26,6 +27,7 @@ export {
 export type RunNodeDetail = {
   node: WorkflowNode;
   status: WorkflowNodeStatus;
+  session?: WorkflowNodeSessionRef;
   input: string;
   output: string;
   log: string;
@@ -53,6 +55,7 @@ export function buildRunNodeDetail(
       result.nodeStatuses[node.id] ??
       eventResult.nodeStatuses[node.id] ??
       "idle",
+    session: result.nodeSessions[node.id] ?? eventResult.nodeSessions[node.id],
     input: input.trim() ? input : "No input captured.",
     output: result.outputs[node.id] ?? eventOutput ?? "No output captured.",
     log: log.trim() ? log : "No node log events.",
@@ -92,6 +95,7 @@ function readRunResultFromEvents(events: WorkflowRunEvent[]) {
       result: {
         outputs: {},
         nodeStatuses: {},
+        nodeSessions: {},
       },
       logPath: null,
       startedAt: new Date(0).toISOString(),

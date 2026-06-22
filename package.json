@@ -1,7 +1,7 @@
 {
   "name": "dynamic-workflows",
   "version": "1.0.0",
-  "description": "Script-first dynamic workflow orchestrator for local ACP agents.",
+  "description": "Script-first dynamic workflow orchestrator for local Nextop agents.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -31,8 +31,8 @@
     "@babel/parser": "^7.29.7",
     "@babel/traverse": "^7.29.7",
     "@monaco-editor/react": "^4.7.0",
-    "@tutti-os/agent-acp-kit": "^0.1.12",
     "@tutti-os/ui-system": "^0.0.12",
+    "@tutti-os/workspace-user-project": "^0.0.15",
     "@xyflow/react": "^12.11.0",
     "better-sqlite3": "^12.11.1",
     "clsx": "^2.1.1",
@@ -40,7 +40,8 @@
     "nanoid": "^5.1.11",
     "next": "^16.2.9",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "valtio": "^2.3.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.1",

@@ -1,10 +1,10 @@
-import { createAcpKitAgentAdapter } from "./adapters/acpKitAdapter";
+import { createNextopCliAgentAdapter } from "./adapters/nextopCliAdapter";
 import type { AgentRuntimeAdapter } from "./types";
 
 let defaultAdapter: AgentRuntimeAdapter | undefined;
 
 export function getAgentRuntimeAdapter(): AgentRuntimeAdapter {
-  defaultAdapter ??= createAcpKitAgentAdapter({
+  defaultAdapter ??= createNextopCliAgentAdapter({
     includeMockProvider: true,
   });
   return defaultAdapter;
@@ -16,4 +16,12 @@ export async function listAgentProviders() {
 
 export function runAgent(input: Parameters<AgentRuntimeAdapter["run"]>[0]) {
   return getAgentRuntimeAdapter().run(input);
+}
+
+export async function openAgentSession(agentSessionId: string) {
+  const adapter = getAgentRuntimeAdapter();
+  if (!adapter.openSession) {
+    throw new Error("Agent session opening is not supported by this adapter.");
+  }
+  await adapter.openSession(agentSessionId);
 }

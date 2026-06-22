@@ -3,6 +3,7 @@ import {
   Button,
   CheckIcon,
   CopyIcon,
+  LaunchIcon,
   RefreshIcon,
   Spinner,
   WarningLinedIcon,
@@ -13,7 +14,6 @@ import {
   canRetryRun,
   formatDate,
   formatJson,
-  formatRunLogPreviewNote,
   getRunError,
   getRunVersionLabel,
   nodeStatusBadge,
@@ -29,13 +29,11 @@ export function RunDetailPanel(props: {
   copiedRunField?: string;
   onRetryRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
+  onOpenAgentSession: (agentSessionId: string) => void;
 }) {
   const { detail } = props;
   const { run } = detail;
   const selectedRunError = getRunError(run.result);
-  const selectedRunLogNote = detail.logTruncated
-    ? formatRunLogPreviewNote(detail)
-    : undefined;
 
   return (
     <>
@@ -73,6 +71,7 @@ export function RunDetailPanel(props: {
           nodeRun={props.selectedNodeRun}
           copiedRunField={props.copiedRunField}
           onCopyRunText={props.onCopyRunText}
+          onOpenAgentSession={props.onOpenAgentSession}
         />
       ) : null}
 
@@ -87,14 +86,6 @@ export function RunDetailPanel(props: {
         label="Result"
         text={formatJson(run.result)}
         copyKey={`result:${run.id}`}
-        copiedRunField={props.copiedRunField}
-        onCopy={props.onCopyRunText}
-      />
-      <RunTextBlock
-        label="Debug Log"
-        text={detail.log || "No log file content."}
-        note={selectedRunLogNote}
-        copyKey={`log:${run.id}`}
         copiedRunField={props.copiedRunField}
         onCopy={props.onCopyRunText}
       />
@@ -155,8 +146,10 @@ function RunNodeDetailSection(props: {
   nodeRun: RunNodeDetail;
   copiedRunField?: string;
   onCopyRunText: (key: string, text: string) => void;
+  onOpenAgentSession: (agentSessionId: string) => void;
 }) {
   const { nodeRun } = props;
+  const session = nodeRun.session;
 
   return (
     <section className="run-node-detail">
@@ -167,7 +160,32 @@ function RunNodeDetailSection(props: {
       <div className="run-facts run-node-facts">
         <RunFact label="Node ID" value={nodeRun.node.id} />
         <RunFact label="Label" value={nodeRun.node.label} />
+        {session ? (
+          <>
+            <RunFact label="Agent Session" value={session.agentSessionId} />
+            <RunFact
+              label="Agent"
+              value={`${session.provider}${session.model ? ` · ${session.model}` : ""}`}
+            />
+          </>
+        ) : null}
       </div>
+      {session ? (
+        <div className="agent-session-actions">
+          <Badge variant={nodeStatusBadge(sessionStatusToNodeStatus(session.status))}>
+            {session.status}
+          </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            onClick={() => props.onOpenAgentSession(session.agentSessionId)}
+          >
+            <LaunchIcon data-icon="inline-start" />
+            Open in Tutti
+          </Button>
+        </div>
+      ) : null}
       <RunTextBlock
         label="Node Input"
         text={nodeRun.input}
@@ -183,8 +201,9 @@ function RunNodeDetailSection(props: {
         onCopy={props.onCopyRunText}
       />
       <RunTextBlock
-        label="Node Log"
+        label="Node Timeline"
         text={nodeRun.log}
+        variant="event"
         copyKey={`node-log:${props.runId}:${nodeRun.node.id}`}
         copiedRunField={props.copiedRunField}
         onCopy={props.onCopyRunText}
@@ -193,10 +212,21 @@ function RunNodeDetailSection(props: {
   );
 }
 
+function sessionStatusToNodeStatus(status: string) {
+  if (status === "completed" || status === "failed") {
+    return status;
+  }
+  if (status === "canceled") {
+    return "skipped";
+  }
+  return "running";
+}
+
 function RunTextBlock(props: {
   label: string;
   text: string;
   note?: string;
+  variant?: "event" | "text";
   copyKey: string;
   copiedRunField?: string;
   onCopy: (key: string, text: string) => void;
@@ -212,7 +242,7 @@ function RunTextBlock(props: {
         />
       </div>
       {props.note ? <span className="run-text-note">{props.note}</span> : null}
-      <pre className={props.label.includes("Log") ? "event-log" : "output-box"}>
+      <pre className={props.variant === "event" ? "event-log" : "output-box"}>
         {props.text}
       </pre>
     </div>

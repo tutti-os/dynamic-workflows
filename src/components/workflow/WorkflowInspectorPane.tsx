@@ -47,6 +47,7 @@ type WorkflowInspectorPaneProps = {
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
+  onOpenAgentSession: (agentSessionId: string) => void;
 };
 
 export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
@@ -122,6 +123,7 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
             onSelectRun={props.onSelectRun}
             onRetryRun={props.onRetryRun}
             onCopyRunText={props.onCopyRunText}
+            onOpenAgentSession={props.onOpenAgentSession}
           />
         )}
       </ScrollArea>

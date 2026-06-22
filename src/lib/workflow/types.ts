@@ -83,6 +83,24 @@ export type WorkflowRunRequest = {
   signal?: AbortSignal;
 };
 
+export type WorkflowNodeSessionStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type WorkflowNodeSessionRef = {
+  nodeId: string;
+  agentSessionId: string;
+  providerSessionId?: string;
+  provider: string;
+  model?: string;
+  status: WorkflowNodeSessionStatus;
+  title?: string;
+  lastText?: string;
+  lastError?: string;
+};
+
 export type WorkflowRunEvent =
   | {
       type: "run_started";

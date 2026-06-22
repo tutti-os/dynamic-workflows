@@ -19,6 +19,7 @@ import {
   Textarea,
 } from "@tutti-os/ui-system";
 import { DEFAULT_MODEL_VALUE } from "@/components/workflow/useWorkflowRunSettings";
+import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
 import type { AgentProviderOption } from "@/lib/agents/types";
 
 type RunInputsDialogProps = {
@@ -86,12 +87,10 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
               )}
             </label>
             <label className="run-dialog-control-field run-dialog-control-field-wide">
-              <span>CWD</span>
-              <Input
+              <span>Project</span>
+              <WorkflowProjectSelect
                 value={props.cwd}
-                placeholder="cwd: server workspace"
-                aria-label="Agent working directory"
-                onChange={(event) => props.onCwdChange(event.target.value)}
+                onChange={props.onCwdChange}
               />
             </label>
           </section>

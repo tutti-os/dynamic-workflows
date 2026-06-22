@@ -997,6 +997,14 @@ a {
   max-height: 184px;
 }
 
+.agent-session-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .run-list {
   display: grid;
   overflow: hidden;
