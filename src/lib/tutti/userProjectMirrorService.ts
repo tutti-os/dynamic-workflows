@@ -37,11 +37,22 @@ export function createTuttiUserProjectMirrorService(
     if (disposed) {
       return;
     }
-    store.error = next.error;
-    store.initialized = next.initialized;
-    store.isLoading = next.isLoading;
-    store.projects = next.projects.map(cloneProject);
-    store.revision = next.revision;
+    const nextProjects = next.projects.map(cloneProject);
+    if (store.error !== next.error) {
+      store.error = next.error;
+    }
+    if (store.initialized !== next.initialized) {
+      store.initialized = next.initialized;
+    }
+    if (store.isLoading !== next.isLoading) {
+      store.isLoading = next.isLoading;
+    }
+    if (!areProjectsEqual(store.projects, nextProjects)) {
+      store.projects = nextProjects;
+    }
+    if (store.revision !== next.revision) {
+      store.revision = next.revision;
+    }
   };
 
   const applyProject = (project: WorkspaceUserProject): void => {
@@ -88,9 +99,7 @@ export function createTuttiUserProjectMirrorService(
       return store.revision;
     },
     getSnapshot(): WorkspaceUserProjectServiceSnapshot {
-      return cloneSnapshot(
-        snapshot(store) as unknown as WorkspaceUserProjectServiceSnapshot,
-      );
+      return snapshot(store) as unknown as WorkspaceUserProjectServiceSnapshot;
     },
     isNoProjectPath(path: string): boolean {
       return api.isNoProjectPath?.({ path }) ?? false;
@@ -105,11 +114,25 @@ export function createTuttiUserProjectMirrorService(
       const prepared = api.prepareSelection
         ? await api.prepareSelection(input)
         : await prepareWorkspaceUserProjectSelection(api, input);
-      store.projects = prepared.projects.map(cloneProject);
-      store.error = null;
-      store.initialized = true;
-      store.isLoading = false;
-      store.revision += 1;
+      const nextProjects = prepared.projects.map(cloneProject);
+      const projectsChanged = !areProjectsEqual(store.projects, nextProjects);
+      const statusChanged =
+        store.error !== null || !store.initialized || store.isLoading;
+      if (projectsChanged) {
+        store.projects = nextProjects;
+      }
+      if (store.error !== null) {
+        store.error = null;
+      }
+      if (!store.initialized) {
+        store.initialized = true;
+      }
+      if (store.isLoading) {
+        store.isLoading = false;
+      }
+      if (projectsChanged || statusChanged) {
+        store.revision += 1;
+      }
       return prepared;
     },
     async refresh(): Promise<void> {
@@ -194,4 +217,25 @@ function cloneSnapshot(
 
 function cloneProject(project: WorkspaceUserProject): WorkspaceUserProject {
   return { ...project };
+}
+
+function areProjectsEqual(
+  current: readonly WorkspaceUserProject[],
+  next: readonly WorkspaceUserProject[],
+): boolean {
+  if (current.length !== next.length) {
+    return false;
+  }
+  return current.every((project, index) => {
+    const nextProject = next[index];
+    return (
+      nextProject !== undefined &&
+      project.id === nextProject.id &&
+      project.label === nextProject.label &&
+      project.path === nextProject.path &&
+      project.createdAtUnixMs === nextProject.createdAtUnixMs &&
+      project.lastUsedAtUnixMs === nextProject.lastUsedAtUnixMs &&
+      project.updatedAtUnixMs === nextProject.updatedAtUnixMs
+    );
+  });
 }

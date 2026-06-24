@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  delay,
   downloadTextFile,
   sanitizeFilename,
 } from "@/components/workflow/workflowClientUtils";
@@ -40,6 +41,9 @@ export function useWorkflowDocument(input: {
   isSavingMetadata: boolean;
   isDuplicatingWorkflow: boolean;
   isDeletingWorkflow: boolean;
+  isGeneratingWorkflow: boolean;
+  isRetryingGeneration: boolean;
+  generationError: string | undefined;
   isViewingCurrentVersion: boolean;
   isViewingOldVersion: boolean;
   setMetadataName: (value: string) => void;
@@ -54,6 +58,7 @@ export function useWorkflowDocument(input: {
   saveDetailsDialog: () => Promise<void>;
   duplicateCurrentWorkflow: () => Promise<void>;
   deleteCurrentWorkflow: () => Promise<void>;
+  retryWorkflowGeneration: () => Promise<void>;
   exportSelectedVersion: () => void;
 } {
   const {
@@ -78,6 +83,10 @@ export function useWorkflowDocument(input: {
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
   const [isDuplicatingWorkflow, setIsDuplicatingWorkflow] = useState(false);
   const [isDeletingWorkflow, setIsDeletingWorkflow] = useState(false);
+  const [isRetryingGeneration, setIsRetryingGeneration] = useState(false);
+  const [generationError, setGenerationError] = useState<string | undefined>();
+  const generationWatchIdRef = useRef<string | undefined>(undefined);
+  const mountedRef = useRef(true);
 
   const selectedVersion = useMemo(() => {
     if (!detail) {
@@ -85,7 +94,8 @@ export function useWorkflowDocument(input: {
     }
     return (
       detail.versions.find((version) => version.id === selectedVersionId) ??
-      detail.currentVersion
+      detail.currentVersion ??
+      null
     );
   }, [detail, selectedVersionId]);
 
@@ -103,10 +113,30 @@ export function useWorkflowDocument(input: {
     (metadataName !== detail.workflow.name ||
       metadataDescription !== detail.workflow.description);
   const isViewingCurrentVersion =
-    Boolean(detail && selectedVersion) &&
-    selectedVersion?.id === detail?.currentVersion.id;
+    Boolean(detail && selectedVersion && detail.currentVersion) &&
+    selectedVersion?.id === detail?.currentVersion?.id;
   const isViewingOldVersion =
     Boolean(detail && selectedVersion) && !isViewingCurrentVersion;
+  const isGeneratingWorkflow =
+    detail?.generation?.status === "pending" ||
+    detail?.generation?.status === "running";
+
+  const applyLoadedDetail = useCallback(
+    (nextDetail: WorkflowDetail, options?: { resetScript?: boolean }) => {
+      setDetail(nextDetail);
+      setMetadataName(nextDetail.workflow.name);
+      setMetadataDescription(nextDetail.workflow.description);
+      if (options?.resetScript) {
+        if (nextDetail.currentVersion) {
+          setSelectedVersionId(nextDetail.currentVersion.id);
+          acceptSavedScript(nextDetail.currentVersion.script);
+        } else {
+          setSelectedVersionId(undefined);
+        }
+      }
+    },
+    [acceptSavedScript],
+  );
 
   const loadWorkflow = useCallback(
     async (options?: { resetScript?: boolean }) => {
@@ -115,17 +145,37 @@ export function useWorkflowDocument(input: {
         undefined,
         "WORKFLOW_NOT_FOUND",
       );
-      setDetail(nextDetail);
-      setMetadataName(nextDetail.workflow.name);
-      setMetadataDescription(nextDetail.workflow.description);
-      if (options?.resetScript) {
-        setSelectedVersionId(nextDetail.currentVersion.id);
-        acceptSavedScript(nextDetail.currentVersion.script);
-      }
+      applyLoadedDetail(nextDetail, options);
       return nextDetail;
     },
-    [acceptSavedScript, workflowId],
+    [applyLoadedDetail, workflowId],
   );
+
+  const requestWorkflowGeneration = useCallback(
+    async (retry: boolean) => {
+      const data = await apiJson<{ detail?: WorkflowDetail }>(
+        `/api/workflows/${workflowId}/generation`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ retry }),
+        },
+        "WORKFLOW_GENERATION_FAILED",
+      );
+      if (!data.detail) {
+        throw new Error("Workflow generation did not return detail");
+      }
+      applyLoadedDetail(data.detail, { resetScript: true });
+      return data.detail;
+    },
+    [applyLoadedDetail, workflowId],
+  );
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     setIsLoading(true);
@@ -137,6 +187,73 @@ export function useWorkflowDocument(input: {
       })
       .finally(() => setIsLoading(false));
   }, [loadWorkflow, setParseErrorMessage]);
+
+  useEffect(() => {
+    const generation = detail?.generation;
+    if (
+      !detail ||
+      detail.currentVersion ||
+      !generation ||
+      !isActiveGenerationStatus(generation.status)
+    ) {
+      return;
+    }
+    if (generationWatchIdRef.current === generation.id) {
+      return;
+    }
+
+    const generationId = generation.id;
+    generationWatchIdRef.current = generationId;
+
+    async function watchGeneration() {
+      try {
+        setGenerationError(undefined);
+        const startedDetail = await requestWorkflowGeneration(false);
+        if (
+          !mountedRef.current ||
+          startedDetail.currentVersion ||
+          !isActiveGenerationStatus(startedDetail.generation?.status)
+        ) {
+          return;
+        }
+
+        while (mountedRef.current) {
+          await delay(1000);
+          if (!mountedRef.current) {
+            return;
+          }
+          const nextDetail = await loadWorkflow({ resetScript: true });
+          if (
+            nextDetail.currentVersion ||
+            !isActiveGenerationStatus(nextDetail.generation?.status)
+          ) {
+            return;
+          }
+        }
+      } catch (error) {
+        const apiError = readApiJsonError(error, "WORKFLOW_GENERATION_FAILED");
+        if (mountedRef.current) {
+          setGenerationError(apiError.message);
+          onLogEvent(`generation failed: ${apiError.message}`);
+        }
+      } finally {
+        if (generationWatchIdRef.current === generationId) {
+          generationWatchIdRef.current = undefined;
+        }
+      }
+    }
+
+    void watchGeneration();
+
+  }, [
+    detail?.workflow.id,
+    detail?.currentVersion?.id,
+    detail?.generation?.id,
+    detail?.generation?.status,
+    loadWorkflow,
+    onLogEvent,
+    requestWorkflowGeneration,
+  ]);
 
   const applyVersion = useCallback(
     (version: WorkflowVersionRecord) => {
@@ -178,14 +295,12 @@ export function useWorkflowDocument(input: {
         },
         "WORKFLOW_SAVE_FAILED",
       );
-      if (!data.detail) {
+      if (!data.detail?.currentVersion) {
         throw new Error("Workflow save failed");
       }
-      setDetail(data.detail);
-      setSelectedVersionId(data.detail.currentVersion.id);
-      acceptSavedScript(data.detail.currentVersion.script);
+      applyLoadedDetail(data.detail, { resetScript: true });
       onLogEvent(
-        `saved: v${data.detail?.currentVersion.version ?? ""}`,
+        `saved: v${data.detail.currentVersion.version}`,
       );
       clearScriptSaveFeedback();
     } catch (error) {
@@ -337,14 +452,12 @@ export function useWorkflowDocument(input: {
         },
         "WORKFLOW_SAVE_FAILED",
       );
-      if (!data.detail) {
+      if (!data.detail?.currentVersion) {
         throw new Error("Workflow restore failed");
       }
-      setDetail(data.detail);
-      setSelectedVersionId(data.detail.currentVersion.id);
-      acceptSavedScript(data.detail.currentVersion.script);
+      applyLoadedDetail(data.detail, { resetScript: true });
       onLogEvent(
-        `restored: v${selectedVersion.version} -> v${data.detail?.currentVersion.version ?? ""}`,
+        `restored: v${selectedVersion.version} -> v${data.detail.currentVersion.version}`,
       );
       clearScriptSaveFeedback();
     } catch (error) {
@@ -372,6 +485,24 @@ export function useWorkflowDocument(input: {
     onLogEvent(`exported: ${filename}`);
   }
 
+  async function retryWorkflowGeneration() {
+    setIsRetryingGeneration(true);
+    setGenerationError(undefined);
+    generationWatchIdRef.current = undefined;
+    try {
+      const nextDetail = await requestWorkflowGeneration(true);
+      if (!nextDetail.currentVersion) {
+        onLogEvent("generation: retry started");
+      }
+    } catch (error) {
+      const apiError = readApiJsonError(error, "WORKFLOW_GENERATION_FAILED");
+      setGenerationError(apiError.message);
+      onLogEvent(`generation retry failed: ${apiError.message}`);
+    } finally {
+      setIsRetryingGeneration(false);
+    }
+  }
+
   return {
     detail,
     selectedVersion,
@@ -385,6 +516,9 @@ export function useWorkflowDocument(input: {
     isSavingMetadata,
     isDuplicatingWorkflow,
     isDeletingWorkflow,
+    isGeneratingWorkflow,
+    isRetryingGeneration,
+    generationError,
     isViewingCurrentVersion,
     isViewingOldVersion,
     setMetadataName,
@@ -399,6 +533,11 @@ export function useWorkflowDocument(input: {
     saveDetailsDialog,
     duplicateCurrentWorkflow,
     deleteCurrentWorkflow,
+    retryWorkflowGeneration,
     exportSelectedVersion,
   };
+}
+
+function isActiveGenerationStatus(status: string | undefined): boolean {
+  return status === "pending" || status === "running";
 }

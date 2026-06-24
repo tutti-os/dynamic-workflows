@@ -60,6 +60,7 @@ function WorkflowCard(props: {
 }) {
   const { item } = props;
   const workflowUrl = `/workflows/${item.workflow.id}`;
+  const generationStatus = item.generation?.status;
 
   return (
     <article className="workflow-card-shell">
@@ -76,7 +77,17 @@ function WorkflowCard(props: {
           </CardHeader>
         </Link>
         <CardFooter className="workflow-card-footer">
-          <Badge variant="success">v{item.currentVersion?.version ?? 0}</Badge>
+          {item.currentVersion ? (
+            <Badge variant="success">v{item.currentVersion.version}</Badge>
+          ) : (
+            <Badge
+              variant={generationStatus === "failed" ? "destructive" : "pending"}
+            >
+              {generationStatus === "failed"
+                ? "generation failed"
+                : "generating"}
+            </Badge>
+          )}
           <span className="workflow-card-dot">·</span>
           <span>{item.runCount} runs</span>
           {item.latestRun ? (
@@ -104,7 +115,7 @@ function WorkflowCard(props: {
               variant="outline"
               type="button"
               onClick={() => void props.onDuplicateWorkflow(item.workflow.id)}
-              disabled={props.duplicating}
+              disabled={props.duplicating || !item.currentVersion}
             >
               {props.duplicating ? (
                 <LoadingIcon className="spin" data-icon="inline-start" />

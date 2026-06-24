@@ -1,0 +1,230 @@
+{
+  "schemaVersion": "tutti.app.cli.v1",
+  "scope": "dynamic-workflows",
+  "description": "Create, inspect, validate, and run local Dynamic Workflows.",
+  "documentation": {
+    "file": "COMMANDS.md"
+  },
+  "commands": [
+    {
+      "path": [
+        "status"
+      ],
+      "summary": "Show Dynamic Workflows runtime status",
+      "description": "Report app health, workflow counts, cwd root, and agent provider detection status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/status",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "path": [
+        "providers"
+      ],
+      "summary": "List available agent providers",
+      "description": "List providers and model options detected through the local Tutti CLI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/providers",
+        "timeoutMs": 30000
+      }
+    },
+    {
+      "path": [
+        "list"
+      ],
+      "summary": "List saved workflows",
+      "description": "List saved workflows with their current version and latest run status.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of workflows to return. Defaults to 50."
+          }
+        }
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/list",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "path": [
+        "show"
+      ],
+      "summary": "Show one workflow",
+      "description": "Return workflow metadata, current version, runs, and parsed node summary.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Workflow id to inspect."
+          },
+          "include-script": {
+            "type": "boolean",
+            "description": "Include the current workflow script in the output."
+          }
+        },
+        "required": [
+          "workflow-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/show",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "path": [
+        "validate"
+      ],
+      "summary": "Validate a workflow script",
+      "description": "Parse a workflow script and return diagnostics, external inputs, and node summary.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "script": {
+            "type": "string",
+            "description": "Workflow JavaScript source to validate."
+          }
+        },
+        "required": [
+          "script"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/validate",
+        "timeoutMs": 15000
+      }
+    },
+    {
+      "path": [
+        "create"
+      ],
+      "summary": "Generate and save a workflow",
+      "description": "Generate a workflow from a prompt, save it, and return the created workflow and script.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Natural-language workflow request."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Optional agent provider for generation, such as codex or claude-code."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional model override."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Optional working directory, resolved inside the configured workflow cwd root."
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/create",
+        "timeoutMs": 360000
+      }
+    },
+    {
+      "path": [
+        "run"
+      ],
+      "summary": "Run a workflow",
+      "description": "Run the current version of a saved workflow and persist the same run records used by the UI.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Workflow id to run."
+          },
+          "inputs": {
+            "type": "string",
+            "description": "JSON object string containing external workflow inputs."
+          },
+          "provider": {
+            "type": "string",
+            "description": "Agent provider for nodes without an explicit provider. Defaults to mock."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional model override."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Optional working directory, resolved inside the configured workflow cwd root."
+          },
+          "timeout-ms": {
+            "type": "integer",
+            "description": "Maximum run duration in milliseconds. Defaults to 600000 and caps at 3600000."
+          }
+        },
+        "required": [
+          "workflow-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/run",
+        "timeoutMs": 600000
+      }
+    }
+  ]
+}

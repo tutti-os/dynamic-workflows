@@ -34,6 +34,69 @@ a {
   font-size: 13px;
 }
 
+.generation-topbar {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workflow-generation-state {
+  display: grid;
+  min-height: calc(100vh - 82px);
+  place-items: center;
+  padding: 48px 24px;
+}
+
+.workflow-generation-status {
+  display: grid;
+  width: min(560px, 100%);
+  justify-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.generation-status-icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid
+    color-mix(in srgb, var(--state-success) 24%, var(--border-1));
+  border-radius: 8px;
+  background:
+    color-mix(in srgb, var(--state-success) 10%, var(--background-fronted));
+  color: var(--state-success);
+}
+
+.generation-status-icon.failed {
+  border-color: color-mix(in srgb, var(--state-danger) 32%, var(--border-1));
+  background:
+    color-mix(in srgb, var(--state-danger) 8%, var(--background-fronted));
+  color: var(--state-danger);
+}
+
+.generation-status-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.generation-status-copy h2 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.generation-status-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.generation-retry-button {
+  min-width: 154px;
+}
+
 .home-shell {
   min-height: 100vh;
   color: var(--text-primary);

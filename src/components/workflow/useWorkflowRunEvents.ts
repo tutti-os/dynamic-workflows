@@ -257,7 +257,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
         workflowVersionId:
           context?.workflowVersionId ??
           input.selectedVersion?.id ??
-          input.detail?.currentVersion.id ??
+          input.detail?.currentVersion?.id ??
           "",
         executorKind: context?.executorKind ?? "local-agent",
         provider: context?.provider,

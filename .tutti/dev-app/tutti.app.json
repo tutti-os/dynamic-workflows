@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "tutti.app.manifest.v1",
+  "appId": "dynamic-workflows-dev",
+  "version": "0.1.0",
+  "name": "Dynamic Workflows Dev",
+  "description": "Script-first dynamic workflow orchestrator for local Nextop agents.",
+  "icon": {
+    "type": "asset",
+    "src": "icon.svg"
+  },
+  "runtime": {
+    "bootstrap": "bootstrap.sh",
+    "healthcheckPath": "/api/health"
+  },
+  "window": {
+    "minimizeBehavior": "keep-mounted",
+    "minWidth": 960,
+    "minHeight": 640
+  },
+  "cli": {
+    "manifest": "tutti.cli.json"
+  },
+  "author": {
+    "name": "Tutti"
+  },
+  "tags": [
+    "local-dev",
+    "workflow",
+    "agent"
+  ]
+}

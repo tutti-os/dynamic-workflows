@@ -4,7 +4,11 @@ import {
   assertWorkflowScriptValid,
   parseWorkflowScript,
 } from "@/lib/workflow/parser";
-import type { ParsedWorkflow, WorkflowMeta } from "@/lib/workflow/types";
+import type {
+  ParsedWorkflow,
+  WorkflowDiagnostic,
+  WorkflowMeta,
+} from "@/lib/workflow/types";
 import { getDb, getRunLogPath } from "./client";
 
 export type WorkflowRecord = {
@@ -27,6 +31,33 @@ export type WorkflowVersionRecord = {
 
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "canceled";
 
+export type WorkflowGenerationStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type WorkflowGenerationError = {
+  code?: string;
+  message: string;
+  diagnostics?: WorkflowDiagnostic[];
+};
+
+export type WorkflowGenerationRecord = {
+  id: string;
+  workflowId: string;
+  prompt: string;
+  provider: string | null;
+  model: string | null;
+  cwd: string | null;
+  status: WorkflowGenerationStatus;
+  generation: unknown;
+  error: WorkflowGenerationError | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
 export type WorkflowRunRecord = {
   id: string;
   workflowId: string;
@@ -47,15 +78,17 @@ export type WorkflowRunRecord = {
 export type WorkflowListItem = {
   workflow: WorkflowRecord;
   currentVersion: WorkflowVersionRecord | null;
+  generation: WorkflowGenerationRecord | null;
   runCount: number;
   latestRun: WorkflowRunRecord | null;
 };
 
 export type WorkflowDetail = {
   workflow: WorkflowRecord;
-  currentVersion: WorkflowVersionRecord;
+  currentVersion: WorkflowVersionRecord | null;
   versions: WorkflowVersionRecord[];
   runs: WorkflowRunRecord[];
+  generation: WorkflowGenerationRecord | null;
 };
 
 type WorkflowRow = {
@@ -93,6 +126,21 @@ type RunRow = {
   finished_at: string | null;
 };
 
+type GenerationRow = {
+  id: string;
+  workflow_id: string;
+  prompt: string;
+  provider: string | null;
+  model: string | null;
+  cwd: string | null;
+  status: WorkflowGenerationStatus;
+  generation_json: string | null;
+  error_json: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 export function listWorkflows(): WorkflowListItem[] {
   const database = getDb();
   const rows = database
@@ -111,6 +159,7 @@ export function listWorkflows(): WorkflowListItem[] {
       currentVersion: workflow.currentVersionId
         ? getWorkflowVersion(workflow.currentVersionId)
         : null,
+      generation: getLatestWorkflowGeneration(workflow.id),
       runCount: countWorkflowRuns(workflow.id),
       latestRun: getLatestWorkflowRun(workflow.id),
     };
@@ -119,12 +168,14 @@ export function listWorkflows(): WorkflowListItem[] {
 
 export function getWorkflowDetail(workflowId: string): WorkflowDetail | null {
   const workflow = getWorkflow(workflowId);
-  if (!workflow?.currentVersionId) {
+  if (!workflow) {
     return null;
   }
 
-  const currentVersion = getWorkflowVersion(workflow.currentVersionId);
-  if (!currentVersion) {
+  const currentVersion = workflow.currentVersionId
+    ? getWorkflowVersion(workflow.currentVersionId)
+    : null;
+  if (workflow.currentVersionId && !currentVersion) {
     return null;
   }
 
@@ -133,6 +184,7 @@ export function getWorkflowDetail(workflowId: string): WorkflowDetail | null {
     currentVersion,
     versions: listWorkflowVersions(workflowId),
     runs: listWorkflowRuns(workflowId),
+    generation: getLatestWorkflowGeneration(workflowId),
   };
 }
 
@@ -178,6 +230,254 @@ export function createWorkflowFromScript(script: string): WorkflowDetail {
     throw new Error("Failed to create workflow");
   }
   return detail;
+}
+
+export function createPendingWorkflowGeneration(input: {
+  prompt: string;
+  provider?: string;
+  model?: string;
+  cwd?: string;
+}): WorkflowDetail {
+  const prompt = input.prompt.trim();
+  if (!prompt) {
+    throw new Error("Prompt is required");
+  }
+
+  const now = new Date().toISOString();
+  const workflowId = randomUUID();
+  const generationId = randomUUID();
+  const database = getDb();
+
+  database
+    .transaction(() => {
+      database
+        .prepare(
+          `
+          INSERT INTO workflows (
+            id, name, description, current_version_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          workflowId,
+          derivePendingWorkflowName(prompt),
+          derivePendingWorkflowDescription(prompt),
+          null,
+          now,
+          now,
+        );
+
+      database
+        .prepare(
+          `
+          INSERT INTO workflow_generations (
+            id, workflow_id, prompt, provider, model, cwd, status,
+            generation_json, error_json, created_at, started_at, finished_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          generationId,
+          workflowId,
+          prompt,
+          input.provider ?? null,
+          input.model ?? null,
+          input.cwd ?? null,
+          "pending",
+          null,
+          null,
+          now,
+          null,
+          null,
+        );
+    })();
+
+  const detail = getWorkflowDetail(workflowId);
+  if (!detail) {
+    throw new Error("Failed to create workflow");
+  }
+  return detail;
+}
+
+export function getWorkflowGeneration(
+  generationId: string,
+): WorkflowGenerationRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM workflow_generations WHERE id = ?")
+    .get(generationId) as GenerationRow | undefined;
+  return row ? mapGeneration(row) : null;
+}
+
+export function getLatestWorkflowGeneration(
+  workflowId: string,
+): WorkflowGenerationRecord | null {
+  const row = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_generations
+      WHERE workflow_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    )
+    .get(workflowId) as GenerationRow | undefined;
+  return row ? mapGeneration(row) : null;
+}
+
+export function markWorkflowGenerationRunning(
+  generationId: string,
+): WorkflowGenerationRecord | null {
+  const generation = getWorkflowGeneration(generationId);
+  if (!generation || generation.status === "completed") {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_generations
+      SET status = 'running',
+        started_at = COALESCE(started_at, ?),
+        finished_at = NULL,
+        error_json = NULL
+      WHERE id = ?
+        AND status != 'completed'
+    `,
+    )
+    .run(now, generationId);
+
+  return getWorkflowGeneration(generationId);
+}
+
+export function resetWorkflowGenerationForRetry(
+  workflowId: string,
+): WorkflowGenerationRecord | null {
+  const generation = getLatestWorkflowGeneration(workflowId);
+  if (!generation || generation.status === "completed") {
+    return generation;
+  }
+
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_generations
+      SET status = 'pending',
+        generation_json = NULL,
+        error_json = NULL,
+        started_at = NULL,
+        finished_at = NULL
+      WHERE id = ?
+    `,
+    )
+    .run(generation.id);
+
+  return getWorkflowGeneration(generation.id);
+}
+
+export function completeWorkflowGeneration(input: {
+  generationId: string;
+  script: string;
+  generation: unknown;
+}): WorkflowDetail {
+  const generation = getWorkflowGeneration(input.generationId);
+  if (!generation) {
+    throw new Error("Workflow generation not found");
+  }
+
+  const parsed = assertWorkflowScriptValid(input.script);
+  const database = getDb();
+  const now = new Date().toISOString();
+  const versionId = randomUUID();
+  const version = database
+    .prepare(
+      `
+      SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+      FROM workflow_versions
+      WHERE workflow_id = ?
+    `,
+    )
+    .get(generation.workflowId) as { next_version: number };
+
+  database
+    .transaction(() => {
+      database
+        .prepare(
+          `
+          INSERT INTO workflow_versions (
+            id, workflow_id, version, script, meta_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          versionId,
+          generation.workflowId,
+          version.next_version,
+          input.script,
+          JSON.stringify(parsed.meta),
+          now,
+        );
+
+      database
+        .prepare(
+          `
+          UPDATE workflows
+          SET name = ?, description = ?, current_version_id = ?, updated_at = ?
+          WHERE id = ?
+        `,
+        )
+        .run(
+          parsed.meta.name,
+          parsed.meta.description,
+          versionId,
+          now,
+          generation.workflowId,
+        );
+
+      database
+        .prepare(
+          `
+          UPDATE workflow_generations
+          SET status = 'completed',
+            generation_json = ?,
+            error_json = NULL,
+            finished_at = ?
+          WHERE id = ?
+        `,
+        )
+        .run(
+          JSON.stringify(input.generation),
+          now,
+          input.generationId,
+        );
+    })();
+
+  const detail = getWorkflowDetail(generation.workflowId);
+  if (!detail) {
+    throw new Error("Workflow not found");
+  }
+  return detail;
+}
+
+export function failWorkflowGeneration(input: {
+  generationId: string;
+  error: WorkflowGenerationError;
+}): WorkflowGenerationRecord | null {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_generations
+      SET status = 'failed',
+        error_json = ?,
+        finished_at = ?
+      WHERE id = ?
+        AND status != 'completed'
+    `,
+    )
+    .run(JSON.stringify(input.error), now, input.generationId);
+
+  return getWorkflowGeneration(input.generationId);
 }
 
 export function createWorkflowVersion(input: {
@@ -545,6 +845,48 @@ function mapRun(row: RunRow): WorkflowRunRecord {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
   };
+}
+
+function mapGeneration(row: GenerationRow): WorkflowGenerationRecord {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    prompt: row.prompt,
+    provider: row.provider,
+    model: row.model,
+    cwd: row.cwd,
+    status: row.status,
+    generation: row.generation_json
+      ? parseJson<unknown>(row.generation_json, null)
+      : null,
+    error: row.error_json
+      ? parseJson<WorkflowGenerationError | null>(row.error_json, null)
+      : null,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function derivePendingWorkflowName(prompt: string): string {
+  const preview = truncate(normalizeWhitespace(prompt), 72);
+  return preview ? `Generating: ${preview}` : "Generating workflow";
+}
+
+function derivePendingWorkflowDescription(prompt: string): string {
+  const preview = truncate(normalizeWhitespace(prompt), 220);
+  return preview || "Generating workflow from prompt.";
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function truncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
 function parseJson<T>(value: string, fallback: T): T {

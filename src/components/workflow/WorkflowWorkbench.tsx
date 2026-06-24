@@ -6,8 +6,14 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
+  Badge,
+  Button,
+  DashboardIcon,
+  FailedLinedIcon,
+  LoadingIcon,
   Spinner,
 } from "@tutti-os/ui-system";
+import Link from "next/link";
 import {
   useCallback,
   useEffect,
@@ -31,6 +37,10 @@ import {
   type InspectorTab,
   type MainView,
 } from "@/components/workflow/WorkflowWorkbench.types";
+import type {
+  WorkflowDetail,
+  WorkflowVersionRecord,
+} from "@/lib/db/workflows";
 
 type WorkflowWorkbenchProps = {
   workflowId: string;
@@ -101,6 +111,9 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     isSavingMetadata,
     isDuplicatingWorkflow,
     isDeletingWorkflow,
+    isGeneratingWorkflow,
+    isRetryingGeneration,
+    generationError,
     isViewingOldVersion,
     setMetadataName,
     setMetadataDescription,
@@ -114,6 +127,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     saveDetailsDialog,
     duplicateCurrentWorkflow,
     deleteCurrentWorkflow,
+    retryWorkflowGeneration,
     exportSelectedVersion,
   } = useWorkflowDocument({
     workflowId,
@@ -237,6 +251,18 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     );
   }
 
+  if (!hasCurrentVersion(detail)) {
+    return (
+      <WorkflowGenerationState
+        detail={detail}
+        isGenerating={isGeneratingWorkflow}
+        retrying={isRetryingGeneration}
+        generationError={generationError}
+        onRetry={() => void retryWorkflowGeneration()}
+      />
+    );
+  }
+
   return (
     <main className="app-shell">
       <WorkflowHeader
@@ -357,6 +383,93 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
             void openAgentSession(agentSessionId)
           }
         />
+      </section>
+    </main>
+  );
+}
+
+function hasCurrentVersion(
+  detail: WorkflowDetail,
+): detail is WorkflowDetail & { currentVersion: WorkflowVersionRecord } {
+  return Boolean(detail.currentVersion);
+}
+
+function WorkflowGenerationState(props: {
+  detail: WorkflowDetail;
+  isGenerating: boolean;
+  retrying: boolean;
+  generationError?: string;
+  onRetry: () => void;
+}) {
+  const generation = props.detail.generation;
+  const failed = generation?.status === "failed";
+  const errorMessage =
+    props.generationError ?? generation?.error?.message ?? "Generation failed.";
+
+  return (
+    <main className="app-shell">
+      <header className="detail-topbar generation-topbar">
+        <div className="detail-titlebar">
+          <Button asChild variant="outline" size="icon-lg" aria-label="Home">
+            <Link href="/">
+              <DashboardIcon />
+            </Link>
+          </Button>
+          <div className="detail-heading">
+            <div className="detail-heading-title">
+              <h1>{props.detail.workflow.name}</h1>
+            </div>
+            <div className="detail-meta">
+              <Badge variant={failed ? "destructive" : "pending"}>
+                {failed ? "generation failed" : "generating"}
+              </Badge>
+              <span className="detail-description">
+                {props.detail.workflow.description}
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section className="workflow-generation-state">
+        <div className="workflow-generation-status">
+          {failed ? (
+            <span className="generation-status-icon failed">
+              <FailedLinedIcon size={24} />
+            </span>
+          ) : (
+            <span className="generation-status-icon">
+              {props.isGenerating ? (
+                <LoadingIcon className="spin" size={24} />
+              ) : (
+                <Spinner />
+              )}
+            </span>
+          )}
+          <div className="generation-status-copy">
+            <h2>
+              {failed ? "Workflow generation failed" : "Generating workflow"}
+            </h2>
+            <p>
+              {failed
+                ? errorMessage
+                : "The workflow detail is ready. The script is being generated and will open here when it finishes."}
+            </p>
+          </div>
+          {failed ? (
+            <Button
+              className="generation-retry-button"
+              type="button"
+              disabled={props.retrying}
+              onClick={props.onRetry}
+            >
+              {props.retrying ? (
+                <LoadingIcon className="spin" data-icon="inline-start" />
+              ) : null}
+              Retry generation
+            </Button>
+          ) : null}
+        </div>
       </section>
     </main>
   );

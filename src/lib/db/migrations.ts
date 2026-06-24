@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -17,8 +17,14 @@ export function migrateDb(database: Database.Database): void {
 
   database
     .transaction(() => {
-      applySchemaV1(database);
-      recordSchemaMigration(database, 1);
+      if (currentVersion < 1) {
+        applySchemaV1(database);
+        recordSchemaMigration(database, 1);
+      }
+      if (currentVersion < 2) {
+        applySchemaV2(database);
+        recordSchemaMigration(database, 2);
+      }
     })();
 }
 
@@ -89,5 +95,28 @@ function applySchemaV1(database: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id
       ON workflow_runs(workflow_id, started_at DESC);
+  `);
+}
+
+function applySchemaV2(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_generations (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      cwd TEXT,
+      status TEXT NOT NULL,
+      generation_json TEXT,
+      error_json TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_generations_workflow_id
+      ON workflow_generations(workflow_id, created_at DESC);
   `);
 }

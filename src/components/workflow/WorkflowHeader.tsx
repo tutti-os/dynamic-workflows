@@ -13,8 +13,12 @@ import type {
 import { VersionSelect } from "@/components/workflow/VersionSelect";
 import { WorkflowActionBar } from "@/components/workflow/WorkflowActionBar";
 
+type WorkflowDetailWithVersion = WorkflowDetail & {
+  currentVersion: WorkflowVersionRecord;
+};
+
 type WorkflowHeaderProps = {
-  detail: WorkflowDetail;
+  detail: WorkflowDetailWithVersion;
   selectedVersion: WorkflowVersionRecord | null;
   dirty: boolean;
   saving: boolean;

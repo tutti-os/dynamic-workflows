@@ -26,6 +26,9 @@ export async function prepareCurrentWorkflowRun(input: {
   if (!detail) {
     throw new Error("Workflow not found");
   }
+  if (!detail.currentVersion) {
+    throw new Error("Workflow version not found");
+  }
 
   const body = (await input.request.json()) as WorkflowRunRequestBody;
   const script = body.script ?? detail.currentVersion.script;

@@ -190,6 +190,13 @@ function showCommand(input: CliInput) {
   if (!detail) {
     throw new CliHttpError("workflow_not_found", "Workflow not found.", 404);
   }
+  if (!detail.currentVersion) {
+    throw new CliHttpError(
+      "workflow_version_not_found",
+      "Workflow version not found.",
+      404,
+    );
+  }
 
   const parsed = assertWorkflowScriptValid(detail.currentVersion.script);
   return {
@@ -292,6 +299,13 @@ async function runWorkflowForCli(input: {
   const detail = getWorkflowDetail(input.workflowId);
   if (!detail) {
     throw new CliHttpError("workflow_not_found", "Workflow not found.", 404);
+  }
+  if (!detail.currentVersion) {
+    throw new CliHttpError(
+      "workflow_version_not_found",
+      "Workflow version not found.",
+      404,
+    );
   }
 
   const parsed = assertWorkflowScriptValid(detail.currentVersion.script);

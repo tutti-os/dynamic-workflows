@@ -65,6 +65,80 @@ describe("nextop cli adapter", () => {
     ]);
   });
 
+  it("uses local Codex detection when Nextop reports Codex unavailable", async () => {
+    const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockProvider: false,
+      providerDetectionTimeoutMs: 123,
+      providerModelsTimeoutMs: 456,
+      commandDetector: async (command) =>
+        command === "codex" ? "/Users/me/.local/bin/codex" : undefined,
+      runner: async (args, options) => {
+        calls.push({ args, timeoutMs: options?.timeoutMs });
+        if (args.includes("providers")) {
+          return {
+            providers: [
+              {
+                provider: "codex",
+                status: "unavailable",
+                detail: "not found",
+              },
+            ],
+          };
+        }
+        if (args.includes("composer-options")) {
+          return {
+            effectiveSettings: { model: "gpt-5.5" },
+            modelConfig: { options: [] },
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(adapter.listProviders()).resolves.toEqual([
+      {
+        id: "codex",
+        label: "Codex",
+        supported: true,
+        models: ["gpt-5.5"],
+        reason: "/Users/me/.local/bin/codex",
+      },
+    ]);
+    expect(calls).toContainEqual({
+      args: ["--json", "agent", "providers"],
+      timeoutMs: 123,
+    });
+    expect(calls).toContainEqual({
+      args: ["--json", "agent", "composer-options", "--provider", "codex"],
+      timeoutMs: 456,
+    });
+  });
+
+  it("falls back to local Codex when provider discovery fails", async () => {
+    const adapter = createNextopCliAgentAdapter({
+      includeMockProvider: false,
+      commandDetector: async (command) =>
+        command === "codex" ? "/Users/me/.local/bin/codex" : undefined,
+      runner: async (args) => {
+        if (args.includes("providers")) {
+          throw new Error("provider discovery timed out");
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(adapter.listProviders()).resolves.toEqual([
+      {
+        id: "codex",
+        label: "Codex",
+        supported: true,
+        models: [],
+        reason: "/Users/me/.local/bin/codex",
+      },
+    ]);
+  });
+
   it("requires agentSessionId in start output", () => {
     expect(() =>
       parseSessionFromOutput({ session: { provider: "codex" } }),

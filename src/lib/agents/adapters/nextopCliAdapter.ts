@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access } from "node:fs/promises";
+import { homedir } from "node:os";
+import { delimiter, join } from "node:path";
 import type {
   AgentProviderOption,
   AgentRunInput,
@@ -13,6 +17,9 @@ type NextopCliAdapterOptions = {
   includeMockProvider?: boolean;
   cliPath?: string;
   pollIntervalMs?: number;
+  providerDetectionTimeoutMs?: number;
+  providerModelsTimeoutMs?: number;
+  commandDetector?: LocalCommandDetector;
   runner?: NextopCliRunner;
 };
 
@@ -23,6 +30,8 @@ type NextopCliRunner = (
     timeoutMs?: number;
   },
 ) => Promise<unknown>;
+
+type LocalCommandDetector = (command: string) => Promise<string | undefined>;
 
 type NextopProviderStatus = {
   provider?: unknown;
@@ -74,6 +83,9 @@ const DEFAULT_CLI_PATH = "tutti-dev";
 const CLI_PATH_ENV_NAMES = ["TUTTI_CLI", "NEXTOP_CLI_PATH"] as const;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 360_000;
+const DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS = 3_000;
+const DEFAULT_PROVIDER_MODELS_TIMEOUT_MS = 1_500;
+const DEFAULT_LOCAL_COMMAND_TIMEOUT_MS = 2_000;
 const POLL_SUMMARY_LIMIT = 100;
 const TAIL_SUMMARY_LIMIT = 50;
 const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed", "canceled"]);
@@ -95,17 +107,37 @@ export function createNextopCliAgentAdapter(
     options.pollIntervalMs ??
     readPositiveIntegerEnv("NEXTOP_POLL_INTERVAL_MS") ??
     DEFAULT_POLL_INTERVAL_MS;
+  const providerDetectionTimeoutMs =
+    options.providerDetectionTimeoutMs ??
+    readPositiveIntegerEnv("NEXTOP_PROVIDER_DETECTION_TIMEOUT_MS") ??
+    DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS;
+  const providerModelsTimeoutMs =
+    options.providerModelsTimeoutMs ??
+    readPositiveIntegerEnv("NEXTOP_PROVIDER_MODELS_TIMEOUT_MS") ??
+    DEFAULT_PROVIDER_MODELS_TIMEOUT_MS;
+  const commandDetector = options.commandDetector ?? detectLocalCommand;
 
   const adapter: AgentRuntimeAdapter = {
     id: "nextop-cli",
     label: "Nextop CLI agent adapter",
     async listProviders(): Promise<AgentProviderOption[]> {
-      const providersOutput = await runner(["--json", "agent", "providers"]);
+      const providersOutput = await readNextopProviderOptions(
+        runner,
+        providerDetectionTimeoutMs,
+      );
+      const providerOptions = await applyLocalProviderDetections(
+        providersOutput,
+        commandDetector,
+      );
       const realProviders = await Promise.all(
-        parseProviderOptions(providersOutput).map(async (provider) => ({
+        providerOptions.map(async (provider) => ({
           ...provider,
           models: provider.supported
-            ? await readProviderModels(provider.id, runner)
+            ? await readProviderModels(
+                provider.id,
+                runner,
+                providerModelsTimeoutMs,
+              )
             : [],
         })),
       );
@@ -366,6 +398,42 @@ export function parseProviderOptions(value: unknown): AgentProviderOption[] {
     .sort((left, right) => providerSortOrder(left.id) - providerSortOrder(right.id));
 }
 
+async function readNextopProviderOptions(
+  runner: NextopCliRunner,
+  timeoutMs: number,
+): Promise<AgentProviderOption[]> {
+  try {
+    return parseProviderOptions(
+      await runner(["--json", "agent", "providers"], { timeoutMs }),
+    );
+  } catch {
+    return [];
+  }
+}
+
+async function applyLocalProviderDetections(
+  providers: AgentProviderOption[],
+  commandDetector: LocalCommandDetector,
+): Promise<AgentProviderOption[]> {
+  const byId = new Map(providers.map((provider) => [provider.id, provider]));
+  const codexPath = await commandDetector("codex");
+
+  if (codexPath) {
+    const existing = byId.get("codex");
+    byId.set("codex", {
+      id: "codex",
+      label: "Codex",
+      supported: true,
+      models: existing?.models ?? [],
+      reason: existing?.supported ? existing.reason : codexPath,
+    });
+  }
+
+  return [...byId.values()].sort(
+    (left, right) => providerSortOrder(left.id) - providerSortOrder(right.id),
+  );
+}
+
 export function parseSessionFromOutput(value: unknown): RequiredSessionRef {
   const output = value as NextopSessionOutput;
   const session = normalizeSession(output.session);
@@ -444,6 +512,91 @@ type RequiredSessionRef = AgentSessionRef & {
   lastError?: string;
 };
 
+async function detectLocalCommand(command: string): Promise<string | undefined> {
+  const commandPath = await findExecutablePath(command);
+  if (!commandPath) {
+    return undefined;
+  }
+
+  try {
+    await runNextop(commandPath, ["--version"], {
+      timeoutMs: DEFAULT_LOCAL_COMMAND_TIMEOUT_MS,
+    });
+    return commandPath;
+  } catch {
+    return undefined;
+  }
+}
+
+async function findExecutablePath(command: string): Promise<string | undefined> {
+  if (command.includes("/")) {
+    return (await isExecutable(command)) ? command : undefined;
+  }
+
+  const pathValue = createCliEnv().PATH ?? "";
+  const seen = new Set<string>();
+  for (const directory of pathValue.split(delimiter)) {
+    if (!directory || seen.has(directory)) {
+      continue;
+    }
+    seen.add(directory);
+    const candidate = join(directory, command);
+    if (await isExecutable(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createCliEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  env.PATH = createCliPath(env.PATH);
+  return env;
+}
+
+function createCliPath(pathValue: string | undefined): string {
+  const entries: string[] = [];
+  const seen = new Set<string>();
+  const addEntry = (entry: string) => {
+    if (!entry || seen.has(entry)) {
+      return;
+    }
+    seen.add(entry);
+    entries.push(entry);
+  };
+
+  for (const directory of localBinDirectories()) {
+    addEntry(directory);
+  }
+  for (const directory of (pathValue ?? "").split(delimiter)) {
+    addEntry(directory);
+  }
+
+  return entries.join(delimiter);
+}
+
+function localBinDirectories(): string[] {
+  const home = homedir();
+  return [
+    join(home, ".local", "bin"),
+    join(home, "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
+}
+
 function runNextop(
   cliPath: string,
   args: string[],
@@ -459,7 +612,7 @@ function runNextop(
     }
 
     const child = spawn(cliPath, args, {
-      env: process.env,
+      env: createCliEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -528,15 +681,19 @@ function runNextop(
 async function readProviderModels(
   provider: string,
   runner: NextopCliRunner,
+  timeoutMs: number,
 ): Promise<string[]> {
   try {
-    const output = (await runner([
-      "--json",
-      "agent",
-      "composer-options",
-      "--provider",
-      provider,
-    ])) as NextopComposerOptionsOutput;
+    const output = (await runner(
+      [
+        "--json",
+        "agent",
+        "composer-options",
+        "--provider",
+        provider,
+      ],
+      { timeoutMs },
+    )) as NextopComposerOptionsOutput;
     return parseComposerModels(output);
   } catch {
     return [];

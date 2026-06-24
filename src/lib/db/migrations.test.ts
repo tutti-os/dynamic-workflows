@@ -15,6 +15,7 @@ describe("migrateDb", () => {
           "workflows",
           "workflow_versions",
           "workflow_runs",
+          "workflow_generations",
         ]),
       );
       expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
@@ -83,6 +84,7 @@ describe("migrateDb", () => {
           .get("workflow-1"),
       ).toEqual({ name: "Existing" });
       expect(readTableNames(database)).toContain("schema_migrations");
+      expect(readTableNames(database)).toContain("workflow_generations");
     } finally {
       database.close();
     }

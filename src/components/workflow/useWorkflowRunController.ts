@@ -189,7 +189,7 @@ export function useWorkflowRunController(input: {
       activeTab: "runs",
       runContext: {
         workflowVersionId:
-          input.selectedVersion?.id ?? input.detail?.currentVersion.id ?? "",
+          input.selectedVersion?.id ?? input.detail?.currentVersion?.id ?? "",
         executorKind:
           input.effectiveProvider === "mock" ? "mock" : "local-agent",
         provider: input.effectiveProvider,
