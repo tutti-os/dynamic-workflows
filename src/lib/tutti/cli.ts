@@ -403,6 +403,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
       phase: node.phase,
       provider: node.provider,
       model: node.model,
+      session: node.session,
       inputs: node.inputs,
     })),
   };

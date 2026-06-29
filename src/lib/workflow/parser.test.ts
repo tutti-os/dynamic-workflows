@@ -74,4 +74,16 @@ const second = await agent({ id: "same", prompt: "two" })
 `),
     ).toThrow(WorkflowScriptSyntaxError);
   });
+
+  it("parses agent session keys", () => {
+    const parsed = parseWorkflowScript(`
+const first = await agent({ id: "first", session: "writer", prompt: "one" })
+const second = await agent({ id: "second", session: "writer", prompt: "two" })
+`);
+
+    expect(parsed.nodes.map((node) => [node.id, node.session])).toEqual([
+      ["first", "writer"],
+      ["second", "writer"],
+    ]);
+  });
 });

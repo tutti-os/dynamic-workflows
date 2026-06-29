@@ -46,9 +46,10 @@ Rules:
 - Return only JavaScript code, no markdown fences.
 - Use "export const meta = { name, description }".
 - Use phase("...") to group work.
-- Use agent({ id, label, inputs, prompt }) only.
+- Use agent({ id, label, inputs, prompt }) only, with optional session: "name" when multiple steps should reuse the same agent conversation.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
+- Reuse the same session value only for agent calls that must share conversation context; keep independent agents sessionless.
 - Do not concatenate prompt strings with +.
 - Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
 - Keep the workflow readable and editable in a UI.`;
@@ -162,9 +163,10 @@ Rules:
 - Return only JavaScript code, no markdown fences.
 - Use "export const meta = { name, description }".
 - Use phase("...") to group work.
-- Use agent({ id, label, inputs, prompt }) only.
+- Use agent({ id, label, inputs, prompt }) only, with optional session: "name" when multiple steps should reuse the same agent conversation.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
+- Reuse the same session value only for agent calls that must share conversation context; keep independent agents sessionless.
 - Do not concatenate prompt strings with +.
 - Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
 

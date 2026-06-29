@@ -248,6 +248,211 @@ describe("nextop cli adapter", () => {
     });
   });
 
+  it("treats settled turn lifecycle as terminal when session status stays created", async () => {
+    const calls: string[][] = [];
+    let pollCount = 0;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockProvider: false,
+      pollIntervalMs: 1,
+      runner: async (args) => {
+        calls.push(args);
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("session-summary")) {
+          if (args.includes("--order")) {
+            return {
+              hasMore: false,
+              latestVersion: 0,
+              session: {
+                agentSessionId: "session-1",
+                provider: "codex",
+                status: "created",
+                turnLifecycle: {
+                  phase: "settled",
+                  outcome: "completed",
+                },
+              },
+              messages: [{ role: "assistant", text: "done", version: 154 }],
+            };
+          }
+
+          pollCount += 1;
+          if (pollCount > 1) {
+            throw new Error("session kept polling after turn settled");
+          }
+          return {
+            hasMore: false,
+            latestVersion: 154,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+              turnLifecycle: {
+                phase: "settled",
+                outcome: "completed",
+              },
+            },
+            messages: [],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:scan",
+      provider: "codex",
+      cwd: "/tmp/project",
+      prompt: "scan",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "session-summary",
+      "--session-id",
+      "session-1",
+      "--order",
+      "desc",
+      "--limit",
+      "50",
+    ]);
+    expect(events).toContainEqual({
+      type: "session_ref",
+      session: {
+        agentSessionId: "session-1",
+        provider: "codex",
+        model: "gpt-5",
+        status: "completed",
+      },
+    });
+    expect(events).toContainEqual({ type: "text_delta", text: "done" });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
+  it("sends prompts to an existing session when resumeSessionId is provided", async () => {
+    const calls: string[][] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockProvider: false,
+      pollIntervalMs: 1,
+      runner: async (args) => {
+        calls.push(args);
+        if (args.includes("composer-options")) {
+          return {
+            effectiveSettings: { model: "gpt-5" },
+            modelConfig: { options: [] },
+          };
+        }
+        if (args.includes("send")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("session-summary")) {
+          if (args.includes("--limit") && args.includes("1")) {
+            return {
+              latestVersion: 4,
+              session: {
+                agentSessionId: "session-1",
+                provider: "codex",
+                status: "completed",
+              },
+              messages: [],
+            };
+          }
+          if (args.includes("--order")) {
+            return {
+              hasMore: false,
+              latestVersion: 0,
+              session: {
+                agentSessionId: "session-1",
+                provider: "codex",
+                status: "completed",
+              },
+              messages: [{ role: "assistant", text: "second done", version: 6 }],
+            };
+          }
+          return {
+            latestVersion: 6,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "completed",
+            },
+            messages: [],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:revise",
+      provider: "codex",
+      cwd: "/tmp/project",
+      prompt: "revise",
+      resumeSessionId: "session-1",
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "session-summary",
+      "--session-id",
+      "session-1",
+      "--limit",
+      "1",
+    ]);
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "send",
+      "--session-id",
+      "session-1",
+      "--prompt",
+      "revise",
+    ]);
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "session-summary",
+      "--session-id",
+      "session-1",
+      "--after-version",
+      "4",
+      "--limit",
+      "100",
+    ]);
+    expect(events).toContainEqual({ type: "text_delta", text: "second done" });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
   it("reads final text from descending tail pages after completion", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({

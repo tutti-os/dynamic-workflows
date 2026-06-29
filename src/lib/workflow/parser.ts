@@ -222,6 +222,7 @@ function addAgentNode(
   const prompt = readObjectString(options, "prompt") ?? "";
   const inputs = readInputs(options, state);
   const templateRefs = extractTemplateRefs(prompt);
+  const session = readObjectString(options, "session")?.trim();
   const node: WorkflowNode = {
     id,
     kind: "agent",
@@ -231,6 +232,7 @@ function addAgentNode(
     prompt,
     provider: readObjectString(options, "provider"),
     model: readObjectString(options, "model"),
+    ...(session ? { session } : {}),
     inputs,
     templateRefs,
     sourceRange: toRange(callExpression),

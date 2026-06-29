@@ -31,6 +31,7 @@ export type WorkflowNode = {
   message?: string;
   provider?: string;
   model?: string;
+  session?: string;
   inputs: WorkflowInputBinding[];
   templateRefs: string[];
   sourceRange?: EditableRange;

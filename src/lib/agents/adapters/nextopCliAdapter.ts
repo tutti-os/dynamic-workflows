@@ -74,9 +74,15 @@ type NextopSession = {
   provider?: unknown;
   model?: unknown;
   status?: unknown;
+  turnLifecycle?: unknown;
   title?: unknown;
   lastError?: unknown;
   settings?: unknown;
+};
+
+type NextopTurnLifecycle = {
+  phase?: unknown;
+  outcome?: unknown;
 };
 
 const DEFAULT_CLI_PATH = "tutti-dev";
@@ -175,27 +181,81 @@ export function createNextopCliAgentAdapter(
       input.signal?.addEventListener("abort", abortListener, { once: true });
 
       try {
-        yield {
-          type: "status",
-          status: "spawning",
-          message: `Starting ${provider} session through Nextop CLI.`,
-        };
+        const resumeSessionId = input.resumeSessionId?.trim();
+        let latestVersion = 0;
+        let initialSession: RequiredSessionRef;
 
-        const startOutput = await runner(
-          [
-            "--json",
-            ...providerStartPath(provider),
-            "--model",
+        if (resumeSessionId) {
+          yield {
+            type: "status",
+            status: "spawning",
+            message: `Sending prompt to Nextop session ${resumeSessionId}.`,
+          };
+
+          activeSessions.set(input.runId, resumeSessionId);
+          const fallbackSession: RequiredSessionRef = {
+            agentSessionId: resumeSessionId,
+            provider,
             model,
-            "--prompt",
-            input.prompt,
-            "--cwd",
-            input.cwd,
-            "--visible",
-          ],
-          { signal: input.signal },
-        );
-        const initialSession = parseSessionFromOutput(startOutput);
+            status: "running",
+          };
+          const baseline = parseSessionSummary(
+            await runner(
+              [
+                "--json",
+                "agent",
+                "session-summary",
+                "--session-id",
+                resumeSessionId,
+                "--limit",
+                "1",
+              ],
+              { signal: input.signal },
+            ),
+            fallbackSession,
+          );
+          latestVersion = baseline.latestVersion;
+
+          const sendOutput = await runner(
+            [
+              "--json",
+              "agent",
+              "send",
+              "--session-id",
+              resumeSessionId,
+              "--prompt",
+              input.prompt,
+            ],
+            { signal: input.signal },
+          );
+          initialSession = createResumedSession(
+            sendOutput,
+            fallbackSession,
+          );
+        } else {
+          yield {
+            type: "status",
+            status: "spawning",
+            message: `Starting ${provider} session through Nextop CLI.`,
+          };
+
+          const startOutput = await runner(
+            [
+              "--json",
+              ...providerStartPath(provider),
+              "--model",
+              model,
+              "--prompt",
+              input.prompt,
+              "--cwd",
+              input.cwd,
+              "--visible",
+            ],
+            { signal: input.signal },
+          );
+          initialSession = parseSessionFromOutput(startOutput);
+        }
+
         const agentSessionId = initialSession.agentSessionId;
         activeSessions.set(input.runId, agentSessionId);
 
@@ -206,7 +266,6 @@ export function createNextopCliAgentAdapter(
           message: `Nextop session ${agentSessionId} is running.`,
         };
 
-        let latestVersion = 0;
         let latestText = "";
 
         while (true) {
@@ -444,6 +503,23 @@ export function parseSessionFromOutput(value: unknown): RequiredSessionRef {
     throw new Error("Nextop CLI did not return session provider.");
   }
   return session as RequiredSessionRef;
+}
+
+function createResumedSession(
+  value: unknown,
+  fallbackSession: RequiredSessionRef,
+): RequiredSessionRef {
+  const output = value as NextopSessionOutput;
+  const session = {
+    ...fallbackSession,
+    ...normalizeSession(output.session),
+  };
+  return {
+    ...session,
+    agentSessionId: session.agentSessionId || fallbackSession.agentSessionId,
+    provider: session.provider || fallbackSession.provider,
+    status: session.status ?? "running",
+  };
 }
 
 export function parseSessionSummary(
@@ -881,8 +957,7 @@ function normalizeSession(value: unknown): Partial<RequiredSessionRef> {
   const model =
     readOptionalString(session.model) ??
     readOptionalString(settings?.model);
-  const status =
-    session.status === undefined ? undefined : normalizeSessionStatus(session.status);
+  const status = normalizeSessionStatus(session.status, session.turnLifecycle);
   const title = readOptionalString(session.title);
   const lastError = readOptionalString(session.lastError);
 
@@ -897,7 +972,10 @@ function normalizeSession(value: unknown): Partial<RequiredSessionRef> {
   };
 }
 
-function normalizeSessionStatus(value: unknown): AgentSessionStatus | undefined {
+function normalizeSessionStatus(
+  value: unknown,
+  turnLifecycleValue?: unknown,
+): AgentSessionStatus | undefined {
   const status = readOptionalString(value);
   switch (status) {
     case "completed":
@@ -911,11 +989,37 @@ function normalizeSessionStatus(value: unknown): AgentSessionStatus | undefined 
     case "working":
     case "waiting":
     case "created":
-    case "active":
+    case "active": {
+      const turnStatus = normalizeTurnLifecycleStatus(turnLifecycleValue);
+      return turnStatus ?? "running";
+    }
     case undefined:
-      return "running";
+      return normalizeTurnLifecycleStatus(turnLifecycleValue);
     default:
-      return "running";
+      return normalizeTurnLifecycleStatus(turnLifecycleValue) ?? "running";
+  }
+}
+
+function normalizeTurnLifecycleStatus(
+  value: unknown,
+): AgentSessionStatus | undefined {
+  const turnLifecycle = readRecord(value) as NextopTurnLifecycle | undefined;
+  const phase = readOptionalString(turnLifecycle?.phase);
+  if (phase !== "settled") {
+    return undefined;
+  }
+
+  const outcome = readOptionalString(turnLifecycle?.outcome);
+  switch (outcome) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "canceled":
+    case "cancelled":
+      return "canceled";
+    default:
+      return undefined;
   }
 }
 

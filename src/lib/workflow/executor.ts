@@ -21,7 +21,14 @@ export async function* runWorkflow(
     cwd: resolveWorkflowCwd(request.cwd),
   };
   const { executableNodes } = createWorkflowExecutionPlan(parsed);
+  const previousSessionNodeIds = createPreviousSessionNodeIds(executableNodes);
+  const nodeSessionKeyByNodeId = new Map(
+    executableNodes.flatMap((node) =>
+      node.session ? [[node.id, node.session] as const] : [],
+    ),
+  );
   const outputs: Record<string, string> = {};
+  const sessionIdsByKey: Record<string, string> = {};
   const failed = new Set<string>();
   const completed = new Set<string>();
   const running = new Set<string>();
@@ -41,7 +48,7 @@ export async function* runWorkflow(
       }
       return node.inputs.every((input) =>
         input.sourceNodeId ? completed.has(input.sourceNodeId) : true,
-      );
+      ) && isSessionPredecessorCompleted(node, previousSessionNodeIds, completed);
     });
 
     if (ready.length === 0) {
@@ -69,8 +76,25 @@ export async function* runWorkflow(
       nodes: batch,
       request: normalizedRequest,
       outputs,
+      sessionIdsByKey,
     })) {
       yield event;
+
+      if (event.type === "node_event") {
+        const sessionKey = nodeSessionKeyByNodeId.get(event.nodeId);
+        const agentSessionId = readAgentSessionId(event.event);
+        if (sessionKey && agentSessionId) {
+          const previousSessionId = sessionIdsByKey[sessionKey];
+          sessionIdsByKey[sessionKey] = agentSessionId;
+          yield createWorkflowSessionStatusEvent({
+            runId,
+            nodeId: event.nodeId,
+            sessionKey,
+            agentSessionId,
+            previousSessionId,
+          });
+        }
+      }
 
       if (event.type === "node_completed") {
         running.delete(event.nodeId);
@@ -109,6 +133,7 @@ async function* streamNodeBatch(input: {
   nodes: WorkflowNode[];
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
+  sessionIdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
   type QueueItem =
     | {
@@ -143,6 +168,7 @@ async function* streamNodeBatch(input: {
           node,
           request: input.request,
           outputs: input.outputs,
+          sessionIdsByKey: input.sessionIdsByKey,
         })) {
           push({ event });
         }
@@ -177,12 +203,16 @@ async function* runNode(input: {
   node: WorkflowNode;
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
+  sessionIdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const prompt = renderPrompt(input.node, input.outputs, input.request.inputs);
   const nodeRunId = `${input.runId}:${input.node.id}`;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
   const model = input.node.model ?? input.request.model;
   const cwd = input.request.cwd ?? process.cwd();
+  const resumeSessionId = input.node.session
+    ? input.sessionIdsByKey[input.node.session]
+    : undefined;
   let output = "";
 
   yield {
@@ -197,12 +227,29 @@ async function* runNode(input: {
   try {
     throwIfAborted(input.request.signal);
 
+    if (input.node.session) {
+      yield {
+        type: "node_event",
+        runId: input.runId,
+        nodeId: input.node.id,
+        event: {
+          type: "status",
+          status: "running",
+          stage: "running",
+          message: resumeSessionId
+            ? `Workflow session "${input.node.session}" is reusing agent session ${resumeSessionId}.`
+            : `Workflow session "${input.node.session}" is starting a new agent session.`,
+        },
+      };
+    }
+
     for await (const event of runAgent({
       runId: nodeRunId,
       provider,
       cwd,
       prompt,
       model,
+      resumeSessionId,
       signal: input.request.signal,
     })) {
       throwIfAborted(input.request.signal);
@@ -260,6 +307,81 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function isSignalAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
+}
+
+function createPreviousSessionNodeIds(
+  nodes: WorkflowNode[],
+): Record<string, string> {
+  const latestNodeIdBySession = new Map<string, string>();
+  const previousNodeIds: Record<string, string> = {};
+
+  for (const node of nodes) {
+    if (!node.session) {
+      continue;
+    }
+    const previousNodeId = latestNodeIdBySession.get(node.session);
+    if (previousNodeId) {
+      previousNodeIds[node.id] = previousNodeId;
+    }
+    latestNodeIdBySession.set(node.session, node.id);
+  }
+
+  return previousNodeIds;
+}
+
+function isSessionPredecessorCompleted(
+  node: WorkflowNode,
+  previousSessionNodeIds: Record<string, string>,
+  completed: Set<string>,
+): boolean {
+  const previousNodeId = previousSessionNodeIds[node.id];
+  return !previousNodeId || completed.has(previousNodeId);
+}
+
+function readAgentSessionId(event: unknown): string | undefined {
+  if (!event || typeof event !== "object") {
+    return undefined;
+  }
+  const raw = event as { type?: unknown; session?: unknown };
+  if (raw.type !== "session_ref" || !raw.session || typeof raw.session !== "object") {
+    return undefined;
+  }
+  const agentSessionId = (raw.session as { agentSessionId?: unknown }).agentSessionId;
+  return typeof agentSessionId === "string" && agentSessionId.trim()
+    ? agentSessionId.trim()
+    : undefined;
+}
+
+function createWorkflowSessionStatusEvent(input: {
+  runId: string;
+  nodeId: string;
+  sessionKey: string;
+  agentSessionId: string;
+  previousSessionId?: string;
+}): WorkflowRunEvent {
+  const message = !input.previousSessionId
+    ? `Workflow session "${input.sessionKey}" captured agent session ${input.agentSessionId}.`
+    : input.previousSessionId === input.agentSessionId
+      ? `Workflow session "${input.sessionKey}" confirmed agent session ${input.agentSessionId}.`
+      : `Workflow session "${input.sessionKey}" switched from agent session ${input.previousSessionId} to ${input.agentSessionId}.`;
+
+  return {
+    type: "node_event",
+    runId: input.runId,
+    nodeId: input.nodeId,
+    event: {
+      type: "status",
+      status:
+        input.previousSessionId && input.previousSessionId !== input.agentSessionId
+          ? "warning"
+          : "running",
+      stage:
+        input.previousSessionId && input.previousSessionId !== input.agentSessionId
+          ? "warning"
+          : "running",
+      message,
+    },
+  };
 }
 
 function isCancellationError(error: unknown): boolean {
