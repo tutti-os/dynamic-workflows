@@ -44,19 +44,24 @@ ${input.description}
 
 Rules:
 - Return only JavaScript code, no markdown fences.
-- Use "export const meta = { name, description }".
+- Use "export const meta = { name, description }"; add requiresCwd: true when the workflow must be launched from an explicit project directory.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
+- Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
+- Use cwd on loop({...}) as the default cwd for its steps; step cwd overrides loop cwd.
 - loop maxIterations must be an integer from 1 to 10.
 - loop steps must be agent({ id, label, prompt }) calls; use session: { mode: "inherit", key: "role_room" } when a role should keep its own conversation across iterations.
+- A loop step can include cwd when that role must run in a specific directory.
 - Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
 - Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
 - A loop can provide session: { mode: "inherit", key: "loop_room", scope: "step" } to derive per-step session keys, or scope: "loop" to share one loop-level session.
 - loop until must be { source: "<step id>", includes: "<literal marker>" }.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
+- Use {{workflow.cwd}} in prompts when agents need to know the actual run cwd; do not create a normal {{cwd}} input for this.
 - Reuse the same inherited session key only for agent calls that must share conversation context; keep independent agents sessionless.
+- Do not reuse the same inherited session key across different cwd values.
 - Never use legacy string session values.
 - Inside loop step prompts, reference other step ids with {{step_id}} to use the most recent output.
 - Inside loop step prompts, use {{iteration}} for the current 1-based iteration number.
@@ -171,19 +176,24 @@ ${diagnostics}
 
 Rules:
 - Return only JavaScript code, no markdown fences.
-- Use "export const meta = { name, description }".
+- Use "export const meta = { name, description }"; add requiresCwd: true when the workflow must be launched from an explicit project directory.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
+- Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
+- Use cwd on loop({...}) as the default cwd for its steps; step cwd overrides loop cwd.
 - loop maxIterations must be an integer from 1 to 10.
 - loop steps must be agent({ id, label, prompt }) calls; use session: { mode: "inherit", key: "role_room" } when a role should keep its own conversation across iterations.
+- A loop step can include cwd when that role must run in a specific directory.
 - Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
 - Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
 - A loop can provide session: { mode: "inherit", key: "loop_room", scope: "step" } to derive per-step session keys, or scope: "loop" to share one loop-level session.
 - loop until must be { source: "<step id>", includes: "<literal marker>" }.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
+- Use {{workflow.cwd}} in prompts when agents need to know the actual run cwd; do not create a normal {{cwd}} input for this.
 - Reuse the same inherited session key only for agent calls that must share conversation context; keep independent agents sessionless.
+- Do not reuse the same inherited session key across different cwd values.
 - Never use legacy string session values.
 - Inside loop step prompts, reference other step ids with {{step_id}} to use the most recent output.
 - Inside loop step prompts, use {{iteration}} for the current 1-based iteration number.

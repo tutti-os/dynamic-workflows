@@ -34,8 +34,10 @@ export function useWorkflowRunController(input: {
   effectiveProvider: string;
   model: string;
   cwd: string;
+  requiresCwd: boolean;
   workflowInputPayload: Record<string, string>;
   missingRunInputNames: string[];
+  missingCwd: boolean;
   loadWorkflow: (options?: { resetScript?: boolean }) => Promise<WorkflowDetail>;
   applyVersion: (version: WorkflowVersionRecord) => void;
   replaceParsed: (nextParsed: ParsedWorkflow) => void;
@@ -166,6 +168,12 @@ export function useWorkflowRunController(input: {
   }
 
   async function runCurrentWorkflow() {
+    if (input.missingCwd) {
+      input.openRunInputDialog();
+      appendEventLog("run blocked: missing cwd");
+      return;
+    }
+
     if (input.missingRunInputNames.length > 0) {
       input.openRunInputDialog();
       appendEventLog(
@@ -208,6 +216,9 @@ export function useWorkflowRunController(input: {
   }
 
   function submitRunInputDialog() {
+    if (input.missingCwd) {
+      return;
+    }
     if (input.missingRunInputNames.length > 0) {
       return;
     }

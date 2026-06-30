@@ -29,6 +29,7 @@ type WorkflowHeaderProps = {
   deleting: boolean;
   running: boolean;
   cancellingRun: boolean;
+  requiresCwd: boolean;
   onSelectVersion: (versionId: string) => void;
   onOpenDetails: () => void;
   onSave: () => void;
@@ -83,6 +84,9 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
               <Badge variant="warning">viewing old version</Badge>
             ) : null}
             {props.dirty ? <Badge variant="warning">unsaved</Badge> : null}
+            {props.requiresCwd ? (
+              <Badge variant="default">requires cwd</Badge>
+            ) : null}
             <span className="detail-description">
               {props.detail.workflow.description}
             </span>

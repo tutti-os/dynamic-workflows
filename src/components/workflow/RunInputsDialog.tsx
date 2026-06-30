@@ -29,9 +29,11 @@ type RunInputsDialogProps = {
   model: string;
   modelOptions: string[];
   cwd: string;
+  requiresCwd: boolean;
   workflowInputNames: string[];
   runInputValues: Record<string, string>;
   missingRunInputNames: string[];
+  missingCwd: boolean;
   isRunning: boolean;
   onOpenChange: (open: boolean) => void;
   onProviderChange: (value: string) => void;
@@ -46,6 +48,7 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
     props.runInputValues[name]?.trim(),
   ).length;
   const hasMissingInputs = props.missingRunInputNames.length > 0;
+  const isBlocked = hasMissingInputs || props.missingCwd;
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -87,12 +90,24 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
               )}
             </label>
             <label className="run-dialog-control-field run-dialog-control-field-wide">
-              <span>Project</span>
+              <span>
+                Project
+                {props.requiresCwd ? (
+                  <Badge variant={props.missingCwd ? "warning" : "success"}>
+                    required
+                  </Badge>
+                ) : null}
+              </span>
               <WorkflowProjectSelect
                 value={props.cwd}
                 onChange={props.onCwdChange}
               />
             </label>
+            {props.missingCwd ? (
+              <span className="run-dialog-setting-hint">
+                Select a project before running this workflow.
+              </span>
+            ) : null}
           </section>
 
           {props.workflowInputNames.length > 0 ? (
@@ -141,7 +156,7 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
             type="button"
             size="dialog"
             onClick={props.onRun}
-            disabled={hasMissingInputs || props.isRunning}
+            disabled={isBlocked || props.isRunning}
           >
             {props.isRunning ? (
               <Spinner size={14} />

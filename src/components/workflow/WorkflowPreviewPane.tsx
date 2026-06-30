@@ -11,6 +11,7 @@ import {
 } from "@xyflow/react";
 import clsx from "clsx";
 import {
+  Badge,
   StatusDot,
   UnderlineTabs,
 } from "@tutti-os/ui-system";
@@ -45,6 +46,7 @@ type WorkflowPreviewPaneProps = {
   hasParseErrors: boolean;
   diagnosticErrorCount: number;
   diagnosticWarningCount: number;
+  requiresCwd: boolean;
   onMainViewChange: (view: MainView) => void;
   onScriptChange: (script: string) => void;
   onFlowInit: (instance: ReactFlowInstance<Node<FlowNodeData>, Edge>) => void;
@@ -72,6 +74,9 @@ export function WorkflowPreviewPane(props: WorkflowPreviewPaneProps) {
           </p>
         </div>
         <div className="main-preview-actions">
+          {props.requiresCwd ? (
+            <Badge variant="default">requires cwd</Badge>
+          ) : null}
           <UnderlineTabs
             ariaLabel="Workflow preview view"
             value={props.mainView}

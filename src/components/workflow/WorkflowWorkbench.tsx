@@ -153,6 +153,8 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     workflowInputPayload,
     setRunInputValue,
   } = useWorkflowRunInputs(workflowInputNames);
+  const requiresCwd = Boolean(parsed.meta.requiresCwd);
+  const missingCwd = requiresCwd && !cwd.trim();
 
   const {
     selectedRun,
@@ -183,8 +185,10 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     effectiveProvider,
     model,
     cwd,
+    requiresCwd,
     workflowInputPayload,
     missingRunInputNames,
+    missingCwd,
     loadWorkflow,
     applyVersion,
     replaceParsed,
@@ -291,6 +295,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         deleting={isDeletingWorkflow}
         running={isRunning}
         cancellingRun={isCancellingRun}
+        requiresCwd={requiresCwd}
         onSelectVersion={selectVersion}
         onOpenDetails={openDetailsDialog}
         onSave={() => void saveCurrentVersion()}
@@ -310,9 +315,11 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         model={model}
         modelOptions={modelOptions}
         cwd={cwd}
+        requiresCwd={requiresCwd}
         workflowInputNames={workflowInputNames}
         runInputValues={runInputValues}
         missingRunInputNames={missingRunInputNames}
+        missingCwd={missingCwd}
         isRunning={isRunning}
         onOpenChange={setIsRunInputDialogOpen}
         onProviderChange={setProvider}
@@ -346,6 +353,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           hasParseErrors={hasParseErrors}
           diagnosticErrorCount={diagnosticErrorCount}
           diagnosticWarningCount={diagnosticWarningCount}
+          requiresCwd={Boolean(graphParsed.meta.requiresCwd)}
           onMainViewChange={setMainView}
           onScriptChange={setScriptFromEditor}
           onFlowInit={(instance) => {

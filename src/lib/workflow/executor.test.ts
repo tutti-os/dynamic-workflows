@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunInput, AgentRuntimeEvent } from "@/lib/agents/types";
 
@@ -80,6 +81,186 @@ const second = await agent({ id: "second", session: { mode: "inherit", key: "wri
         },
       }),
     );
+  });
+
+  it("runs agent nodes from their configured cwd", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: "done",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+const first = await agent({ id: "first", cwd: "lib", prompt: "one" })
+const second = await agent({ id: "second", inputs: { first }, prompt: "two {{first}}" })
+`,
+      provider: "codex",
+      cwd: "src",
+    })) {
+      // drain
+    }
+
+    expect(calls.map((call) => call.cwd)).toEqual([
+      path.join(process.cwd(), "src", "lib"),
+      path.join(process.cwd(), "src"),
+    ]);
+  });
+
+  it("renders the effective agent cwd into workflow cwd template refs", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: "done",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+export const meta = { name: "cwd", description: "cwd", requiresCwd: true }
+const first = await agent({ id: "first", cwd: "lib", prompt: "cwd {{workflow.cwd}}" })
+`,
+      provider: "codex",
+      cwd: "src",
+    })) {
+      // drain
+    }
+
+    expect(calls[0]?.prompt).toBe(
+      `cwd ${path.join(process.cwd(), "src", "lib")}`,
+    );
+  });
+
+  it("fails required cwd workflows before running agents", async () => {
+    await expect(async () => {
+      for await (const _event of runWorkflow({
+        script: `
+export const meta = { name: "cwd", description: "cwd", requiresCwd: true }
+const first = await agent({ id: "first", prompt: "one" })
+`,
+        provider: "codex",
+      })) {
+        // drain
+      }
+    }).rejects.toThrow("Workflow cwd is required.");
+
+    expect(runAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("lets loop step cwd override loop and run cwd", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: input.prompt.startsWith("review") ? "PASS: ok" : "work",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  cwd: "src",
+  maxIterations: 1,
+  steps: [
+    agent({ id: "rd", cwd: "lib", prompt: "work" }),
+    agent({ id: "review", prompt: "review {{rd}}" }),
+  ],
+  until: { source: "review", includes: "PASS:" },
+})
+`,
+      provider: "codex",
+      cwd: process.cwd(),
+    })) {
+      // drain
+    }
+
+    expect(calls.map((call) => call.cwd)).toEqual([
+      path.join(process.cwd(), "src", "lib"),
+      path.join(process.cwd(), "src"),
+    ]);
+  });
+
+  it("fails when one inherited session key crosses cwd boundaries", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: input.resumeSessionId ?? "session-1",
+          provider: input.provider,
+          status: "running",
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: "done",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const first = await agent({ id: "first", cwd: "src", session: { mode: "inherit", key: "writer" }, prompt: "one" })
+const second = await agent({ id: "second", cwd: "tools", session: { mode: "inherit", key: "writer" }, prompt: "two" })
+`,
+      provider: "codex",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "failed",
+      }),
+    );
+    expect(readNodeFailures(events)).toEqual([
+      expect.stringContaining(
+        'Workflow session "writer" already started in',
+      ),
+    ]);
   });
 
   it("runs a bounded loop until the acceptance step passes", async () => {
@@ -386,6 +567,21 @@ function readStatusMessages(events: unknown[]): string[] {
       return [];
     }
     return typeof raw.event.message === "string" ? [raw.event.message] : [];
+  });
+}
+
+function readNodeFailures(events: unknown[]): string[] {
+  return events.flatMap((event) => {
+    if (!event || typeof event !== "object") {
+      return [];
+    }
+    const raw = event as {
+      type?: unknown;
+      error?: unknown;
+    };
+    return raw.type === "node_failed" && typeof raw.error === "string"
+      ? [raw.error]
+      : [];
   });
 }
 

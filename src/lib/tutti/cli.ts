@@ -66,9 +66,6 @@ type CliContext = {
 
 type CliInput = Record<string, unknown>;
 
-const DEFAULT_RUN_TIMEOUT_MS = 600_000;
-const MAX_RUN_TIMEOUT_MS = 3_600_000;
-
 export async function handleDynamicWorkflowsCliRequest(
   path: string[],
   body: unknown,
@@ -262,12 +259,6 @@ async function runCommand(input: CliInput) {
   const provider = readOptionalString(input, ["provider"]) ?? "mock";
   const model = readOptionalString(input, ["model"]);
   const cwd = readOptionalString(input, ["cwd"]);
-  const timeoutMs = clampInteger(
-    readOptionalInteger(input, ["timeout-ms", "timeoutMs"]) ??
-      DEFAULT_RUN_TIMEOUT_MS,
-    1,
-    MAX_RUN_TIMEOUT_MS,
-  );
   const inputs = readWorkflowInputs(input);
   const result = await runWorkflowForCli({
     workflowId,
@@ -275,13 +266,11 @@ async function runCommand(input: CliInput) {
     model,
     cwd,
     inputs,
-    timeoutMs,
   });
 
   return {
     run: result.run,
     result: readRunResult(result.run.result),
-    timedOut: result.timedOut,
   };
 }
 
@@ -291,10 +280,8 @@ async function runWorkflowForCli(input: {
   model?: string;
   cwd?: string;
   inputs: Record<string, string>;
-  timeoutMs: number;
 }): Promise<{
   run: WorkflowRunRecord;
-  timedOut: boolean;
 }> {
   const detail = getWorkflowDetail(input.workflowId);
   if (!detail) {
@@ -310,6 +297,7 @@ async function runWorkflowForCli(input: {
 
   const parsed = assertWorkflowScriptValid(detail.currentVersion.script);
   assertRequiredWorkflowInputs(parsed.externalInputs, input.inputs);
+  assertRequiredWorkflowCwd(parsed, input.cwd);
   const cwd = resolveWorkflowCwd(input.cwd);
   const run = createWorkflowRun({
     workflowId: input.workflowId,
@@ -327,12 +315,6 @@ async function runWorkflowForCli(input: {
   });
   ensureRunLogDirectory(run.logPath);
 
-  const abortController = new AbortController();
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    abortController.abort();
-  }, input.timeoutMs);
   let summary = createInitialRunSummary(undefined, {
     status: "running",
     queueExecutableNodes: false,
@@ -346,39 +328,27 @@ async function runWorkflowForCli(input: {
       model: input.model,
       cwd,
       inputs: input.inputs,
-      signal: abortController.signal,
     })) {
       appendRunLogEvent(run.logPath, event);
       summary = applyWorkflowRunEvent(summary, event);
-    }
-    if (timedOut && summary.status === "canceled") {
-      summary = {
-        ...summary,
-        error: `Run timed out after ${input.timeoutMs}ms.`,
-        errorCode: "WORKFLOW_RUN_FAILED",
-      };
     }
   } catch (error) {
     const finalEvent: WorkflowRunEvent = {
       type: "run_completed",
       runId: run.id,
-      status: abortController.signal.aborted ? "canceled" : "failed",
+      status: "failed",
       outputs: summary.outputs,
-      error: timedOut
-        ? `Run timed out after ${input.timeoutMs}ms.`
-        : formatRunError(error),
+      error: formatRunError(error),
       errorCode: getRunErrorCode(error),
     };
     appendRunLogEvent(run.logPath, finalEvent);
     summary = applyWorkflowRunEvent(summary, finalEvent);
   } finally {
-    clearTimeout(timeout);
     updateStoredRun(run.id, summary);
   }
 
   return {
     run: getWorkflowRun(run.id) ?? run,
-    timedOut,
   };
 }
 
@@ -403,11 +373,13 @@ function parsedSummary(parsed: ParsedWorkflow) {
       phase: node.phase,
       provider: node.provider,
       model: node.model,
+      cwd: node.cwd,
       session: node.session,
       inputs: node.inputs,
       loop: node.loop
         ? {
             maxIterations: node.loop.maxIterations,
+            cwd: node.cwd,
             session: node.loop.session,
             until: node.loop.until,
             steps: node.loop.steps.map((step) => ({
@@ -416,6 +388,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
               label: step.label,
               provider: step.provider,
               model: step.model,
+              cwd: step.cwd,
               session: step.session,
               hasAppendPrompt: Boolean(step.appendPrompt),
             })),
@@ -472,6 +445,19 @@ function assertRequiredWorkflowInputs(
     throw new CliHttpError(
       "missing_workflow_inputs",
       `Missing workflow input(s): ${missingInputs.join(", ")}`,
+      400,
+    );
+  }
+}
+
+function assertRequiredWorkflowCwd(
+  parsed: ParsedWorkflow,
+  cwd: string | undefined,
+) {
+  if (parsed.meta.requiresCwd && !cwd?.trim()) {
+    throw new CliHttpError(
+      "missing_workflow_inputs",
+      "Workflow cwd is required.",
       400,
     );
   }

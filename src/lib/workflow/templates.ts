@@ -1,6 +1,7 @@
 import type { WorkflowNode } from "./types";
 
-const TEMPLATE_REF_PATTERN = /\{\{\s*([A-Za-z_$][\w$]*)\s*\}\}/g;
+const TEMPLATE_REF_PATTERN =
+  /\{\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\}\}/g;
 
 export function extractTemplateRefs(prompt: string | undefined): string[] {
   if (!prompt) {
@@ -18,12 +19,16 @@ export function renderPrompt(
   node: WorkflowNode,
   outputs: Record<string, string>,
   workflowInputs: Record<string, string> = {},
+  context: { cwd?: string } = {},
 ): string {
   const bindings = new Map(
     node.inputs.map((input) => [input.name, input.sourceNodeId]),
   );
 
   return renderTemplate(node.prompt ?? "", (name) => {
+    if (name === "workflow.cwd") {
+      return context.cwd ?? "";
+    }
     const sourceNodeId = bindings.get(name);
     if (!sourceNodeId) {
       return workflowInputs[name] ?? "";

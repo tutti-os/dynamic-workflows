@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
-import { resolveWorkflowCwd } from "./cwd";
+import { resolveWorkflowCwd, resolveWorkflowCwdFrom } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
 import { resolveLoopStepRunContext } from "./loop-runtime";
 import { assertWorkflowScriptValid } from "./parser";
@@ -23,6 +23,7 @@ export async function* runWorkflow(
 ): AsyncGenerator<WorkflowRunEvent> {
   const runId = request.runId ?? randomUUID();
   const parsed = assertWorkflowScriptValid(request.script);
+  assertRequiredWorkflowCwd(parsed, request.cwd);
   const normalizedRequest = {
     ...request,
     cwd: resolveWorkflowCwd(request.cwd),
@@ -38,6 +39,7 @@ export async function* runWorkflow(
   );
   const outputs: Record<string, string> = {};
   const sessionIdsByKey: Record<string, string> = {};
+  const sessionCwdsByKey: Record<string, string> = {};
   const failed = new Set<string>();
   const completed = new Set<string>();
   const running = new Set<string>();
@@ -86,6 +88,7 @@ export async function* runWorkflow(
       request: normalizedRequest,
       outputs,
       sessionIdsByKey,
+      sessionCwdsByKey,
     })) {
       yield event;
 
@@ -143,6 +146,7 @@ async function* streamNodeBatch(input: {
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
+  sessionCwdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
   type QueueItem =
     | {
@@ -178,6 +182,7 @@ async function* streamNodeBatch(input: {
           request: input.request,
           outputs: input.outputs,
           sessionIdsByKey: input.sessionIdsByKey,
+          sessionCwdsByKey: input.sessionCwdsByKey,
         })) {
           push({ event });
         }
@@ -213,6 +218,7 @@ async function* runNode(input: {
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
+  sessionCwdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
   if (input.node.kind === "loop") {
     yield* runLoopNode(input);
@@ -227,12 +233,15 @@ async function* runAgentNode(input: {
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
+  sessionCwdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
-  const prompt = renderPrompt(input.node, input.outputs, input.request.inputs);
   const nodeRunId = `${input.runId}:${input.node.id}`;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
   const model = input.node.model ?? input.request.model;
-  const cwd = input.request.cwd ?? process.cwd();
+  const cwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
+  const prompt = renderPrompt(input.node, input.outputs, input.request.inputs, {
+    cwd,
+  });
   const sessionKey = resolveSessionKey(input.node.session);
   const resumeSessionId = sessionKey
     ? input.sessionIdsByKey[sessionKey]
@@ -252,6 +261,11 @@ async function* runAgentNode(input: {
     throwIfAborted(input.request.signal);
 
     if (sessionKey) {
+      assertSessionCwd({
+        sessionKey,
+        cwd,
+        sessionCwdsByKey: input.sessionCwdsByKey,
+      });
       yield {
         type: "node_event",
         runId: input.runId,
@@ -322,11 +336,12 @@ async function* runLoopNode(input: {
   request: WorkflowRunRequest;
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
+  sessionCwdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const loop = input.node.loop;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
   const model = input.node.model ?? input.request.model;
-  const cwd = input.request.cwd ?? process.cwd();
+  const loopCwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
 
   yield {
     type: "node_started",
@@ -380,6 +395,7 @@ async function* runLoopNode(input: {
         throwIfAborted(input.request.signal);
 
         const syntheticId = createLoopStepId(input.node.id, iteration, step.id);
+        const stepCwd = resolveEffectiveNodeCwd(loopCwd, step.cwd);
         const prompt = renderLoopStepPrompt({
           template: step.prompt,
           step,
@@ -387,6 +403,7 @@ async function* runLoopNode(input: {
           loopNode: input.node,
           workflowOutputs: input.outputs,
           workflowInputs: input.request.inputs,
+          workflowCwd: stepCwd,
           previousStepOutputs,
           currentStepOutputs,
         });
@@ -398,6 +415,7 @@ async function* runLoopNode(input: {
               loopNode: input.node,
               workflowOutputs: input.outputs,
               workflowInputs: input.request.inputs,
+              workflowCwd: stepCwd,
               previousStepOutputs,
               currentStepOutputs,
             })
@@ -412,9 +430,10 @@ async function* runLoopNode(input: {
           defaultProvider: provider,
           defaultModel: model,
           defaultSession: loop.session,
-          cwd,
+          cwd: stepCwd,
           signal: input.request.signal,
           sessionIdsByKey: input.sessionIdsByKey,
+          sessionCwdsByKey: input.sessionCwdsByKey,
         });
         currentStepOutputs[step.id] = stepOutput;
         previousStepOutputs[step.id] = stepOutput;
@@ -480,6 +499,7 @@ async function* runLoopAgentStep(input: {
   cwd: string;
   signal?: AbortSignal;
   sessionIdsByKey: Record<string, string>;
+  sessionCwdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent, string> {
   const provider = input.step.provider ?? input.defaultProvider;
   const model = input.step.model ?? input.defaultModel;
@@ -501,6 +521,11 @@ async function* runLoopAgentStep(input: {
   });
 
   if (runContext.sessionKey) {
+    assertSessionCwd({
+      sessionKey: runContext.sessionKey,
+      cwd: input.cwd,
+      sessionCwdsByKey: input.sessionCwdsByKey,
+    });
     yield loopStatusEvent({
       runId: input.runId,
       nodeId: input.nodeId,
@@ -581,6 +606,42 @@ function isSignalAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
+function resolveEffectiveNodeCwd(
+  defaultCwd: string | undefined,
+  overrideCwd: string | undefined,
+): string {
+  if (overrideCwd?.trim()) {
+    return resolveWorkflowCwdFrom(defaultCwd, overrideCwd);
+  }
+  return defaultCwd ?? process.cwd();
+}
+
+function assertRequiredWorkflowCwd(
+  parsed: ParsedWorkflow,
+  cwd: string | undefined,
+): void {
+  if (parsed.meta.requiresCwd && !cwd?.trim()) {
+    throw new Error("Workflow cwd is required.");
+  }
+}
+
+function assertSessionCwd(input: {
+  sessionKey: string;
+  cwd: string;
+  sessionCwdsByKey: Record<string, string>;
+}): void {
+  const previousCwd = input.sessionCwdsByKey[input.sessionKey];
+  if (!previousCwd) {
+    input.sessionCwdsByKey[input.sessionKey] = input.cwd;
+    return;
+  }
+  if (previousCwd !== input.cwd) {
+    throw new Error(
+      `Workflow session "${input.sessionKey}" already started in ${previousCwd}, cannot resume from ${input.cwd}.`,
+    );
+  }
+}
+
 function createPreviousSessionNodeIds(
   nodes: WorkflowNode[],
 ): Record<string, string> {
@@ -659,6 +720,7 @@ function renderLoopStepPrompt(input: {
   loopNode: WorkflowNode;
   workflowOutputs: Record<string, string>;
   workflowInputs: Record<string, string> | undefined;
+  workflowCwd: string;
   previousStepOutputs: Record<string, string>;
   currentStepOutputs: Record<string, string>;
 }): string {
@@ -669,6 +731,9 @@ function renderLoopStepPrompt(input: {
   return renderTemplate(input.template, (name) => {
     if (name === "iteration") {
       return String(input.iteration);
+    }
+    if (name === "workflow.cwd") {
+      return input.workflowCwd;
     }
     if (input.currentStepOutputs[name] !== undefined) {
       return input.currentStepOutputs[name];

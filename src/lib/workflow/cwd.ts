@@ -42,6 +42,22 @@ export function resolveWorkflowCwd(input?: string): string {
   return realRequested;
 }
 
+export function resolveWorkflowCwdFrom(
+  baseCwd: string | undefined,
+  input?: string,
+): string {
+  if (!input?.trim()) {
+    return resolveWorkflowCwd(baseCwd);
+  }
+  const requested = path.isAbsolute(input.trim())
+    ? input.trim()
+    : path.resolve(
+        /* turbopackIgnore: true */ baseCwd ?? getWorkflowCwdRoot(),
+        input.trim(),
+      );
+  return resolveWorkflowCwd(requested);
+}
+
 export function getWorkflowCwdRoot(): string {
   const root = process.env.DYNAMIC_WORKFLOWS_CWD_ROOT;
   if (root?.trim()) {

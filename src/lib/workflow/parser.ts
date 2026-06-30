@@ -46,7 +46,7 @@ const DEFAULT_META: WorkflowMeta = {
   description: "Dynamic workflow",
 };
 
-const RESERVED_TEMPLATE_REFS = new Set(["iteration"]);
+const RESERVED_TEMPLATE_REFS = new Set(["iteration", "workflow.cwd"]);
 
 export class WorkflowScriptSyntaxError extends Error {
   readonly diagnostics: WorkflowDiagnostic[];
@@ -250,6 +250,7 @@ function addAgentNode(
     prompt,
     provider: readObjectString(options, "provider"),
     model: readObjectString(options, "model"),
+    cwd: readObjectString(options, "cwd"),
     ...(session ? { session } : {}),
     inputs,
     templateRefs,
@@ -324,6 +325,7 @@ function addLoopNode(
     label,
     phase: state.currentPhase,
     variableName,
+    cwd: readObjectString(options, "cwd"),
     ...(session ? { session } : {}),
     loop,
     inputs,
@@ -456,6 +458,7 @@ function readLoopAgentStep(
     ...(appendPrompt !== undefined ? { appendPrompt } : {}),
     provider: readObjectString(options, "provider"),
     model: readObjectString(options, "model"),
+    cwd: readObjectString(options, "cwd"),
     ...(session ? { session } : {}),
     templateRefs: [
       ...new Set([
@@ -538,6 +541,9 @@ function addDynamicNode(
 function connectTemplateRefs(state: ParserState): void {
   for (const node of state.nodes) {
     for (const ref of node.templateRefs) {
+      if (isReservedTemplateRef(ref)) {
+        continue;
+      }
       if (node.inputs.some((input) => input.name === ref)) {
         continue;
       }
@@ -577,7 +583,7 @@ function collectExternalInputs(state: ParserState): string[] {
 
   for (const node of state.nodes) {
     for (const ref of node.templateRefs) {
-      if (RESERVED_TEMPLATE_REFS.has(ref)) {
+      if (isReservedTemplateRef(ref)) {
         continue;
       }
       const boundInput = node.inputs.find((input) => input.name === ref);
@@ -589,6 +595,10 @@ function collectExternalInputs(state: ParserState): string[] {
   }
 
   return [...refs];
+}
+
+function isReservedTemplateRef(ref: string): boolean {
+  return RESERVED_TEMPLATE_REFS.has(ref) || ref.startsWith("workflow.");
 }
 
 function addInputEdges(node: WorkflowNode, state: ParserState): void {
@@ -653,6 +663,9 @@ function readMeta(ast: AnyNode): WorkflowMeta | undefined {
       name: readObjectString(value, "name") ?? DEFAULT_META.name,
       description:
         readObjectString(value, "description") ?? DEFAULT_META.description,
+      ...(readObjectBoolean(value, "requiresCwd")
+        ? { requiresCwd: true }
+        : {}),
     };
   }
   return undefined;
@@ -865,6 +878,14 @@ function readObjectNumber(
   return value?.type === "NumericLiteral" && typeof value.value === "number"
     ? value.value
     : Number.NaN;
+}
+
+function readObjectBoolean(
+  objectExpression: AnyNode | undefined,
+  key: string,
+): boolean {
+  const value = readObjectPropertyValue(objectExpression, key);
+  return value?.type === "BooleanLiteral" && value.value === true;
 }
 
 function readObjectPropertyValue(

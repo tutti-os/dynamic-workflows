@@ -35,6 +35,7 @@ export async function prepareCurrentWorkflowRun(input: {
   const parsed = assertWorkflowScriptValid(script);
   const inputs = normalizeWorkflowInputs(body.inputs);
   assertRequiredWorkflowInputs(parsed.externalInputs, inputs);
+  assertRequiredWorkflowCwd(parsed, body.cwd);
   const cwd = resolveWorkflowCwd(body.cwd);
   const version =
     script === detail.currentVersion.script
@@ -82,6 +83,7 @@ export function prepareRetryWorkflowRun(input: {
   const inputs = readRunInputs(sourceRun.input);
   const parsed = assertWorkflowScriptValid(version.script);
   assertRequiredWorkflowInputs(parsed.externalInputs, inputs);
+  assertRequiredWorkflowCwd(parsed, sourceRun.cwd ?? undefined);
 
   return {
     workflowId: input.workflowId,
@@ -143,5 +145,14 @@ function assertRequiredWorkflowInputs(
   const missingInputs = requiredInputs.filter((name) => !inputs[name]?.trim());
   if (missingInputs.length > 0) {
     throw new Error(`Missing workflow input(s): ${missingInputs.join(", ")}`);
+  }
+}
+
+function assertRequiredWorkflowCwd(
+  parsed: { meta: { requiresCwd?: boolean } },
+  cwd: string | undefined,
+) {
+  if (parsed.meta.requiresCwd && !cwd?.trim()) {
+    throw new Error("Workflow cwd is required.");
   }
 }

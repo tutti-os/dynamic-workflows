@@ -187,7 +187,7 @@ function cliManifest() {
           "Report app health, workflow counts, cwd root, and agent provider detection status.",
         inputSchema: objectSchema({}),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/status", 15000),
+        handler: httpHandler("/tutti/cli/status"),
       },
       {
         path: ["providers"],
@@ -196,7 +196,7 @@ function cliManifest() {
           "List providers and model options detected through the local Tutti CLI.",
         inputSchema: objectSchema({}),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/providers", 30000),
+        handler: httpHandler("/tutti/cli/providers"),
       },
       {
         path: ["list"],
@@ -210,7 +210,7 @@ function cliManifest() {
           },
         }),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/list", 15000),
+        handler: httpHandler("/tutti/cli/list"),
       },
       {
         path: ["show"],
@@ -231,7 +231,7 @@ function cliManifest() {
           ["workflow-id"],
         ),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/show", 15000),
+        handler: httpHandler("/tutti/cli/show"),
       },
       {
         path: ["validate"],
@@ -248,7 +248,7 @@ function cliManifest() {
           ["script"],
         ),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/validate", 15000),
+        handler: httpHandler("/tutti/cli/validate"),
       },
       {
         path: ["create"],
@@ -279,7 +279,7 @@ function cliManifest() {
           ["prompt"],
         ),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/create", 360000),
+        handler: httpHandler("/tutti/cli/create"),
       },
       {
         path: ["run"],
@@ -311,16 +311,11 @@ function cliManifest() {
               description:
                 "Optional working directory, resolved inside the configured workflow cwd root.",
             },
-            "timeout-ms": {
-              type: "integer",
-              description:
-                "Maximum run duration in milliseconds. Defaults to 600000 and caps at 3600000.",
-            },
           },
           ["workflow-id"],
         ),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/run", 3600000),
+        handler: httpHandler("/tutti/cli/run"),
       },
     ],
   };
@@ -341,12 +336,11 @@ function jsonOutput() {
   };
 }
 
-function httpHandler(pathname, timeoutMs) {
+function httpHandler(pathname) {
   return {
     kind: "http",
     method: "POST",
     path: pathname,
-    timeoutMs,
   };
 }
 

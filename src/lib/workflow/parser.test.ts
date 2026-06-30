@@ -4,10 +4,12 @@ import {
   parseWorkflowScript,
   WorkflowScriptSyntaxError,
 } from "./parser";
+import { LOOP_RD_ACCEPTANCE_TEST_WORKFLOW } from "./sample";
 
 const VALID_SCRIPT = `export const meta = {
   name: "repo_review",
   description: "Review a repo",
+  requiresCwd: true,
 }
 
 phase("Scan")
@@ -15,7 +17,7 @@ phase("Scan")
 const inventory = await agent({
   id: "inventory",
   label: "Inventory",
-  prompt: \`Inspect {{repo}}\`,
+  prompt: \`Inspect {{repo}} in {{workflow.cwd}}\`,
 })
 
 phase("Synthesize")
@@ -38,6 +40,7 @@ describe("parseWorkflowScript", () => {
     expect(parsed.meta).toEqual({
       name: "repo_review",
       description: "Review a repo",
+      requiresCwd: true,
     });
     expect(parsed.nodes.map((node) => node.id)).toEqual([
       "inventory",
@@ -78,12 +81,12 @@ const second = await agent({ id: "same", prompt: "two" })
   it("parses agent session keys", () => {
     const parsed = parseWorkflowScript(`
 const first = await agent({ id: "first", session: { mode: "inherit", key: "writer" }, prompt: "one" })
-const second = await agent({ id: "second", session: { mode: "inherit", key: "writer" }, prompt: "two" })
+const second = await agent({ id: "second", session: { mode: "inherit", key: "writer" }, cwd: "src", prompt: "two" })
 `);
 
-    expect(parsed.nodes.map((node) => [node.id, node.session])).toEqual([
-      ["first", { mode: "inherit", key: "writer" }],
-      ["second", { mode: "inherit", key: "writer" }],
+    expect(parsed.nodes.map((node) => [node.id, node.session, node.cwd])).toEqual([
+      ["first", { mode: "inherit", key: "writer" }, undefined],
+      ["second", { mode: "inherit", key: "writer" }, "src"],
     ]);
   });
 
@@ -107,11 +110,13 @@ const delivery = await loop({
   id: "delivery_loop",
   label: "Delivery Loop",
   maxIterations: 3,
+  cwd: "src",
   session: { mode: "inherit", key: "delivery", scope: "step" },
   steps: [
     agent({
       id: "rd",
       label: "RD",
+      cwd: "src/lib",
       session: { mode: "inherit", key: "rd_room" },
       prompt: \`Task: {{task}}
 Previous acceptance: {{acceptance}}\`,
@@ -133,6 +138,7 @@ Previous acceptance: {{acceptance}}\`,
       id: "delivery_loop",
       kind: "loop",
       label: "Delivery Loop",
+      cwd: "src",
       variableName: "delivery",
       templateRefs: ["task"],
       loop: {
@@ -141,9 +147,15 @@ Previous acceptance: {{acceptance}}\`,
         until: { source: "acceptance", includes: "PASS:" },
       },
     });
-    expect(parsed.nodes[0].loop?.steps.map((step) => [step.id, step.session])).toEqual([
-      ["rd", { mode: "inherit", key: "rd_room" }],
-      ["acceptance", undefined],
+    expect(
+      parsed.nodes[0].loop?.steps.map((step) => [
+        step.id,
+        step.session,
+        step.cwd,
+      ]),
+    ).toEqual([
+      ["rd", { mode: "inherit", key: "rd_room" }, "src/lib"],
+      ["acceptance", undefined, undefined],
     ]);
     expect(parsed.nodes[0].loop?.steps[0].appendPrompt).toBe(
       "Iteration {{iteration}} feedback: {{acceptance}}",
@@ -199,5 +211,16 @@ const broken = await loop({
 })
 `),
     ).toThrow(WorkflowScriptSyntaxError);
+  });
+
+  it("keeps the loop RD acceptance sample aligned with cwd protocol", () => {
+    const parsed = assertWorkflowScriptValid(LOOP_RD_ACCEPTANCE_TEST_WORKFLOW);
+
+    expect(parsed.meta.requiresCwd).toBe(true);
+    expect(parsed.externalInputs).toEqual(["requirement"]);
+    expect(parsed.nodes.map((node) => [node.id, node.cwd])).toEqual([
+      ["delivery_loop", "."],
+      ["final_summary", "."],
+    ]);
   });
 });

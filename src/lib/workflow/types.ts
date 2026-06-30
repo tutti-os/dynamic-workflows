@@ -39,6 +39,7 @@ export type WorkflowLoopStep = {
   appendPrompt?: string;
   provider?: string;
   model?: string;
+  cwd?: string;
   session?: WorkflowSessionSpec;
   templateRefs: string[];
   sourceRange?: EditableRange;
@@ -69,6 +70,7 @@ export type WorkflowNode = {
   message?: string;
   provider?: string;
   model?: string;
+  cwd?: string;
   session?: WorkflowSessionSpec;
   loop?: WorkflowLoopSpec;
   inputs: WorkflowInputBinding[];
@@ -95,6 +97,7 @@ export type WorkflowPhase = {
 export type WorkflowMeta = {
   name: string;
   description: string;
+  requiresCwd?: boolean;
 };
 
 export type WorkflowDiagnostic = {

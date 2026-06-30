@@ -1165,11 +1165,23 @@ a {
 }
 
 .run-dialog-control-field > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
   text-transform: uppercase;
+}
+
+.run-dialog-setting-hint {
+  grid-column: 1 / -1;
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .workflow-run-inputs {
