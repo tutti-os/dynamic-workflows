@@ -24,9 +24,11 @@ const FLOW_ORIGIN_Y = 56;
 const FLOW_PHASE_GAP = 112;
 
 export function useWorkflowFlowLayout(input: {
+  onLoopStepSelect?: (loopNodeId: string, stepId: string) => void;
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   selectedNodeId?: string;
+  selectedLoopStepId?: string;
 }): {
   flowNodes: Node<FlowNodeData>[];
   flowEdges: Edge[];
@@ -37,9 +39,18 @@ export function useWorkflowFlowLayout(input: {
       buildFlowNodes({
         parsed: input.parsed,
         nodeStatuses: input.nodeStatuses,
+        onLoopStepSelect: input.onLoopStepSelect,
         selectedNodeId: input.selectedNodeId,
+        selectedLoopStepId: input.selectedLoopStepId,
       }),
-    [input.nodeStatuses, input.parsed.nodes, input.parsed.phases, input.selectedNodeId],
+    [
+      input.nodeStatuses,
+      input.onLoopStepSelect,
+      input.parsed.nodes,
+      input.parsed.phases,
+      input.selectedLoopStepId,
+      input.selectedNodeId,
+    ],
   );
 
   const flowEdges = useMemo(
@@ -60,9 +71,11 @@ export function useWorkflowFlowLayout(input: {
 }
 
 function buildFlowNodes(input: {
+  onLoopStepSelect?: (loopNodeId: string, stepId: string) => void;
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   selectedNodeId?: string;
+  selectedLoopStepId?: string;
 }): Node<FlowNodeData>[] {
   const phaseIndex = new Map(
     input.parsed.phases.map((phase, index) => [phase.title, index]),
@@ -101,6 +114,11 @@ function buildFlowNodes(input: {
           phasePosition * FLOW_LAYER_HEIGHT + FLOW_ORIGIN_Y,
       },
       data: {
+        onLoopStepSelect: input.onLoopStepSelect,
+        selectedLoopStepId:
+          workflowNode.id === input.selectedNodeId
+            ? input.selectedLoopStepId
+            : undefined,
         workflowNode,
         status: input.nodeStatuses[workflowNode.id] ?? "idle",
       },

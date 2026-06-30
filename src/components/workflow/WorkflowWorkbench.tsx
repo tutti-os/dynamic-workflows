@@ -48,6 +48,9 @@ type WorkflowWorkbenchProps = {
 
 export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
+  const [selectedLoopStepId, setSelectedLoopStepId] = useState<
+    string | undefined
+  >();
   const [activeTab, setActiveTab] = useState<InspectorTab>("edit");
   const [mainView, setMainView] = useState<MainView>("graph");
   const [isRunInputDialogOpen, setIsRunInputDialogOpen] = useState(false);
@@ -58,6 +61,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
   }, []);
   const resetVersionViewState = useCallback(() => {
     setSelectedNodeId(undefined);
+    setSelectedLoopStepId(undefined);
     resetRunStateForVersionRef.current();
   }, []);
   const {
@@ -79,6 +83,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     selectedNode,
     labelDraft,
     promptDraft,
+    appendPromptDraft,
     parseError,
     scriptSaveError,
     scriptSaveDiagnostics,
@@ -96,7 +101,8 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     setScriptSaveFailure,
     updateLabelDraft,
     updatePromptDraft,
-  } = useWorkflowScriptEditing({ selectedNodeId });
+    updateAppendPromptDraft,
+  } = useWorkflowScriptEditing({ selectedLoopStepId, selectedNodeId });
 
   const {
     detail,
@@ -206,8 +212,16 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
   });
 
   const { flowNodes, flowEdges, flowLayoutKey } = useWorkflowFlowLayout({
+    onLoopStepSelect: (loopNodeId, stepId) => {
+      setSelectedNodeId(loopNodeId);
+      setSelectedLoopStepId(stepId);
+      if (!isRunPreview) {
+        setActiveTab("edit");
+      }
+    },
     parsed: graphParsed,
     nodeStatuses: displayNodeStatuses,
+    selectedLoopStepId,
     selectedNodeId,
   });
 
@@ -339,6 +353,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           }}
           onNodeSelect={(nodeId) => {
             setSelectedNodeId(nodeId);
+            setSelectedLoopStepId(undefined);
             if (!isRunPreview) {
               setActiveTab("edit");
             }
@@ -351,6 +366,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           selectedRun={selectedRun}
           selectedNodeRun={selectedRunNodeDetail}
           selectedNode={selectedNode}
+          selectedLoopStepId={selectedLoopStepId}
           graphParsed={graphParsed}
           parsedDiagnostics={parsed.diagnostics}
           parseError={parseError}
@@ -361,6 +377,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           failedCount={failedCount}
           labelDraft={labelDraft}
           promptDraft={promptDraft}
+          appendPromptDraft={appendPromptDraft}
           nodeOutputs={nodeOutputs}
           latestOutput={latestOutput}
           eventLog={eventLog}
@@ -376,6 +393,8 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           }}
           onLabelChange={updateLabelDraft}
           onPromptChange={updatePromptDraft}
+          onAppendPromptChange={updateAppendPromptDraft}
+          onSelectLoopStep={setSelectedLoopStepId}
           onSelectRun={selectRun}
           onRetryRun={(runId) => void retryRun(runId)}
           onCopyRunText={(key, text) => void copyRunText(key, text)}

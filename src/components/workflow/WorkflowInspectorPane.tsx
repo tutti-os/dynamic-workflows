@@ -6,6 +6,7 @@ import type { WorkflowRunRecord } from "@/lib/db/workflows";
 import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
+  WorkflowLoopStep,
   WorkflowNode,
 } from "@/lib/workflow/types";
 import type {
@@ -24,6 +25,7 @@ type WorkflowInspectorPaneProps = {
   selectedRun: RunDetail | null;
   selectedNodeRun: RunNodeDetail | null;
   selectedNode?: WorkflowNode;
+  selectedLoopStepId?: string;
   graphParsed: ParsedWorkflow;
   parsedDiagnostics: WorkflowDiagnostic[];
   parseError?: string;
@@ -34,6 +36,7 @@ type WorkflowInspectorPaneProps = {
   failedCount: number;
   labelDraft: string;
   promptDraft: string;
+  appendPromptDraft: string;
   nodeOutputs: Record<string, string>;
   latestOutput?: [string, string];
   eventLog: string[];
@@ -44,6 +47,8 @@ type WorkflowInspectorPaneProps = {
   onTabChange: (tab: InspectorTab) => void;
   onLabelChange: (value: string) => void;
   onPromptChange: (value: string) => void;
+  onAppendPromptChange: (value: string) => void;
+  onSelectLoopStep: (stepId: string | undefined) => void;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
@@ -103,13 +108,17 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
         {props.activeTab === "edit" ? (
           <EditPanel
             selectedNode={props.selectedNode}
+            selectedLoopStepId={props.selectedLoopStepId}
             labelDraft={props.labelDraft}
             promptDraft={props.promptDraft}
+            appendPromptDraft={props.appendPromptDraft}
             nodeOutputs={props.nodeOutputs}
             latestOutput={props.latestOutput}
             eventLog={props.eventLog}
             onLabelChange={props.onLabelChange}
             onPromptChange={props.onPromptChange}
+            onAppendPromptChange={props.onAppendPromptChange}
+            onSelectLoopStep={props.onSelectLoopStep}
           />
         ) : (
           <RunsPanel

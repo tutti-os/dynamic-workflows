@@ -46,15 +46,20 @@ Rules:
 - Return only JavaScript code, no markdown fences.
 - Use "export const meta = { name, description }".
 - Use phase("...") to group work.
-- Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: "name" when multiple steps should reuse the same agent conversation.
+- Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
 - loop maxIterations must be an integer from 1 to 10.
-- loop steps must be agent({ id, label, prompt }) calls; use step session values when roles should keep separate conversations.
+- loop steps must be agent({ id, label, prompt }) calls; use session: { mode: "inherit", key: "role_room" } when a role should keep its own conversation across iterations.
+- Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
+- Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
+- A loop can provide session: { mode: "inherit", key: "loop_room", scope: "step" } to derive per-step session keys, or scope: "loop" to share one loop-level session.
 - loop until must be { source: "<step id>", includes: "<literal marker>" }.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
-- Reuse the same session value only for agent calls that must share conversation context; keep independent agents sessionless.
+- Reuse the same inherited session key only for agent calls that must share conversation context; keep independent agents sessionless.
+- Never use legacy string session values.
 - Inside loop step prompts, reference other step ids with {{step_id}} to use the most recent output.
+- Inside loop step prompts, use {{iteration}} for the current 1-based iteration number.
 - Do not concatenate prompt strings with +.
 - Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
 - Keep the workflow readable and editable in a UI.`;
@@ -168,15 +173,20 @@ Rules:
 - Return only JavaScript code, no markdown fences.
 - Use "export const meta = { name, description }".
 - Use phase("...") to group work.
-- Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: "name" when multiple steps should reuse the same agent conversation.
+- Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
 - loop maxIterations must be an integer from 1 to 10.
-- loop steps must be agent({ id, label, prompt }) calls; use step session values when roles should keep separate conversations.
+- loop steps must be agent({ id, label, prompt }) calls; use session: { mode: "inherit", key: "role_room" } when a role should keep its own conversation across iterations.
+- Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
+- Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
+- A loop can provide session: { mode: "inherit", key: "loop_room", scope: "step" } to derive per-step session keys, or scope: "loop" to share one loop-level session.
 - loop until must be { source: "<step id>", includes: "<literal marker>" }.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
-- Reuse the same session value only for agent calls that must share conversation context; keep independent agents sessionless.
+- Reuse the same inherited session key only for agent calls that must share conversation context; keep independent agents sessionless.
+- Never use legacy string session values.
 - Inside loop step prompts, reference other step ids with {{step_id}} to use the most recent output.
+- Inside loop step prompts, use {{iteration}} for the current 1-based iteration number.
 - Do not concatenate prompt strings with +.
 - Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
 

@@ -7,6 +7,7 @@ import { apiJson } from "@/components/workflow/workflowApiClient";
 import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
+  WorkflowLoopStep,
 } from "@/lib/workflow/types";
 
 const EMPTY_PARSED: ParsedWorkflow = {
@@ -20,13 +21,16 @@ const EMPTY_PARSED: ParsedWorkflow = {
 };
 
 export function useWorkflowScriptEditing(input: {
+  selectedLoopStepId?: string;
   selectedNodeId?: string;
 }): {
   script: string;
   parsed: ParsedWorkflow;
   selectedNode: ParsedWorkflow["nodes"][number] | undefined;
+  selectedLoopStep: WorkflowLoopStep | undefined;
   labelDraft: string;
   promptDraft: string;
+  appendPromptDraft: string;
   parseError?: string;
   scriptSaveError?: string;
   scriptSaveDiagnostics: WorkflowDiagnostic[];
@@ -47,12 +51,14 @@ export function useWorkflowScriptEditing(input: {
   ) => void;
   updateLabelDraft: (value: string) => void;
   updatePromptDraft: (value: string) => void;
+  updateAppendPromptDraft: (value: string) => void;
 } {
   const [script, setScript] = useState("");
   const [savedScript, setSavedScript] = useState("");
   const [parsed, setParsed] = useState<ParsedWorkflow>(EMPTY_PARSED);
   const [labelDraft, setLabelDraft] = useState("");
   const [promptDraft, setPromptDraft] = useState("");
+  const [appendPromptDraft, setAppendPromptDraft] = useState("");
   const [parseError, setParseError] = useState<string | undefined>();
   const [scriptSaveError, setScriptSaveError] = useState<string | undefined>();
   const [scriptSaveDiagnostics, setScriptSaveDiagnostics] = useState<
@@ -68,6 +74,17 @@ export function useWorkflowScriptEditing(input: {
     () => parsed.nodes.find((node) => node.id === input.selectedNodeId),
     [input.selectedNodeId, parsed.nodes],
   );
+  const selectedLoopStep = useMemo(
+    () =>
+      selectedNode?.loop?.steps.find(
+        (step) => step.id === input.selectedLoopStepId,
+      ),
+    [input.selectedLoopStepId, selectedNode],
+  );
+  const selectedEditableTarget = selectedLoopStep ?? selectedNode;
+  const selectedEditableTargetId = selectedLoopStep
+    ? `${selectedNode?.id ?? "loop"}.${selectedLoopStep.id}`
+    : selectedNode?.id;
 
   const setWorkflowScript = useCallback((nextScript: string) => {
     scriptRef.current = nextScript;
@@ -159,33 +176,41 @@ export function useWorkflowScriptEditing(input: {
   }, [parseScript, script]);
 
   useEffect(() => {
-    setLabelDraft(selectedNode?.label ?? "");
-    setPromptDraft(selectedNode?.prompt ?? selectedNode?.message ?? "");
-    editableNodeRangesRef.current = selectedNode
+    setLabelDraft(selectedEditableTarget?.label ?? "");
+    setPromptDraft(
+      selectedEditableTarget?.prompt ??
+        (selectedEditableTarget && "message" in selectedEditableTarget
+          ? selectedEditableTarget.message
+          : "") ??
+        "",
+    );
+    setAppendPromptDraft(selectedLoopStep?.appendPrompt ?? "");
+    editableNodeRangesRef.current = selectedEditableTargetId
       ? {
-          nodeId: selectedNode.id,
-          labelRange: selectedNode.labelRange,
-          promptRange: selectedNode.promptRange,
+          nodeId: selectedEditableTargetId,
+          labelRange: selectedEditableTarget?.labelRange,
+          promptRange: selectedEditableTarget?.promptRange,
+          appendPromptRange: selectedLoopStep?.appendPromptRange,
         }
       : undefined;
-  }, [selectedNode]);
+  }, [selectedEditableTarget, selectedEditableTargetId, selectedLoopStep]);
 
   const patchSelectedNodeField = useCallback(
-    (field: "label" | "prompt", value: string) => {
-      if (!selectedNode) {
+    (field: "label" | "prompt" | "appendPrompt", value: string) => {
+      if (!selectedEditableTarget || !selectedEditableTargetId) {
         return;
       }
 
       clearScriptSaveFeedback();
 
-      const nodeId = selectedNode.id;
       const currentRanges =
-        editableNodeRangesRef.current?.nodeId === nodeId
+        editableNodeRangesRef.current?.nodeId === selectedEditableTargetId
           ? editableNodeRangesRef.current
           : {
-              nodeId,
-              labelRange: selectedNode.labelRange,
-              promptRange: selectedNode.promptRange,
+              nodeId: selectedEditableTargetId,
+              labelRange: selectedEditableTarget.labelRange,
+              promptRange: selectedEditableTarget.promptRange,
+              appendPromptRange: selectedLoopStep?.appendPromptRange,
             };
       const patched = patchNodeFieldInScript({
         script: scriptRef.current,
@@ -200,7 +225,13 @@ export function useWorkflowScriptEditing(input: {
       editableNodeRangesRef.current = patched.ranges;
       setWorkflowScript(patched.script);
     },
-    [clearScriptSaveFeedback, selectedNode, setWorkflowScript],
+    [
+      clearScriptSaveFeedback,
+      selectedEditableTarget,
+      selectedEditableTargetId,
+      selectedLoopStep,
+      setWorkflowScript,
+    ],
   );
 
   const updateLabelDraft = useCallback(
@@ -219,6 +250,14 @@ export function useWorkflowScriptEditing(input: {
     [patchSelectedNodeField],
   );
 
+  const updateAppendPromptDraft = useCallback(
+    (value: string) => {
+      setAppendPromptDraft(value);
+      patchSelectedNodeField("appendPrompt", value);
+    },
+    [patchSelectedNodeField],
+  );
+
   const diagnosticErrorCount = parsed.diagnostics.filter(
     (diagnostic) => diagnostic.severity === "error",
   ).length;
@@ -232,8 +271,10 @@ export function useWorkflowScriptEditing(input: {
     script,
     parsed,
     selectedNode,
+    selectedLoopStep,
     labelDraft,
     promptDraft,
+    appendPromptDraft,
     parseError,
     scriptSaveError,
     scriptSaveDiagnostics,
@@ -251,5 +292,6 @@ export function useWorkflowScriptEditing(input: {
     setScriptSaveFailure,
     updateLabelDraft,
     updatePromptDraft,
+    updateAppendPromptDraft,
   };
 }

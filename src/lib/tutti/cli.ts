@@ -417,6 +417,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
               provider: step.provider,
               model: step.model,
               session: step.session,
+              hasAppendPrompt: Boolean(step.appendPrompt),
             })),
           }
         : undefined,

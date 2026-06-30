@@ -21,17 +21,29 @@ export type WorkflowInputBinding = {
   sourceNodeId?: string;
 };
 
+export type WorkflowSessionSpec =
+  | {
+      mode: "independent";
+    }
+  | {
+      mode: "inherit";
+      key: string;
+      scope?: "loop" | "step";
+    };
+
 export type WorkflowLoopStep = {
   id: string;
   kind: "agent";
   label: string;
   prompt: string;
+  appendPrompt?: string;
   provider?: string;
   model?: string;
-  session?: string;
+  session?: WorkflowSessionSpec;
   templateRefs: string[];
   sourceRange?: EditableRange;
   promptRange?: EditableRange;
+  appendPromptRange?: EditableRange;
   labelRange?: EditableRange;
 };
 
@@ -42,7 +54,7 @@ export type WorkflowLoopUntil = {
 
 export type WorkflowLoopSpec = {
   maxIterations: number;
-  session?: string;
+  session?: WorkflowSessionSpec;
   steps: WorkflowLoopStep[];
   until: WorkflowLoopUntil;
 };
@@ -57,7 +69,7 @@ export type WorkflowNode = {
   message?: string;
   provider?: string;
   model?: string;
-  session?: string;
+  session?: WorkflowSessionSpec;
   loop?: WorkflowLoopSpec;
   inputs: WorkflowInputBinding[];
   templateRefs: string[];

@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
 import { resolveWorkflowCwd } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
+import { resolveLoopStepRunContext } from "./loop-runtime";
 import { assertWorkflowScriptValid } from "./parser";
+import {
+  createLoopStepSessionNodeId,
+  resolveSessionKey,
+} from "./session";
 import { renderPrompt, renderTemplate } from "./templates";
 import type {
   ParsedWorkflow,
@@ -10,6 +15,7 @@ import type {
   WorkflowNode,
   WorkflowRunEvent,
   WorkflowRunRequest,
+  WorkflowSessionSpec,
 } from "./types";
 
 export async function* runWorkflow(
@@ -24,11 +30,11 @@ export async function* runWorkflow(
   const { executableNodes } = createWorkflowExecutionPlan(parsed);
   const previousSessionNodeIds = createPreviousSessionNodeIds(executableNodes);
   const nodeSessionKeyByNodeId = new Map(
-    executableNodes.flatMap((node) =>
-      node.kind === "agent" && node.session
-        ? [[node.id, node.session] as const]
-        : [],
-    ),
+    executableNodes.flatMap((node) => {
+      const sessionKey =
+        node.kind === "agent" ? resolveSessionKey(node.session) : undefined;
+      return sessionKey ? [[node.id, sessionKey] as const] : [];
+    }),
   );
   const outputs: Record<string, string> = {};
   const sessionIdsByKey: Record<string, string> = {};
@@ -227,8 +233,9 @@ async function* runAgentNode(input: {
   const provider = input.node.provider ?? input.request.provider ?? "mock";
   const model = input.node.model ?? input.request.model;
   const cwd = input.request.cwd ?? process.cwd();
-  const resumeSessionId = input.node.session
-    ? input.sessionIdsByKey[input.node.session]
+  const sessionKey = resolveSessionKey(input.node.session);
+  const resumeSessionId = sessionKey
+    ? input.sessionIdsByKey[sessionKey]
     : undefined;
   let output = "";
 
@@ -244,7 +251,7 @@ async function* runAgentNode(input: {
   try {
     throwIfAborted(input.request.signal);
 
-    if (input.node.session) {
+    if (sessionKey) {
       yield {
         type: "node_event",
         runId: input.runId,
@@ -254,8 +261,8 @@ async function* runAgentNode(input: {
           status: "running",
           stage: "running",
           message: resumeSessionId
-            ? `Workflow session "${input.node.session}" is reusing agent session ${resumeSessionId}.`
-            : `Workflow session "${input.node.session}" is starting a new agent session.`,
+            ? `Workflow session "${sessionKey}" is reusing agent session ${resumeSessionId}.`
+            : `Workflow session "${sessionKey}" is starting a new agent session.`,
         },
       };
     }
@@ -374,19 +381,34 @@ async function* runLoopNode(input: {
 
         const syntheticId = createLoopStepId(input.node.id, iteration, step.id);
         const prompt = renderLoopStepPrompt({
+          template: step.prompt,
           step,
+          iteration,
           loopNode: input.node,
           workflowOutputs: input.outputs,
           workflowInputs: input.request.inputs,
           previousStepOutputs,
           currentStepOutputs,
         });
+        const appendPrompt = step.appendPrompt
+          ? renderLoopStepPrompt({
+              template: step.appendPrompt,
+              step,
+              iteration,
+              loopNode: input.node,
+              workflowOutputs: input.outputs,
+              workflowInputs: input.request.inputs,
+              previousStepOutputs,
+              currentStepOutputs,
+            })
+          : undefined;
         const stepOutput = yield* runLoopAgentStep({
           runId: input.runId,
           nodeId: input.node.id,
           syntheticId,
           step,
           prompt,
+          appendPrompt,
           defaultProvider: provider,
           defaultModel: model,
           defaultSession: loop.session,
@@ -451,17 +473,25 @@ async function* runLoopAgentStep(input: {
   syntheticId: string;
   step: WorkflowLoopStep;
   prompt: string;
+  appendPrompt?: string;
   defaultProvider: string;
   defaultModel?: string;
-  defaultSession?: string;
+  defaultSession?: WorkflowSessionSpec;
   cwd: string;
   signal?: AbortSignal;
   sessionIdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent, string> {
   const provider = input.step.provider ?? input.defaultProvider;
   const model = input.step.model ?? input.defaultModel;
-  const sessionKey = input.step.session ?? input.defaultSession;
-  const resumeSessionId = sessionKey ? input.sessionIdsByKey[sessionKey] : undefined;
+  const runContext = resolveLoopStepRunContext({
+    stepId: input.step.id,
+    stepSession: input.step.session,
+    loopSession: input.defaultSession,
+    prompt: input.prompt,
+    appendPrompt: input.appendPrompt,
+    sessionIdsByKey: input.sessionIdsByKey,
+  });
+  const sessionNodeId = createLoopStepSessionNodeId(input.nodeId, input.step.id);
   let output = "";
 
   yield loopStatusEvent({
@@ -470,13 +500,13 @@ async function* runLoopAgentStep(input: {
     message: `Loop step ${input.syntheticId} started.`,
   });
 
-  if (sessionKey) {
+  if (runContext.sessionKey) {
     yield loopStatusEvent({
       runId: input.runId,
       nodeId: input.nodeId,
-      message: resumeSessionId
-        ? `Workflow session "${sessionKey}" is reusing agent session ${resumeSessionId} for ${input.syntheticId}.`
-        : `Workflow session "${sessionKey}" is starting a new agent session for ${input.syntheticId}.`,
+      message: runContext.resumeSessionId
+        ? `Workflow session "${runContext.sessionKey}" is reusing agent session ${runContext.resumeSessionId} for ${input.syntheticId}${runContext.promptMode === "append" ? " with appendPrompt" : " with full prompt"}.`
+        : `Workflow session "${runContext.sessionKey}" is starting a new agent session for ${input.syntheticId}.`,
     });
   }
 
@@ -484,9 +514,9 @@ async function* runLoopAgentStep(input: {
     runId: `${input.runId}:${input.syntheticId}`,
     provider,
     cwd: input.cwd,
-    prompt: input.prompt,
+    prompt: runContext.prompt,
     model,
-    resumeSessionId,
+    resumeSessionId: runContext.resumeSessionId,
     signal: input.signal,
   })) {
     throwIfAborted(input.signal);
@@ -503,21 +533,21 @@ async function* runLoopAgentStep(input: {
     if (event.type === "done" && event.status === "failed") {
       throw new Error(event.reason ?? "Agent run failed");
     }
+    const agentSessionId = readAgentSessionId(event);
     yield {
       type: "node_event",
       runId: input.runId,
-      nodeId: input.nodeId,
+      nodeId: agentSessionId && runContext.sessionKey ? sessionNodeId : input.nodeId,
       event,
     };
 
-    const agentSessionId = readAgentSessionId(event);
-    if (sessionKey && agentSessionId) {
-      const previousSessionId = input.sessionIdsByKey[sessionKey];
-      input.sessionIdsByKey[sessionKey] = agentSessionId;
+    if (runContext.sessionKey && agentSessionId) {
+      const previousSessionId = input.sessionIdsByKey[runContext.sessionKey];
+      input.sessionIdsByKey[runContext.sessionKey] = agentSessionId;
       yield createWorkflowSessionStatusEvent({
         runId: input.runId,
-        nodeId: input.nodeId,
-        sessionKey,
+        nodeId: sessionNodeId,
+        sessionKey: runContext.sessionKey,
         agentSessionId,
         previousSessionId,
         context: input.syntheticId,
@@ -558,14 +588,15 @@ function createPreviousSessionNodeIds(
   const previousNodeIds: Record<string, string> = {};
 
   for (const node of nodes) {
-    if (!node.session) {
+    const sessionKey = resolveSessionKey(node.session);
+    if (!sessionKey) {
       continue;
     }
-    const previousNodeId = latestNodeIdBySession.get(node.session);
+    const previousNodeId = latestNodeIdBySession.get(sessionKey);
     if (previousNodeId) {
       previousNodeIds[node.id] = previousNodeId;
     }
-    latestNodeIdBySession.set(node.session, node.id);
+    latestNodeIdBySession.set(sessionKey, node.id);
   }
 
   return previousNodeIds;
@@ -622,7 +653,9 @@ function createLoopStepId(
 }
 
 function renderLoopStepPrompt(input: {
+  template: string;
   step: WorkflowLoopStep;
+  iteration: number;
   loopNode: WorkflowNode;
   workflowOutputs: Record<string, string>;
   workflowInputs: Record<string, string> | undefined;
@@ -633,7 +666,10 @@ function renderLoopStepPrompt(input: {
     input.loopNode.inputs.map((binding) => [binding.name, binding.sourceNodeId]),
   );
 
-  return renderTemplate(input.step.prompt, (name) => {
+  return renderTemplate(input.template, (name) => {
+    if (name === "iteration") {
+      return String(input.iteration);
+    }
     if (input.currentStepOutputs[name] !== undefined) {
       return input.currentStepOutputs[name];
     }

@@ -9,6 +9,7 @@ import type {
   WorkflowMeta,
   WorkflowNode,
   WorkflowPhase,
+  WorkflowSessionSpec,
 } from "./types";
 import { extractTemplateRefs } from "./templates";
 
@@ -44,6 +45,8 @@ const DEFAULT_META: WorkflowMeta = {
   name: "untitled_workflow",
   description: "Dynamic workflow",
 };
+
+const RESERVED_TEMPLATE_REFS = new Set(["iteration"]);
 
 export class WorkflowScriptSyntaxError extends Error {
   readonly diagnostics: WorkflowDiagnostic[];
@@ -237,7 +240,7 @@ function addAgentNode(
   const prompt = readObjectString(options, "prompt") ?? "";
   const inputs = readInputs(options, state);
   const templateRefs = extractTemplateRefs(prompt);
-  const session = readObjectString(options, "session")?.trim();
+  const session = readSessionSpec(options, state, "agent");
   const node: WorkflowNode = {
     id,
     kind: "agent",
@@ -275,7 +278,7 @@ function addLoopNode(
     variableName ??
     `loop_${state.anonymousIndex++}`;
   const label = readObjectString(options, "label") ?? humanize(id);
-  const session = readObjectString(options, "session")?.trim();
+  const session = readSessionSpec(options, state, "loop");
   const maxIterations = readObjectNumber(options, "maxIterations");
   const steps = readLoopSteps(options, state);
   const stepIds = new Set(steps.map((step) => step.id));
@@ -283,7 +286,9 @@ function addLoopNode(
   const templateRefs = [
     ...new Set(
       steps.flatMap((step) =>
-        step.templateRefs.filter((ref) => !stepIds.has(ref)),
+        step.templateRefs.filter(
+          (ref) => !stepIds.has(ref) && !RESERVED_TEMPLATE_REFS.has(ref),
+        ),
       ),
     ),
   ];
@@ -418,7 +423,7 @@ function readLoopSteps(
       return [];
     }
 
-    const step = readLoopAgentStep(expression, index);
+    const step = readLoopAgentStep(expression, index, state);
     if (seenIds.has(step.id)) {
       state.diagnostics.push({
         severity: "error",
@@ -434,24 +439,33 @@ function readLoopSteps(
 function readLoopAgentStep(
   callExpression: AnyNode,
   index: number,
+  state: ParserState,
 ): WorkflowLoopStep {
   const options = firstArg(callExpression);
   const id = readObjectString(options, "id") ?? `step_${index + 1}`;
   const label = readObjectString(options, "label") ?? humanize(id);
   const prompt = readObjectString(options, "prompt") ?? "";
-  const session = readObjectString(options, "session")?.trim();
+  const appendPrompt = readObjectString(options, "appendPrompt");
+  const session = readSessionSpec(options, state, "loopStep");
 
   return {
     id,
     kind: "agent",
     label,
     prompt,
+    ...(appendPrompt !== undefined ? { appendPrompt } : {}),
     provider: readObjectString(options, "provider"),
     model: readObjectString(options, "model"),
     ...(session ? { session } : {}),
-    templateRefs: extractTemplateRefs(prompt),
+    templateRefs: [
+      ...new Set([
+        ...extractTemplateRefs(prompt),
+        ...extractTemplateRefs(appendPrompt),
+      ]),
+    ],
     sourceRange: toRange(callExpression),
     promptRange: readObjectPropertyValueRange(options, "prompt"),
+    appendPromptRange: readObjectPropertyValueRange(options, "appendPrompt"),
     labelRange: readObjectPropertyValueRange(options, "label"),
   };
 }
@@ -563,6 +577,9 @@ function collectExternalInputs(state: ParserState): string[] {
 
   for (const node of state.nodes) {
     for (const ref of node.templateRefs) {
+      if (RESERVED_TEMPLATE_REFS.has(ref)) {
+        continue;
+      }
       const boundInput = node.inputs.find((input) => input.name === ref);
       if (boundInput?.sourceNodeId) {
         continue;
@@ -638,6 +655,94 @@ function readMeta(ast: AnyNode): WorkflowMeta | undefined {
         readObjectString(value, "description") ?? DEFAULT_META.description,
     };
   }
+  return undefined;
+}
+
+function readSessionSpec(
+  objectExpression: AnyNode | undefined,
+  state: ParserState,
+  owner: "agent" | "loop" | "loopStep",
+): WorkflowSessionSpec | undefined {
+  const value = readObjectPropertyValue(objectExpression, "session");
+  if (!value) {
+    return undefined;
+  }
+  const range = toRange(value);
+
+  if (readStringLike(value) !== undefined) {
+    state.diagnostics.push({
+      severity: "error",
+      message:
+        'session must be an object, for example { mode: "inherit", key: "room" } or { mode: "independent" }.',
+      range,
+    });
+    return undefined;
+  }
+
+  if (value.type !== "ObjectExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "session must be an object.",
+      range,
+    });
+    return undefined;
+  }
+
+  const mode = readObjectString(value, "mode")?.trim();
+  if (mode === "independent") {
+    const scope = readObjectString(value, "scope")?.trim();
+    if (scope) {
+      state.diagnostics.push({
+        severity: "error",
+        message: "session.scope is only valid with mode: \"inherit\".",
+        range: readObjectPropertyValueRange(value, "scope"),
+      });
+    }
+    return { mode: "independent" };
+  }
+
+  if (mode === "inherit") {
+    const key = readObjectString(value, "key")?.trim();
+    if (!key) {
+      state.diagnostics.push({
+        severity: "error",
+        message: 'session with mode: "inherit" requires a non-empty key.',
+        range: readObjectPropertyValueRange(value, "key") ?? range,
+      });
+      return undefined;
+    }
+
+    const rawScope = readObjectString(value, "scope")?.trim();
+    if (rawScope && rawScope !== "loop" && rawScope !== "step") {
+      state.diagnostics.push({
+        severity: "error",
+        message: 'session.scope must be "loop" or "step".',
+        range: readObjectPropertyValueRange(value, "scope"),
+      });
+      return { mode: "inherit", key };
+    }
+    const scope = rawScope as "loop" | "step" | undefined;
+    if (scope && owner !== "loop") {
+      state.diagnostics.push({
+        severity: "error",
+        message: "session.scope is only valid on loop({...}) session defaults.",
+        range: readObjectPropertyValueRange(value, "scope"),
+      });
+      return { mode: "inherit", key };
+    }
+
+    return {
+      mode: "inherit",
+      key,
+      ...(scope ? { scope } : {}),
+    };
+  }
+
+  state.diagnostics.push({
+    severity: "error",
+    message: 'session.mode must be "independent" or "inherit".',
+    range: readObjectPropertyValueRange(value, "mode") ?? range,
+  });
   return undefined;
 }
 

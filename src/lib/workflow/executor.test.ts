@@ -50,8 +50,8 @@ describe("runWorkflow", () => {
     const events = [];
     for await (const event of runWorkflow({
       script: `
-const first = await agent({ id: "first", session: "writer", prompt: "one" })
-const second = await agent({ id: "second", session: "writer", prompt: "two" })
+const first = await agent({ id: "first", session: { mode: "inherit", key: "writer" }, prompt: "one" })
+const second = await agent({ id: "second", session: { mode: "inherit", key: "writer" }, prompt: "two" })
 `,
       provider: "codex",
       model: "gpt-5",
@@ -120,13 +120,15 @@ const delivery = await loop({
   steps: [
     agent({
       id: "rd",
-      session: "rd_room",
+      session: { mode: "inherit", key: "rd_room" },
       prompt: \`task: {{task}}
+feedback: {{acceptance}}\`,
+      appendPrompt: \`iteration: {{iteration}}
 feedback: {{acceptance}}\`,
     }),
     agent({
       id: "acceptance",
-      session: "acceptance_room",
+      session: { mode: "inherit", key: "acceptance_room" },
       prompt: \`review: {{rd}}\`,
     }),
   ],
@@ -143,7 +145,7 @@ feedback: {{acceptance}}\`,
     expect(calls.map((call) => call.prompt)).toEqual([
       "task: ship loop\nfeedback: ",
       "review: first delivery",
-      "task: ship loop\nfeedback: FAIL: missing tests",
+      "iteration: 2\nfeedback: FAIL: missing tests",
       "review: revised delivery",
     ]);
     expect(calls.map((call) => call.resumeSessionId)).toEqual([
@@ -225,9 +227,137 @@ const debate = await loop({
       }),
     );
   });
+
+  it("keeps loop step sessions independent when requested", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: `session-${calls.length}`,
+          provider: input.provider,
+          status: "running",
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: "NO",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+const debate = await loop({
+  id: "debate",
+  maxIterations: 2,
+  steps: [
+    agent({
+      id: "agent_a",
+      session: { mode: "independent" },
+      prompt: "A sees {{moderator}}",
+      appendPrompt: "A appends {{moderator}}",
+    }),
+    agent({ id: "moderator", prompt: "Judge {{agent_a}}" }),
+  ],
+  until: { source: "moderator", includes: "RESOLVED:" },
+})
+`,
+      provider: "mock",
+      cwd: process.cwd(),
+    })) {
+      // drain
+    }
+
+    expect(calls.map((call) => call.resumeSessionId)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(calls[2].prompt).toBe("A sees NO");
+  });
+
+  it("can derive per-step inherited sessions from a loop session default", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      const isRd = input.prompt.startsWith("rd") || input.prompt.startsWith("rd append");
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId:
+            input.resumeSessionId ?? (isRd ? "rd-session" : "qa-session"),
+          provider: input.provider,
+          status: "running",
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: isRd ? "work" : "NO",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 2,
+  session: { mode: "inherit", key: "delivery", scope: "step" },
+  steps: [
+    agent({ id: "rd", prompt: "rd {{qa}}", appendPrompt: "rd append {{iteration}} {{qa}}" }),
+    agent({ id: "qa", prompt: "qa {{rd}}" }),
+  ],
+  until: { source: "qa", includes: "PASS:" },
+})
+`,
+      provider: "codex",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(calls.map((call) => call.resumeSessionId)).toEqual([
+      undefined,
+      undefined,
+      "rd-session",
+      "qa-session",
+    ]);
+    expect(calls[2].prompt).toBe("rd append 2 NO");
+    expect(
+      events.some(
+        (event) => event.type === "node_event" && event.nodeId === "delivery.rd",
+      ),
+    ).toBe(true);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Workflow session "delivery.rd" is reusing agent session rd-session for delivery[2].rd with appendPrompt.',
+      ]),
+    );
+  });
 });
 
 function loopMockText(prompt: string): string {
+  if (prompt.startsWith("iteration:")) {
+    return "revised delivery";
+  }
   if (prompt.startsWith("task:") && prompt.includes("FAIL:")) {
     return "revised delivery";
   }

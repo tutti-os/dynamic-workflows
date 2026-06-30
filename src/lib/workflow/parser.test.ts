@@ -77,14 +77,28 @@ const second = await agent({ id: "same", prompt: "two" })
 
   it("parses agent session keys", () => {
     const parsed = parseWorkflowScript(`
-const first = await agent({ id: "first", session: "writer", prompt: "one" })
-const second = await agent({ id: "second", session: "writer", prompt: "two" })
+const first = await agent({ id: "first", session: { mode: "inherit", key: "writer" }, prompt: "one" })
+const second = await agent({ id: "second", session: { mode: "inherit", key: "writer" }, prompt: "two" })
 `);
 
     expect(parsed.nodes.map((node) => [node.id, node.session])).toEqual([
-      ["first", "writer"],
-      ["second", "writer"],
+      ["first", { mode: "inherit", key: "writer" }],
+      ["second", { mode: "inherit", key: "writer" }],
     ]);
+  });
+
+  it("rejects legacy string session keys", () => {
+    const parsed = parseWorkflowScript(`
+const first = await agent({ id: "first", session: "writer", prompt: "one" })
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          'session must be an object, for example { mode: "inherit", key: "room" } or { mode: "independent" }.',
+      }),
+    );
   });
 
   it("parses bounded loop nodes and excludes loop step refs from external inputs", () => {
@@ -93,13 +107,15 @@ const delivery = await loop({
   id: "delivery_loop",
   label: "Delivery Loop",
   maxIterations: 3,
+  session: { mode: "inherit", key: "delivery", scope: "step" },
   steps: [
     agent({
       id: "rd",
       label: "RD",
-      session: "rd_room",
+      session: { mode: "inherit", key: "rd_room" },
       prompt: \`Task: {{task}}
 Previous acceptance: {{acceptance}}\`,
+      appendPrompt: \`Iteration {{iteration}} feedback: {{acceptance}}\`,
     }),
     agent({
       id: "acceptance",
@@ -121,13 +137,17 @@ Previous acceptance: {{acceptance}}\`,
       templateRefs: ["task"],
       loop: {
         maxIterations: 3,
+        session: { mode: "inherit", key: "delivery", scope: "step" },
         until: { source: "acceptance", includes: "PASS:" },
       },
     });
     expect(parsed.nodes[0].loop?.steps.map((step) => [step.id, step.session])).toEqual([
-      ["rd", "rd_room"],
+      ["rd", { mode: "inherit", key: "rd_room" }],
       ["acceptance", undefined],
     ]);
+    expect(parsed.nodes[0].loop?.steps[0].appendPrompt).toBe(
+      "Iteration {{iteration}} feedback: {{acceptance}}",
+    );
     expect(parsed.externalInputs).toEqual(["task"]);
   });
 

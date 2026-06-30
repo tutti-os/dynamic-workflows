@@ -1,49 +1,103 @@
 import {
   Badge,
+  Button,
   Input,
   TaskIcon,
   Textarea,
 } from "@tutti-os/ui-system";
-import type { WorkflowNode } from "@/lib/workflow/types";
+import type { WorkflowLoopStep, WorkflowNode } from "@/lib/workflow/types";
 
 type EditPanelProps = {
   selectedNode?: WorkflowNode;
+  selectedLoopStepId?: string;
   labelDraft: string;
   promptDraft: string;
+  appendPromptDraft: string;
   nodeOutputs: Record<string, string>;
   latestOutput?: [string, string];
   eventLog: string[];
   onLabelChange: (value: string) => void;
   onPromptChange: (value: string) => void;
+  onAppendPromptChange: (value: string) => void;
+  onSelectLoopStep: (stepId: string | undefined) => void;
 };
 
 export function EditPanel(props: EditPanelProps) {
   const selectedNode = props.selectedNode;
+  const selectedLoopStep = selectedNode?.loop?.steps.find(
+    (step) => step.id === props.selectedLoopStepId,
+  );
+  const editTarget = selectedLoopStep ?? selectedNode;
 
   return (
     <div className="edit-panel">
       {selectedNode ? (
         <>
           <div className="field">
-            <label htmlFor="node-label">Label</label>
+            <label htmlFor="node-label">
+              {selectedLoopStep ? "Step label" : "Label"}
+            </label>
             <Input
               id="node-label"
               value={props.labelDraft}
-              disabled={!selectedNode.labelRange}
+              disabled={!editTarget?.labelRange}
               onChange={(event) => props.onLabelChange(event.target.value)}
             />
           </div>
 
+          {selectedNode.loop ? (
+            <div className="field">
+              <label>Loop steps</label>
+              <div className="loop-step-picker">
+                {selectedNode.loop.steps.map((step) => (
+                  <Button
+                    key={step.id}
+                    type="button"
+                    size="sm"
+                    variant={
+                      step.id === selectedLoopStep?.id ? "default" : "outline"
+                    }
+                    onClick={() => props.onSelectLoopStep(step.id)}
+                  >
+                    {step.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <div className="field">
-            <label htmlFor="node-prompt">Prompt</label>
+            <label htmlFor="node-prompt">
+              {selectedLoopStep ? "Step prompt" : "Prompt"}
+            </label>
             <Textarea
               id="node-prompt"
               rows={8}
               value={props.promptDraft}
-              disabled={!selectedNode.promptRange}
+              disabled={!editTarget?.promptRange}
               onChange={(event) => props.onPromptChange(event.target.value)}
             />
           </div>
+
+          {selectedLoopStep ? (
+            <div className="field">
+              <label htmlFor="node-append-prompt">Append prompt</label>
+              {selectedLoopStep.appendPromptRange ? (
+                <Textarea
+                  id="node-append-prompt"
+                  rows={6}
+                  value={props.appendPromptDraft}
+                  onChange={(event) =>
+                    props.onAppendPromptChange(event.target.value)
+                  }
+                />
+              ) : (
+                <div className="field-hint">
+                  This step has no appendPrompt field in the script.
+                </div>
+              )}
+            </div>
+          ) : null}
 
           <div className="field">
             <label>Inputs</label>
