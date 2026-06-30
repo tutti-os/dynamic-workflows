@@ -405,6 +405,21 @@ function parsedSummary(parsed: ParsedWorkflow) {
       model: node.model,
       session: node.session,
       inputs: node.inputs,
+      loop: node.loop
+        ? {
+            maxIterations: node.loop.maxIterations,
+            session: node.loop.session,
+            until: node.loop.until,
+            steps: node.loop.steps.map((step) => ({
+              id: step.id,
+              kind: step.kind,
+              label: step.label,
+              provider: step.provider,
+              model: step.model,
+              session: step.session,
+            })),
+          }
+        : undefined,
     })),
   };
 }

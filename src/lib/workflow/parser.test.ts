@@ -86,4 +86,98 @@ const second = await agent({ id: "second", session: "writer", prompt: "two" })
       ["second", "writer"],
     ]);
   });
+
+  it("parses bounded loop nodes and excludes loop step refs from external inputs", () => {
+    const parsed = parseWorkflowScript(`
+const delivery = await loop({
+  id: "delivery_loop",
+  label: "Delivery Loop",
+  maxIterations: 3,
+  steps: [
+    agent({
+      id: "rd",
+      label: "RD",
+      session: "rd_room",
+      prompt: \`Task: {{task}}
+Previous acceptance: {{acceptance}}\`,
+    }),
+    agent({
+      id: "acceptance",
+      label: "Acceptance",
+      prompt: \`Review {{rd}} for {{task}}\`,
+    }),
+  ],
+  until: { source: "acceptance", includes: "PASS:" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes).toHaveLength(1);
+    expect(parsed.nodes[0]).toMatchObject({
+      id: "delivery_loop",
+      kind: "loop",
+      label: "Delivery Loop",
+      variableName: "delivery",
+      templateRefs: ["task"],
+      loop: {
+        maxIterations: 3,
+        until: { source: "acceptance", includes: "PASS:" },
+      },
+    });
+    expect(parsed.nodes[0].loop?.steps.map((step) => [step.id, step.session])).toEqual([
+      ["rd", "rd_room"],
+      ["acceptance", undefined],
+    ]);
+    expect(parsed.externalInputs).toEqual(["task"]);
+  });
+
+  it("parses workflow nodes inside phase callback blocks", () => {
+    const parsed = parseWorkflowScript(`
+phase("RD delivery and acceptance", () => {
+  const delivery_loop = loop({
+    id: "delivery_loop",
+    maxIterations: 4,
+    steps: [
+      agent({ id: "rd", prompt: \`Task: {{requirement}}\nFeedback: {{acceptance}}\` }),
+      agent({ id: "acceptance", prompt: \`Review {{rd}}\` }),
+    ],
+    until: { source: "acceptance", includes: "PASS:" },
+  })
+
+  agent({
+    id: "final_summary",
+    inputs: { delivery_loop },
+    prompt: \`Summarize {{delivery_loop}}\`,
+  })
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes.map((node) => [node.id, node.kind, node.phase])).toEqual([
+      ["delivery_loop", "loop", "RD delivery and acceptance"],
+      ["final_summary", "agent", "RD delivery and acceptance"],
+    ]);
+    expect(parsed.edges).toEqual([
+      {
+        id: "delivery_loop->final_summary:delivery_loop",
+        source: "delivery_loop",
+        target: "final_summary",
+        label: "delivery_loop",
+      },
+    ]);
+    expect(parsed.externalInputs).toEqual(["requirement"]);
+  });
+
+  it("reports invalid loop configuration as validation errors", () => {
+    expect(() =>
+      assertWorkflowScriptValid(`
+const broken = await loop({
+  id: "broken",
+  maxIterations: 99,
+  steps: [agent({ id: "one", prompt: "one" })],
+  until: { source: "missing", includes: "PASS:" },
+})
+`),
+    ).toThrow(WorkflowScriptSyntaxError);
+  });
 });

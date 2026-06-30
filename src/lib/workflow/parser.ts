@@ -4,6 +4,8 @@ import type {
   WorkflowDiagnostic,
   WorkflowEdge,
   WorkflowInputBinding,
+  WorkflowLoopSpec,
+  WorkflowLoopStep,
   WorkflowMeta,
   WorkflowNode,
   WorkflowPhase,
@@ -175,7 +177,15 @@ function visitTopLevelStatement(statement: AnyNode, state: ParserState): void {
 
   if (isCallExpression(expression, "phase")) {
     const title = readFirstStringArg(expression) ?? "Untitled phase";
+    const previousPhase = state.currentPhase;
     enterPhase(title, state);
+    const phaseBody = readPhaseCallbackBody(expression);
+    if (phaseBody) {
+      for (const phaseStatement of phaseBody) {
+        visitTopLevelStatement(phaseStatement, state);
+      }
+      state.currentPhase = previousPhase;
+    }
     return;
   }
 
@@ -186,6 +196,11 @@ function visitTopLevelStatement(statement: AnyNode, state: ParserState): void {
 
   if (isCallExpression(expression, "agent")) {
     addAgentNode(expression, variableName, state);
+    return;
+  }
+
+  if (isCallExpression(expression, "loop")) {
+    addLoopNode(expression, variableName, state);
     return;
   }
 
@@ -249,6 +264,77 @@ function addAgentNode(
   return node;
 }
 
+function addLoopNode(
+  callExpression: AnyNode,
+  variableName: string | undefined,
+  state: ParserState,
+): void {
+  const options = firstArg(callExpression);
+  const id =
+    readObjectString(options, "id") ??
+    variableName ??
+    `loop_${state.anonymousIndex++}`;
+  const label = readObjectString(options, "label") ?? humanize(id);
+  const session = readObjectString(options, "session")?.trim();
+  const maxIterations = readObjectNumber(options, "maxIterations");
+  const steps = readLoopSteps(options, state);
+  const stepIds = new Set(steps.map((step) => step.id));
+  const until = readLoopUntil(options, state, stepIds);
+  const templateRefs = [
+    ...new Set(
+      steps.flatMap((step) =>
+        step.templateRefs.filter((ref) => !stepIds.has(ref)),
+      ),
+    ),
+  ];
+  const inputs = readInputs(options, state);
+
+  if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 10) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop(...) requires maxIterations as an integer from 1 to 10.",
+      range:
+        readObjectPropertyValueRange(options, "maxIterations") ??
+        toRange(callExpression),
+    });
+  }
+
+  if (steps.length === 0) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop(...) requires at least one agent step in steps.",
+      range: readObjectPropertyValueRange(options, "steps") ?? toRange(callExpression),
+    });
+  }
+
+  const loop: WorkflowLoopSpec = {
+    maxIterations: Number.isInteger(maxIterations) ? maxIterations : 1,
+    ...(session ? { session } : {}),
+    steps,
+    until,
+  };
+  const node: WorkflowNode = {
+    id,
+    kind: "loop",
+    label,
+    phase: state.currentPhase,
+    variableName,
+    ...(session ? { session } : {}),
+    loop,
+    inputs,
+    templateRefs,
+    sourceRange: toRange(callExpression),
+    labelRange: readObjectPropertyValueRange(options, "label"),
+  };
+
+  state.nodes.push(node);
+  addNodeToCurrentPhase(node.id, state);
+  if (variableName) {
+    state.variableToNodeId[variableName] = node.id;
+  }
+  addInputEdges(node, state);
+}
+
 function addLogNode(
   callExpression: AnyNode,
   variableName: string | undefined,
@@ -303,6 +389,110 @@ function addParallelNodes(
       message: "Unsupported parallel child. It will be visible only at runtime.",
     });
   });
+}
+
+function readLoopSteps(
+  options: AnyNode | undefined,
+  state: ParserState,
+): WorkflowLoopStep[] {
+  const stepsArray = readObjectPropertyValue(options, "steps");
+  if (!stepsArray || stepsArray.type !== "ArrayExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop(...) requires steps as an array literal.",
+      range: readObjectPropertyValueRange(options, "steps"),
+    });
+    return [];
+  }
+
+  const seenIds = new Set<string>();
+  const elements = (stepsArray.elements as AnyNode[] | undefined) ?? [];
+  return elements.flatMap((element, index): WorkflowLoopStep[] => {
+    const expression = unwrapExpression(unwrapFunctionBody(element));
+    if (!isCallExpression(expression, "agent")) {
+      state.diagnostics.push({
+        severity: "error",
+        message: "loop steps only support agent({...}) in this version.",
+        range: toRange(element),
+      });
+      return [];
+    }
+
+    const step = readLoopAgentStep(expression, index);
+    if (seenIds.has(step.id)) {
+      state.diagnostics.push({
+        severity: "error",
+        message: `Duplicate loop step id "${step.id}". Step ids must be unique within a loop.`,
+        range: step.sourceRange,
+      });
+    }
+    seenIds.add(step.id);
+    return [step];
+  });
+}
+
+function readLoopAgentStep(
+  callExpression: AnyNode,
+  index: number,
+): WorkflowLoopStep {
+  const options = firstArg(callExpression);
+  const id = readObjectString(options, "id") ?? `step_${index + 1}`;
+  const label = readObjectString(options, "label") ?? humanize(id);
+  const prompt = readObjectString(options, "prompt") ?? "";
+  const session = readObjectString(options, "session")?.trim();
+
+  return {
+    id,
+    kind: "agent",
+    label,
+    prompt,
+    provider: readObjectString(options, "provider"),
+    model: readObjectString(options, "model"),
+    ...(session ? { session } : {}),
+    templateRefs: extractTemplateRefs(prompt),
+    sourceRange: toRange(callExpression),
+    promptRange: readObjectPropertyValueRange(options, "prompt"),
+    labelRange: readObjectPropertyValueRange(options, "label"),
+  };
+}
+
+function readLoopUntil(
+  options: AnyNode | undefined,
+  state: ParserState,
+  stepIds: Set<string>,
+) {
+  const untilObject = readObjectPropertyValue(options, "until");
+  const source = readObjectString(untilObject, "source") ?? "";
+  const includes = readObjectString(untilObject, "includes") ?? "";
+
+  if (!untilObject || untilObject.type !== "ObjectExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop(...) requires until: { source, includes }.",
+      range: readObjectPropertyValueRange(options, "until"),
+    });
+  }
+  if (!source || !stepIds.has(source)) {
+    state.diagnostics.push({
+      severity: "error",
+      message: source
+        ? `loop until.source "${source}" must match a loop step id.`
+        : "loop until.source is required.",
+      range: readObjectPropertyValueRange(untilObject, "source"),
+    });
+  }
+  if (!includes) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop until.includes is required.",
+      range: readObjectPropertyValueRange(untilObject, "includes"),
+    });
+  }
+
+  return {
+    source,
+    includes,
+  };
 }
 
 function addDynamicNode(
@@ -514,6 +704,21 @@ function unwrapFunctionBody(node: AnyNode | undefined): AnyNode | undefined {
   return node;
 }
 
+function readPhaseCallbackBody(callExpression: AnyNode): AnyNode[] | undefined {
+  const callback = ((callExpression.arguments as AnyNode[] | undefined) ?? [])[1];
+  if (
+    callback?.type !== "ArrowFunctionExpression" &&
+    callback?.type !== "FunctionExpression"
+  ) {
+    return undefined;
+  }
+  const body = callback.body as AnyNode | undefined;
+  if (body?.type !== "BlockStatement") {
+    return undefined;
+  }
+  return (body.body as AnyNode[] | undefined) ?? [];
+}
+
 function isCallExpression(
   node: AnyNode | undefined,
   calleeName: string,
@@ -545,6 +750,16 @@ function readObjectString(
   key: string,
 ): string | undefined {
   return readStringLike(readObjectPropertyValue(objectExpression, key));
+}
+
+function readObjectNumber(
+  objectExpression: AnyNode | undefined,
+  key: string,
+): number {
+  const value = readObjectPropertyValue(objectExpression, key);
+  return value?.type === "NumericLiteral" && typeof value.value === "number"
+    ? value.value
+    : Number.NaN;
 }
 
 function readObjectPropertyValue(

@@ -15,8 +15,13 @@ const FLOW_LANE_WIDTH = 300;
 const FLOW_LAYER_HEIGHT = 220;
 const FLOW_NODE_WIDTH = 230;
 const FLOW_NODE_HEIGHT = 132;
+const FLOW_LOOP_LANE_WIDTH = 560;
+const FLOW_LOOP_NODE_WIDTH = 430;
+const FLOW_LOOP_NODE_MIN_HEIGHT = 210;
+const FLOW_LOOP_STEP_HEIGHT = 32;
 const FLOW_ORIGIN_X = 80;
 const FLOW_ORIGIN_Y = 56;
+const FLOW_PHASE_GAP = 112;
 
 export function useWorkflowFlowLayout(input: {
   parsed: ParsedWorkflow;
@@ -63,23 +68,37 @@ function buildFlowNodes(input: {
     input.parsed.phases.map((phase, index) => [phase.title, index]),
   );
   const phaseCounters = new Map<string, number>();
+  const maxLaneWidthByPhase = new Map<string, number>();
+  const phaseYByTitle = createPhaseYPositions(input.parsed);
 
   return input.parsed.nodes.map((workflowNode) => {
     const phase = workflowNode.phase ?? "Workflow";
     const phasePosition = phaseIndex.get(phase) ?? 0;
     const laneIndex = phaseCounters.get(phase) ?? 0;
+    const phaseLaneWidth = maxLaneWidthByPhase.get(phase) ?? FLOW_LANE_WIDTH;
+    const { height: nodeHeight, width: nodeWidth } =
+      getFlowNodeDimensions(workflowNode);
     phaseCounters.set(phase, laneIndex + 1);
+    maxLaneWidthByPhase.set(
+      phase,
+      Math.max(
+        phaseLaneWidth,
+        workflowNode.kind === "loop" ? FLOW_LOOP_LANE_WIDTH : FLOW_LANE_WIDTH,
+      ),
+    );
 
     return {
       id: workflowNode.id,
       type: "workflowNode",
-      initialWidth: FLOW_NODE_WIDTH,
-      initialHeight: FLOW_NODE_HEIGHT,
+      initialWidth: nodeWidth,
+      initialHeight: nodeHeight,
       sourcePosition: Position.Bottom,
       targetPosition: Position.Top,
       position: {
-        x: laneIndex * FLOW_LANE_WIDTH + FLOW_ORIGIN_X,
-        y: phasePosition * FLOW_LAYER_HEIGHT + FLOW_ORIGIN_Y,
+        x: laneIndex * phaseLaneWidth + FLOW_ORIGIN_X,
+        y:
+          phaseYByTitle.get(phase) ??
+          phasePosition * FLOW_LAYER_HEIGHT + FLOW_ORIGIN_Y,
       },
       data: {
         workflowNode,
@@ -88,6 +107,54 @@ function buildFlowNodes(input: {
       selected: workflowNode.id === input.selectedNodeId,
     };
   });
+}
+
+function createPhaseYPositions(parsed: ParsedWorkflow): Map<string, number> {
+  const phaseTitles = parsed.phases.map((phase) => phase.title);
+  for (const node of parsed.nodes) {
+    const phase = node.phase ?? "Workflow";
+    if (!phaseTitles.includes(phase)) {
+      phaseTitles.push(phase);
+    }
+  }
+
+  const maxHeightByPhase = new Map<string, number>();
+  for (const node of parsed.nodes) {
+    const phase = node.phase ?? "Workflow";
+    const { height } = getFlowNodeDimensions(node);
+    maxHeightByPhase.set(
+      phase,
+      Math.max(maxHeightByPhase.get(phase) ?? FLOW_NODE_HEIGHT, height),
+    );
+  }
+
+  let y = FLOW_ORIGIN_Y;
+  const phaseYByTitle = new Map<string, number>();
+  for (const phaseTitle of phaseTitles.length > 0 ? phaseTitles : ["Workflow"]) {
+    phaseYByTitle.set(phaseTitle, y);
+    y += Math.max(
+      FLOW_LAYER_HEIGHT,
+      (maxHeightByPhase.get(phaseTitle) ?? FLOW_NODE_HEIGHT) + FLOW_PHASE_GAP,
+    );
+  }
+
+  return phaseYByTitle;
+}
+
+function getFlowNodeDimensions(
+  workflowNode: ParsedWorkflow["nodes"][number],
+): { width: number; height: number } {
+  if (workflowNode.kind !== "loop") {
+    return { width: FLOW_NODE_WIDTH, height: FLOW_NODE_HEIGHT };
+  }
+
+  return {
+    width: FLOW_LOOP_NODE_WIDTH,
+    height: Math.max(
+      FLOW_LOOP_NODE_MIN_HEIGHT,
+      154 + (workflowNode.loop?.steps.length ?? 0) * FLOW_LOOP_STEP_HEIGHT,
+    ),
+  };
 }
 
 function buildFlowEdges(input: {
@@ -106,6 +173,7 @@ function buildFlowEdges(input: {
   return input.parsed.edges.map((edge) => {
     const sourcePhaseIndex = getPhaseIndex(edge.source);
     const targetPhaseIndex = getPhaseIndex(edge.target);
+    const samePhase = sourcePhaseIndex === targetPhaseIndex;
     const bypass = targetPhaseIndex - sourcePhaseIndex > 1;
 
     return {
@@ -113,9 +181,13 @@ function buildFlowEdges(input: {
       source: edge.source,
       target: edge.target,
       type: "smoothstep",
-      label: edge.label,
-      sourceHandle: bypass ? "source-right" : "source-bottom",
-      targetHandle: bypass ? "target-right" : "target-top",
+      label: samePhase ? undefined : edge.label,
+      sourceHandle: samePhase || bypass ? "source-right" : "source-bottom",
+      targetHandle: samePhase
+        ? "target-left"
+        : bypass
+          ? "target-right"
+          : "target-top",
       animated: input.nodeStatuses[edge.target] === "running",
       markerEnd: { type: MarkerType.ArrowClosed },
       labelStyle: {
@@ -136,7 +208,15 @@ function buildFlowEdges(input: {
 
 function createFlowLayoutKey(parsed: ParsedWorkflow): string {
   const nodeKey = parsed.nodes
-    .map((node) => `${node.id}:${node.phase ?? "Workflow"}`)
+    .map((node) => {
+      if (node.loop) {
+        return `${node.id}:${node.phase ?? "Workflow"}:${node.loop.steps
+          .map((step) => step.id)
+          .join(",")}:${node.loop.maxIterations}:${node.loop.until.source}:${node.loop.until.includes}`;
+      }
+
+      return `${node.id}:${node.phase ?? "Workflow"}`;
+    })
     .join("|");
   const edgeKey = parsed.edges.map((edge) => edge.id).join("|");
   return `${nodeKey}::${edgeKey}`;

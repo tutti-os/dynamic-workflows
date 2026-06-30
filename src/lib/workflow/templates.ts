@@ -19,17 +19,25 @@ export function renderPrompt(
   outputs: Record<string, string>,
   workflowInputs: Record<string, string> = {},
 ): string {
-  const prompt = node.prompt ?? "";
   const bindings = new Map(
     node.inputs.map((input) => [input.name, input.sourceNodeId]),
   );
 
-  return prompt.replace(TEMPLATE_REF_PATTERN, (_match, name: string) => {
+  return renderTemplate(node.prompt ?? "", (name) => {
     const sourceNodeId = bindings.get(name);
     if (!sourceNodeId) {
       return workflowInputs[name] ?? "";
     }
     return outputs[sourceNodeId] ?? "";
+  });
+}
+
+export function renderTemplate(
+  template: string,
+  resolveValue: (name: string) => string | undefined,
+): string {
+  return template.replace(TEMPLATE_REF_PATTERN, (_match, name: string) => {
+    return resolveValue(name) ?? "";
   });
 }
 

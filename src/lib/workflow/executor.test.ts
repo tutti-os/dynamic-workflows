@@ -81,7 +81,164 @@ const second = await agent({ id: "second", session: "writer", prompt: "two" })
       }),
     );
   });
+
+  it("runs a bounded loop until the acceptance step passes", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      const isRd = input.prompt.startsWith("task:");
+      const agentSessionId =
+        input.resumeSessionId ?? (isRd ? "rd-session" : "acceptance-session");
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId,
+          provider: input.provider,
+          status: "running",
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: loopMockText(input.prompt),
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 3,
+  steps: [
+    agent({
+      id: "rd",
+      session: "rd_room",
+      prompt: \`task: {{task}}
+feedback: {{acceptance}}\`,
+    }),
+    agent({
+      id: "acceptance",
+      session: "acceptance_room",
+      prompt: \`review: {{rd}}\`,
+    }),
+  ],
+  until: { source: "acceptance", includes: "PASS:" },
+})
+`,
+      provider: "codex",
+      cwd: process.cwd(),
+      inputs: { task: "ship loop" },
+    })) {
+      events.push(event);
+    }
+
+    expect(calls.map((call) => call.prompt)).toEqual([
+      "task: ship loop\nfeedback: ",
+      "review: first delivery",
+      "task: ship loop\nfeedback: FAIL: missing tests",
+      "review: revised delivery",
+    ]);
+    expect(calls.map((call) => call.resumeSessionId)).toEqual([
+      undefined,
+      undefined,
+      "rd-session",
+      "acceptance-session",
+    ]);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Loop "delivery" iteration 1 until check: not matched (acceptance includes "PASS:").',
+        'Loop "delivery" iteration 2 until check: matched (acceptance includes "PASS:").',
+      ]),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "completed",
+        outputs: {
+          delivery: expect.stringContaining("Stop reason: until_matched"),
+        },
+      }),
+    );
+    const finalEvent = [...events]
+      .reverse()
+      .find(
+        (event) => event.type === "node_completed" && event.nodeId === "delivery",
+      );
+    expect(finalEvent).toEqual(
+      expect.objectContaining({
+        output: expect.stringContaining("[acceptance]\nPASS: accepted"),
+      }),
+    );
+  });
+
+  it("completes with max_iterations_reached when until never matches", async () => {
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      yield {
+        type: "text_delta",
+        text: `NO: ${input.prompt}`,
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const debate = await loop({
+  id: "debate",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "agent_a", prompt: "A sees {{agent_b}}" }),
+    agent({ id: "agent_b", prompt: "B sees {{agent_a}}" }),
+    agent({ id: "moderator", prompt: "Judge {{agent_a}} {{agent_b}}" }),
+  ],
+  until: { source: "moderator", includes: "RESOLVED:" },
+})
+`,
+      provider: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(runAgentMock).toHaveBeenCalledTimes(6);
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "completed",
+        outputs: {
+          debate: expect.stringContaining("Stop reason: max_iterations_reached"),
+        },
+      }),
+    );
+  });
 });
+
+function loopMockText(prompt: string): string {
+  if (prompt.startsWith("task:") && prompt.includes("FAIL:")) {
+    return "revised delivery";
+  }
+  if (prompt.startsWith("task:")) {
+    return "first delivery";
+  }
+  if (prompt.includes("revised delivery")) {
+    return "PASS: accepted";
+  }
+  return "FAIL: missing tests";
+}
 
 function readStatusMessages(events: unknown[]): string[] {
   return events.flatMap((event) => {

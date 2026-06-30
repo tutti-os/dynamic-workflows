@@ -12,6 +12,8 @@
     "check:quick": "npm run typecheck && vitest run",
     "check:full": "npm run check:quick && npm run build",
     "check:changed": "node ./tools/scripts/run-check-changed.mjs",
+    "check:native": "node ./tools/scripts/ensure-native-modules.mjs",
+    "repair:native": "node ./tools/scripts/ensure-native-modules.mjs --fix",
     "package:tutti-dev": "node ./scripts/package-tutti-dev-app.mjs",
     "import:tutti-dev": "node ./scripts/import-tutti-dev-app.mjs",
     "test": "npm run check:quick"

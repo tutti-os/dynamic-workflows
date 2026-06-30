@@ -3,9 +3,10 @@ import { runAgent } from "@/lib/agents/runtime";
 import { resolveWorkflowCwd } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
 import { assertWorkflowScriptValid } from "./parser";
-import { renderPrompt } from "./templates";
+import { renderPrompt, renderTemplate } from "./templates";
 import type {
   ParsedWorkflow,
+  WorkflowLoopStep,
   WorkflowNode,
   WorkflowRunEvent,
   WorkflowRunRequest,
@@ -24,7 +25,9 @@ export async function* runWorkflow(
   const previousSessionNodeIds = createPreviousSessionNodeIds(executableNodes);
   const nodeSessionKeyByNodeId = new Map(
     executableNodes.flatMap((node) =>
-      node.session ? [[node.id, node.session] as const] : [],
+      node.kind === "agent" && node.session
+        ? [[node.id, node.session] as const]
+        : [],
     ),
   );
   const outputs: Record<string, string> = {};
@@ -205,6 +208,20 @@ async function* runNode(input: {
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent> {
+  if (input.node.kind === "loop") {
+    yield* runLoopNode(input);
+    return;
+  }
+  yield* runAgentNode(input);
+}
+
+async function* runAgentNode(input: {
+  runId: string;
+  node: WorkflowNode;
+  request: WorkflowRunRequest;
+  outputs: Record<string, string>;
+  sessionIdsByKey: Record<string, string>;
+}): AsyncGenerator<WorkflowRunEvent> {
   const prompt = renderPrompt(input.node, input.outputs, input.request.inputs);
   const nodeRunId = `${input.runId}:${input.node.id}`;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
@@ -292,6 +309,231 @@ async function* runNode(input: {
   }
 }
 
+async function* runLoopNode(input: {
+  runId: string;
+  node: WorkflowNode;
+  request: WorkflowRunRequest;
+  outputs: Record<string, string>;
+  sessionIdsByKey: Record<string, string>;
+}): AsyncGenerator<WorkflowRunEvent> {
+  const loop = input.node.loop;
+  const provider = input.node.provider ?? input.request.provider ?? "mock";
+  const model = input.node.model ?? input.request.model;
+  const cwd = input.request.cwd ?? process.cwd();
+
+  yield {
+    type: "node_started",
+    runId: input.runId,
+    nodeId: input.node.id,
+    node: input.node,
+    provider,
+    model,
+  };
+
+  if (!loop) {
+    yield {
+      type: "node_failed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      error: "Loop node is missing loop configuration.",
+    };
+    return;
+  }
+
+  const previousStepOutputs: Record<string, string> = {};
+  const iterations: Array<{
+    index: number;
+    outputs: Record<string, string>;
+    untilOutput: string;
+    untilMatched: boolean;
+  }> = [];
+  let stopReason: "until_matched" | "max_iterations_reached" =
+    "max_iterations_reached";
+
+  try {
+    throwIfAborted(input.request.signal);
+
+    yield loopStatusEvent({
+      runId: input.runId,
+      nodeId: input.node.id,
+      message: `Loop "${input.node.id}" started with maxIterations=${loop.maxIterations}.`,
+    });
+
+    for (let iteration = 1; iteration <= loop.maxIterations; iteration += 1) {
+      throwIfAborted(input.request.signal);
+
+      const currentStepOutputs: Record<string, string> = {};
+      yield loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.node.id,
+        message: `Loop "${input.node.id}" iteration ${iteration} started.`,
+      });
+
+      for (const step of loop.steps) {
+        throwIfAborted(input.request.signal);
+
+        const syntheticId = createLoopStepId(input.node.id, iteration, step.id);
+        const prompt = renderLoopStepPrompt({
+          step,
+          loopNode: input.node,
+          workflowOutputs: input.outputs,
+          workflowInputs: input.request.inputs,
+          previousStepOutputs,
+          currentStepOutputs,
+        });
+        const stepOutput = yield* runLoopAgentStep({
+          runId: input.runId,
+          nodeId: input.node.id,
+          syntheticId,
+          step,
+          prompt,
+          defaultProvider: provider,
+          defaultModel: model,
+          defaultSession: loop.session,
+          cwd,
+          signal: input.request.signal,
+          sessionIdsByKey: input.sessionIdsByKey,
+        });
+        currentStepOutputs[step.id] = stepOutput;
+        previousStepOutputs[step.id] = stepOutput;
+      }
+
+      const untilOutput =
+        currentStepOutputs[loop.until.source] ??
+        previousStepOutputs[loop.until.source] ??
+        "";
+      const untilMatched = untilOutput.includes(loop.until.includes);
+      iterations.push({
+        index: iteration,
+        outputs: { ...currentStepOutputs },
+        untilOutput,
+        untilMatched,
+      });
+
+      yield loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.node.id,
+        message: `Loop "${input.node.id}" iteration ${iteration} until check: ${untilMatched ? "matched" : "not matched"} (${loop.until.source} includes ${JSON.stringify(loop.until.includes)}).`,
+      });
+
+      if (untilMatched) {
+        stopReason = "until_matched";
+        break;
+      }
+    }
+
+    const output = formatLoopOutput({
+      node: input.node,
+      stopReason,
+      iterations,
+      latestStepOutputs: previousStepOutputs,
+    });
+
+    yield {
+      type: "node_completed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      output,
+    };
+  } catch (error) {
+    yield {
+      type: "node_failed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      error: toRunErrorMessage(error),
+    };
+  }
+}
+
+async function* runLoopAgentStep(input: {
+  runId: string;
+  nodeId: string;
+  syntheticId: string;
+  step: WorkflowLoopStep;
+  prompt: string;
+  defaultProvider: string;
+  defaultModel?: string;
+  defaultSession?: string;
+  cwd: string;
+  signal?: AbortSignal;
+  sessionIdsByKey: Record<string, string>;
+}): AsyncGenerator<WorkflowRunEvent, string> {
+  const provider = input.step.provider ?? input.defaultProvider;
+  const model = input.step.model ?? input.defaultModel;
+  const sessionKey = input.step.session ?? input.defaultSession;
+  const resumeSessionId = sessionKey ? input.sessionIdsByKey[sessionKey] : undefined;
+  let output = "";
+
+  yield loopStatusEvent({
+    runId: input.runId,
+    nodeId: input.nodeId,
+    message: `Loop step ${input.syntheticId} started.`,
+  });
+
+  if (sessionKey) {
+    yield loopStatusEvent({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      message: resumeSessionId
+        ? `Workflow session "${sessionKey}" is reusing agent session ${resumeSessionId} for ${input.syntheticId}.`
+        : `Workflow session "${sessionKey}" is starting a new agent session for ${input.syntheticId}.`,
+    });
+  }
+
+  for await (const event of runAgent({
+    runId: `${input.runId}:${input.syntheticId}`,
+    provider,
+    cwd: input.cwd,
+    prompt: input.prompt,
+    model,
+    resumeSessionId,
+    signal: input.signal,
+  })) {
+    throwIfAborted(input.signal);
+
+    if (event.type === "text_delta") {
+      output += event.text;
+    }
+    if (event.type === "error") {
+      throw new Error(event.message);
+    }
+    if (event.type === "done" && event.status === "canceled") {
+      throw new WorkflowRunCanceledError();
+    }
+    if (event.type === "done" && event.status === "failed") {
+      throw new Error(event.reason ?? "Agent run failed");
+    }
+    yield {
+      type: "node_event",
+      runId: input.runId,
+      nodeId: input.nodeId,
+      event,
+    };
+
+    const agentSessionId = readAgentSessionId(event);
+    if (sessionKey && agentSessionId) {
+      const previousSessionId = input.sessionIdsByKey[sessionKey];
+      input.sessionIdsByKey[sessionKey] = agentSessionId;
+      yield createWorkflowSessionStatusEvent({
+        runId: input.runId,
+        nodeId: input.nodeId,
+        sessionKey,
+        agentSessionId,
+        previousSessionId,
+        context: input.syntheticId,
+      });
+    }
+  }
+
+  yield loopStatusEvent({
+    runId: input.runId,
+    nodeId: input.nodeId,
+    message: `Loop step ${input.syntheticId} completed.`,
+  });
+
+  return output;
+}
+
 class WorkflowRunCanceledError extends Error {
   constructor() {
     super("Run canceled.");
@@ -352,18 +594,123 @@ function readAgentSessionId(event: unknown): string | undefined {
     : undefined;
 }
 
+function loopStatusEvent(input: {
+  runId: string;
+  nodeId: string;
+  message: string;
+  status?: "running" | "warning";
+}): WorkflowRunEvent {
+  return {
+    type: "node_event",
+    runId: input.runId,
+    nodeId: input.nodeId,
+    event: {
+      type: "status",
+      status: input.status ?? "running",
+      stage: input.status ?? "running",
+      message: input.message,
+    },
+  };
+}
+
+function createLoopStepId(
+  loopId: string,
+  iteration: number,
+  stepId: string,
+): string {
+  return `${loopId}[${iteration}].${stepId}`;
+}
+
+function renderLoopStepPrompt(input: {
+  step: WorkflowLoopStep;
+  loopNode: WorkflowNode;
+  workflowOutputs: Record<string, string>;
+  workflowInputs: Record<string, string> | undefined;
+  previousStepOutputs: Record<string, string>;
+  currentStepOutputs: Record<string, string>;
+}): string {
+  const bindings = new Map(
+    input.loopNode.inputs.map((binding) => [binding.name, binding.sourceNodeId]),
+  );
+
+  return renderTemplate(input.step.prompt, (name) => {
+    if (input.currentStepOutputs[name] !== undefined) {
+      return input.currentStepOutputs[name];
+    }
+    if (input.previousStepOutputs[name] !== undefined) {
+      return input.previousStepOutputs[name];
+    }
+
+    const sourceNodeId = bindings.get(name);
+    if (sourceNodeId) {
+      return input.workflowOutputs[sourceNodeId] ?? "";
+    }
+    return input.workflowInputs?.[name] ?? "";
+  });
+}
+
+function formatLoopOutput(input: {
+  node: WorkflowNode;
+  stopReason: "until_matched" | "max_iterations_reached";
+  iterations: Array<{
+    index: number;
+    outputs: Record<string, string>;
+    untilOutput: string;
+    untilMatched: boolean;
+  }>;
+  latestStepOutputs: Record<string, string>;
+}): string {
+  const loop = input.node.loop;
+  const lines = [
+    `Loop ${input.node.id} completed.`,
+    `Stop reason: ${input.stopReason}`,
+    `Iterations: ${input.iterations.length}`,
+  ];
+
+  if (loop) {
+    lines.push(
+      `Until: ${loop.until.source} includes ${JSON.stringify(loop.until.includes)}`,
+    );
+  }
+
+  lines.push("", "Final step outputs:");
+  for (const [stepId, output] of Object.entries(input.latestStepOutputs)) {
+    lines.push("", `[${stepId}]`, output.trim());
+  }
+
+  lines.push("", "Iteration summary:");
+  for (const iteration of input.iterations) {
+    const untilPreview = previewText(iteration.untilOutput);
+    lines.push(
+      `- Iteration ${iteration.index}: ${iteration.untilMatched ? "matched" : "not matched"}; until output: ${untilPreview}`,
+    );
+  }
+
+  return lines.join("\n").trim();
+}
+
+function previewText(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "(empty)";
+  }
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
+}
+
 function createWorkflowSessionStatusEvent(input: {
   runId: string;
   nodeId: string;
   sessionKey: string;
   agentSessionId: string;
   previousSessionId?: string;
+  context?: string;
 }): WorkflowRunEvent {
+  const suffix = input.context ? ` for ${input.context}` : "";
   const message = !input.previousSessionId
-    ? `Workflow session "${input.sessionKey}" captured agent session ${input.agentSessionId}.`
+    ? `Workflow session "${input.sessionKey}" captured agent session ${input.agentSessionId}${suffix}.`
     : input.previousSessionId === input.agentSessionId
-      ? `Workflow session "${input.sessionKey}" confirmed agent session ${input.agentSessionId}.`
-      : `Workflow session "${input.sessionKey}" switched from agent session ${input.previousSessionId} to ${input.agentSessionId}.`;
+      ? `Workflow session "${input.sessionKey}" confirmed agent session ${input.agentSessionId}${suffix}.`
+      : `Workflow session "${input.sessionKey}" switched from agent session ${input.previousSessionId} to ${input.agentSessionId}${suffix}.`;
 
   return {
     type: "node_event",

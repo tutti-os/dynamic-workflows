@@ -6,7 +6,7 @@ export type WorkflowExecutionPlan = {
 };
 
 export function isExecutableWorkflowNode(node: WorkflowNode): boolean {
-  return node.kind === "agent";
+  return node.kind === "agent" || node.kind === "loop";
 }
 
 export function createWorkflowExecutionPlan(

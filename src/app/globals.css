@@ -263,6 +263,25 @@ a {
   background: var(--background-fronted);
 }
 
+.workflow-project-select-content {
+  z-index: var(--z-dialog-popover) !important;
+}
+
+.project-select-item-label {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-select-item-label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .select-display {
   min-width: 0;
   overflow: hidden;

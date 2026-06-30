@@ -1,6 +1,6 @@
 import type { ApiErrorCode } from "@/lib/api/errors";
 
-export type WorkflowNodeKind = "agent" | "log" | "pipeline" | "dynamic";
+export type WorkflowNodeKind = "agent" | "log" | "pipeline" | "dynamic" | "loop";
 
 export type WorkflowNodeStatus =
   | "idle"
@@ -21,6 +21,32 @@ export type WorkflowInputBinding = {
   sourceNodeId?: string;
 };
 
+export type WorkflowLoopStep = {
+  id: string;
+  kind: "agent";
+  label: string;
+  prompt: string;
+  provider?: string;
+  model?: string;
+  session?: string;
+  templateRefs: string[];
+  sourceRange?: EditableRange;
+  promptRange?: EditableRange;
+  labelRange?: EditableRange;
+};
+
+export type WorkflowLoopUntil = {
+  source: string;
+  includes: string;
+};
+
+export type WorkflowLoopSpec = {
+  maxIterations: number;
+  session?: string;
+  steps: WorkflowLoopStep[];
+  until: WorkflowLoopUntil;
+};
+
 export type WorkflowNode = {
   id: string;
   kind: WorkflowNodeKind;
@@ -32,6 +58,7 @@ export type WorkflowNode = {
   provider?: string;
   model?: string;
   session?: string;
+  loop?: WorkflowLoopSpec;
   inputs: WorkflowInputBinding[];
   templateRefs: string[];
   sourceRange?: EditableRange;

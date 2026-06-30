@@ -35,4 +35,5 @@ export DYNAMIC_WORKFLOWS_DATA_DIR="${DYNAMIC_WORKFLOWS_DATA_DIR:-${TUTTI_APP_DAT
 mkdir -p "$DYNAMIC_WORKFLOWS_DATA_DIR"
 
 cd "$project_root"
+"$TUTTI_APP_NODE" ./tools/scripts/ensure-native-modules.mjs --fix
 exec "$TUTTI_APP_NPM" run dev -- -H "$host" -p "$port"

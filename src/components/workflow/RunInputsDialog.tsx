@@ -177,7 +177,7 @@ function ProviderSelect(props: {
         <PlatformIcon size={16} />
         <span className="select-display">{selected?.label ?? "Provider"}</span>
       </SelectTrigger>
-      <SelectContent align="start">
+      <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
         {props.providers.map((item) => (
           <SelectItem key={item.id} value={item.id} disabled={!item.supported}>
             {item.label}
@@ -205,7 +205,7 @@ function ModelSelect(props: {
           {props.value || "Default model"}
         </span>
       </SelectTrigger>
-      <SelectContent align="start">
+      <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
         <SelectItem value={DEFAULT_MODEL_VALUE}>Default model</SelectItem>
         {props.models.map((item) => (
           <SelectItem key={item} value={item}>
