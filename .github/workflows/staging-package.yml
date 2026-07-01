@@ -1,0 +1,49 @@
+name: Build Staging Tutti App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-staging-package:
+    name: Build staging package
+    runs-on: macos-15
+    environment: staging
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    concurrency:
+      group: dynamic-workflows-staging-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify native modules
+        run: npm run check:native
+
+      - name: Run quick checks
+        run: npm run check:quick
+
+      - name: Build staging package
+        run: npm run package:tutti:staging
+
+      - name: Upload staging package
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynamic-workflows-staging-tutti-app
+          path: .tmp/tutti-app/*.zip
+          if-no-files-found: error
+          retention-days: 14

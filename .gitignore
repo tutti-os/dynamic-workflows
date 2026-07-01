@@ -4,6 +4,7 @@ out
 dist
 coverage
 .tmp
+/package/
 .env
 .env.local
 .env.*.local
