@@ -1,49 +1,42 @@
-name: Build Staging Tutti App
+name: Publish Tutti App Staging
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      publish_catalog:
+        description: Whether to publish the staging App Center catalog after this release. Main branch pushes always publish the catalog.
+        required: false
+        type: boolean
+        default: false
+      catalog_only:
+        description: Whether to skip app release upload and only publish the existing latest release to staging catalog.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  build-staging-package:
-    name: Build staging package
-    runs-on: macos-15
-    environment: staging
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    concurrency:
-      group: dynamic-workflows-staging-${{ github.ref }}
-      cancel-in-progress: true
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Verify native modules
-        run: npm run check:native
-
-      - name: Run quick checks
-        run: npm run check:quick
-
-      - name: Build staging package
-        run: npm run package:tutti:staging
-
-      - name: Upload staging package
-        uses: actions/upload-artifact@v4
-        with:
-          name: dynamic-workflows-staging-tutti-app
-          path: .tmp/tutti-app/*.zip
-          if-no-files-found: error
-          retention-days: 14
+  publish:
+    uses: tutti-os/tutti/.github/workflows/publish-tutti-app-release.yml@main
+    with:
+      app_id: dynamic-workflows-staging
+      package_command: npm ci && npm run check:native && npm run check:quick && npm run package:tutti:staging
+      package_dir: package
+      icon_path: package/icon.svg
+      runner: macos-15
+      node_version: 22.22.3
+      pnpm_version: 10.11.0
+      aws_region: ${{ vars.TUTTI_APP_RELEASES_STAGING_AWS_REGION || vars.TUTTI_APP_RELEASES_AWS_REGION }}
+      aws_role_arn: ${{ vars.TUTTI_APP_RELEASES_STAGING_AWS_ROLE_ARN || vars.TUTTI_APP_RELEASES_AWS_ROLE_ARN }}
+      s3_bucket: ${{ vars.TUTTI_APP_RELEASES_STAGING_S3_BUCKET || vars.TUTTI_APP_RELEASES_S3_BUCKET }}
+      s3_prefix: ${{ vars.TUTTI_APP_RELEASES_STAGING_S3_PREFIX || 'tutti-app-releases-staging' }}
+      release_assets_base_url: ${{ vars.TUTTI_APP_RELEASES_STAGING_BASE_URL }}
+      publish_catalog: ${{ github.event_name == 'push' || inputs.publish_catalog }}
+      catalog_only: ${{ github.event_name == 'workflow_dispatch' && inputs.catalog_only }}
+      catalog_cloudfront_distribution_id: ${{ vars.TUTTI_APP_RELEASES_STAGING_CLOUDFRONT_DISTRIBUTION_ID || vars.TUTTI_APP_RELEASES_CLOUDFRONT_DISTRIBUTION_ID || '' }}
