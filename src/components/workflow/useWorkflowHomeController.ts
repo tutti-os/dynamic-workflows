@@ -35,8 +35,8 @@ type WorkflowHomeController = {
   createError: string | undefined;
   createDiagnostics: WorkflowDiagnostic[];
   createWorkflow: () => Promise<void>;
-  importScript: string;
-  setImportScript: (value: string) => void;
+  importFile: File | undefined;
+  setImportFile: (value: File | undefined) => void;
   isImporting: boolean;
   importError: string | undefined;
   importDiagnostics: WorkflowDiagnostic[];
@@ -59,7 +59,7 @@ export function useWorkflowHomeController(
     "all",
   );
   const [isCreating, setIsCreating] = useState(false);
-  const [importScript, setImportScript] = useState("");
+  const [importFile, setImportFile] = useState<File | undefined>();
   const [isImporting, setIsImporting] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | undefined>();
   const [deletingId, setDeletingId] = useState<string | undefined>();
@@ -146,12 +146,14 @@ export function useWorkflowHomeController(
   }
 
   async function importWorkflow() {
-    const script = importScript.trim();
-    if (!script) {
-      setImportError("Paste a workflow script before importing.");
+    if (!importFile) {
+      setImportError("Choose a workflow script file before importing.");
       setImportDiagnostics([]);
       return;
     }
+
+    const formData = new FormData();
+    formData.append("file", importFile, importFile.name);
 
     setIsImporting(true);
     setImportError(undefined);
@@ -161,8 +163,7 @@ export function useWorkflowHomeController(
         "/api/workflows/import",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ script }),
+          body: formData,
         },
         "WORKFLOW_IMPORT_FAILED",
       );
@@ -241,8 +242,8 @@ export function useWorkflowHomeController(
     createError,
     createDiagnostics,
     createWorkflow,
-    importScript,
-    setImportScript,
+    importFile,
+    setImportFile,
     isImporting,
     importError,
     importDiagnostics,

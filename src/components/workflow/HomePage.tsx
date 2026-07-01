@@ -34,8 +34,8 @@ export function HomePage() {
     createError,
     createDiagnostics,
     createWorkflow,
-    importScript,
-    setImportScript,
+    importFile,
+    setImportFile,
     isImporting,
     importError,
     importDiagnostics,
@@ -105,11 +105,11 @@ export function HomePage() {
           </div>
           <div className="section-heading-actions">
             <ImportWorkflowDialog
-              script={importScript}
+              file={importFile}
               isImporting={isImporting}
               importError={importError}
               importDiagnostics={importDiagnostics}
-              onScriptChange={setImportScript}
+              onFileChange={setImportFile}
               onImport={importWorkflow}
             />
           </div>

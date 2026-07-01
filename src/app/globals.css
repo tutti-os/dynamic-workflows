@@ -387,14 +387,45 @@ a {
   gap: 12px;
 }
 
-.import-textarea {
-  min-height: 260px;
-  resize: vertical;
+.import-file-input {
+  display: none;
+}
+
+.import-file-picker {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.import-file-picker > button {
+  flex: 0 0 auto;
+}
+
+.import-file-meta,
+.import-file-hint {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+}
+
+.import-file-meta {
+  justify-content: space-between;
+  gap: 12px;
   border: 1px solid var(--border-1);
-  background: var(--background-fronted);
-  font-family: var(--font-mono-system);
+  border-radius: 7px;
+  padding: 0 12px;
+  color: var(--text-secondary);
   font-size: 12px;
-  line-height: 1.55;
+}
+
+.import-file-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workflow-search,
@@ -1503,6 +1534,20 @@ a {
   .section-heading-actions,
   .import-dialog-trigger {
     width: 100%;
+  }
+
+  .import-file-picker {
+    flex-direction: column;
+  }
+
+  .import-file-picker > button,
+  .import-file-meta,
+  .import-file-hint {
+    width: 100%;
+  }
+
+  .import-file-meta {
+    min-height: 40px;
   }
 
   .detail-titlebar {
