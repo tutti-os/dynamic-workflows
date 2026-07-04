@@ -263,7 +263,7 @@ async function* runAgentNode(input: {
   loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const nodeRunId = `${input.runId}:${input.node.id}`;
-  const provider = input.node.provider ?? input.request.provider ?? "mock";
+  const agent = input.node.agent ?? input.request.agent ?? "mock";
   const model = input.node.model ?? input.request.model;
   const cwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
   const prompt = renderPrompt(input.node, input.outputs, input.request.inputs, {
@@ -281,7 +281,7 @@ async function* runAgentNode(input: {
     runId: input.runId,
     nodeId: input.node.id,
     node: input.node,
-    provider,
+    agent,
     model,
   };
 
@@ -313,7 +313,7 @@ async function* runAgentNode(input: {
 
     for await (const event of runAgent({
       runId: nodeRunId,
-      provider,
+      agent,
       cwd,
       prompt,
       model,
@@ -372,7 +372,7 @@ async function* runLoopNode(input: {
   loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const loop = input.node.loop;
-  const provider = input.node.provider ?? input.request.provider ?? "mock";
+  const agent = input.node.agent ?? input.request.agent ?? "mock";
   const model = input.node.model ?? input.request.model;
   const loopCwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
 
@@ -381,7 +381,7 @@ async function* runLoopNode(input: {
     runId: input.runId,
     nodeId: input.node.id,
     node: input.node,
-    provider,
+    agent,
     model,
   };
 
@@ -500,7 +500,7 @@ async function* runLoopNode(input: {
           step,
           prompt,
           appendPrompt,
-          defaultProvider: provider,
+          defaultAgent: agent,
           defaultModel: model,
           defaultSession: loop.session,
           cwd: stepCwd,
@@ -604,7 +604,7 @@ async function* runLoopAgentStep(input: {
   step: WorkflowLoopStep;
   prompt: string;
   appendPrompt?: string;
-  defaultProvider: string;
+  defaultAgent: string;
   defaultModel?: string;
   defaultSession?: WorkflowSessionSpec;
   cwd: string;
@@ -613,7 +613,7 @@ async function* runLoopAgentStep(input: {
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent, string> {
-  const provider = input.step.provider ?? input.defaultProvider;
+  const agent = input.step.agent ?? input.defaultAgent;
   const model = input.step.model ?? input.defaultModel;
   const runContext = resolveLoopStepRunContext({
     stepId: input.step.id,
@@ -652,7 +652,7 @@ async function* runLoopAgentStep(input: {
 
   for await (const event of runAgent({
     runId: `${input.runId}:${input.syntheticId}`,
-    provider,
+    agent,
     cwd: input.cwd,
     prompt: runContext.prompt,
     model,

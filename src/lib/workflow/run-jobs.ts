@@ -44,7 +44,7 @@ import type {
 export type WorkflowRunJobOptions = {
   workflowId: string;
   version: WorkflowVersionRecord;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd: string;
   executorKind: string;
@@ -77,7 +77,7 @@ export function startWorkflowRunJob(
     workflowId: options.workflowId,
     workflowVersionId: options.version.id,
     executorKind: options.executorKind,
-    provider: options.provider,
+    agent: options.agent,
     model: options.model,
     cwd: options.cwd,
     request: options.input,
@@ -148,7 +148,7 @@ export async function resumeWorkflowRunJob(input: {
       {
         workflowId: run.workflowId,
         version,
-        provider: run.provider ?? undefined,
+        agent: run.agent ?? undefined,
         model: run.model ?? undefined,
         cwd: run.cwd ?? process.cwd(),
         executorKind: run.executorKind,
@@ -250,7 +250,7 @@ async function executeWorkflowRunJob(
     for await (const event of runWorkflow({
       runId: run.id,
       script: options.version.script,
-      provider: options.provider,
+      agent: options.agent,
       model: options.model,
       cwd: options.cwd,
       inputs: options.inputs,

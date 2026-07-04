@@ -10,12 +10,12 @@ import { WorkflowIndexToolbar } from "@/components/workflow/WorkflowIndexToolbar
 
 export function HomePage() {
   const {
-    providers,
-    effectiveProvider,
+    agents,
+    effectiveAgent,
     model,
     modelOptions,
     cwd,
-    setProvider,
+    setAgent,
     setModel,
     setCwd,
   } = useWorkflowRunSettings();
@@ -46,7 +46,7 @@ export function HomePage() {
     duplicateWorkflow,
     deleteWorkflow,
   } = useWorkflowHomeController({
-    effectiveProvider,
+    effectiveAgent,
     model,
     cwd,
   });
@@ -73,8 +73,8 @@ export function HomePage() {
 
         <CreateWorkflowPanel
           prompt={prompt}
-          providers={providers}
-          provider={effectiveProvider}
+          agents={agents}
+          agent={effectiveAgent}
           model={model}
           modelOptions={modelOptions}
           cwd={cwd}
@@ -82,7 +82,7 @@ export function HomePage() {
           createError={createError}
           createDiagnostics={createDiagnostics}
           onPromptChange={setPrompt}
-          onProviderChange={setProvider}
+          onAgentChange={setAgent}
           onModelChange={setModel}
           onCwdChange={setCwd}
           onCreate={createWorkflow}

@@ -171,10 +171,10 @@ function describeLoopStepPromptMode(
 function describeLoopStepTarget(
   step: WorkflowLoopStep,
 ): { label: string; title: string } | undefined {
-  if (!step.provider && !step.model) {
+  if (!step.agent && !step.model) {
     return undefined;
   }
-  const label = [step.provider ?? "run default", step.model]
+  const label = [step.agent ?? "run default", step.model]
     .filter(Boolean)
     .join(" / ");
   return {

@@ -62,7 +62,7 @@ async function runGenerationJob(generationId: string) {
   try {
     const generated = await generateWorkflowScriptWithRepair({
       description: generation.prompt,
-      provider: generation.provider ?? undefined,
+      agent: generation.agent ?? undefined,
       model: generation.model ?? undefined,
       cwd: generation.cwd ?? undefined,
     });

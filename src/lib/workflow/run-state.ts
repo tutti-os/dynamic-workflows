@@ -213,9 +213,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
     nodeStatuses: isWorkflowNodeStatusRecord(raw.nodeStatuses)
       ? raw.nodeStatuses
       : {},
-    nodeSessions: isWorkflowNodeSessionRecord(raw.nodeSessions)
-      ? raw.nodeSessions
-      : {},
+    nodeSessions: readNodeSessionRecord(raw.nodeSessions),
     error: typeof raw.error === "string" ? raw.error : undefined,
     errorCode:
       typeof raw.errorCode === "string"
@@ -229,7 +227,7 @@ export function createRunDetailFromStartedEvent(input: {
   workflowId: string;
   workflowVersionId: string;
   executorKind: string;
-  provider?: string | null;
+  agent?: string | null;
   model?: string | null;
   cwd?: string | null;
   runInput: unknown;
@@ -246,7 +244,7 @@ export function createRunDetailFromStartedEvent(input: {
       executorKind: input.executorKind,
       externalRunId: null,
       status: "running",
-      provider: input.provider ?? null,
+      agent: input.agent ?? null,
       model: input.model ?? null,
       cwd: input.cwd ?? null,
       input: input.runInput,
@@ -375,16 +373,58 @@ function isWorkflowNodeStatus(value: unknown): value is WorkflowNodeStatus {
   );
 }
 
-function isWorkflowNodeSessionRecord(
+function readNodeSessionRecord(
   value: unknown,
-): value is Record<string, WorkflowNodeSessionRef> {
+): Record<string, WorkflowNodeSessionRef> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
+    return {};
   }
-  return Object.entries(value).every(
+  const entries = Object.entries(value).map(
     ([nodeId, session]) =>
-      typeof nodeId === "string" && isWorkflowNodeSessionRef(session),
+      [nodeId, normalizeLegacyNodeSession(session)] as const,
   );
+  if (
+    !entries.every(
+      ([nodeId, session]) =>
+        typeof nodeId === "string" && isWorkflowNodeSessionRef(session),
+    )
+  ) {
+    return {};
+  }
+  return Object.fromEntries(entries) as Record<string, WorkflowNodeSessionRef>;
+}
+
+// Runs persisted before the provider -> agent migration stored node sessions
+// keyed by provider id; upgrade them on read so old run details and resume
+// paths keep working.
+const LEGACY_PROVIDER_AGENT_IDS: Record<string, string> = {
+  codex: "local:codex",
+  claude: "local:claude-code",
+  "claude-code": "local:claude-code",
+};
+
+function legacyAgentFromProvider(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const provider = value.trim();
+  return LEGACY_PROVIDER_AGENT_IDS[provider] ?? provider;
+}
+
+function normalizeLegacyNodeSession(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.agent === "string" && raw.agent.trim()) {
+    return value;
+  }
+  const agent = legacyAgentFromProvider(raw.provider);
+  if (!agent) {
+    return value;
+  }
+  const { provider: _legacyProvider, ...rest } = raw;
+  return { ...rest, agent };
 }
 
 function isWorkflowNodeSessionRef(
@@ -397,7 +437,7 @@ function isWorkflowNodeSessionRef(
   return (
     typeof raw.nodeId === "string" &&
     typeof raw.agentSessionId === "string" &&
-    typeof raw.provider === "string" &&
+    typeof raw.agent === "string" &&
     isWorkflowNodeSessionStatus(raw.status) &&
     optionalString(raw.providerSessionId) &&
     optionalString(raw.model) &&
@@ -432,8 +472,11 @@ function readNodeSessionRef(
   const raw = value as Record<string, unknown>;
   const agentSessionId =
     typeof raw.agentSessionId === "string" ? raw.agentSessionId.trim() : "";
-  const provider = typeof raw.provider === "string" ? raw.provider.trim() : "";
-  if (!agentSessionId || !provider) {
+  const agent =
+    typeof raw.agent === "string" && raw.agent.trim()
+      ? raw.agent.trim()
+      : (legacyAgentFromProvider(raw.provider) ?? "");
+  if (!agentSessionId || !agent) {
     return undefined;
   }
   const status = isWorkflowNodeSessionStatus(raw.status)
@@ -442,7 +485,7 @@ function readNodeSessionRef(
   return {
     nodeId,
     agentSessionId,
-    provider,
+    agent,
     status,
     ...readOptionalStringProperty(raw, "providerSessionId"),
     ...readOptionalStringProperty(raw, "model"),
@@ -466,7 +509,7 @@ function withNodeSessionPatch(
     ...(current ?? {
       nodeId: patch.nodeId,
       agentSessionId: "",
-      provider: "",
+      agent: "",
       status: "running" as const,
     }),
     ...patch,

@@ -1,79 +1,81 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiJson } from "@/components/workflow/workflowApiClient";
-import type { AgentProviderOption } from "@/lib/agents/types";
+import type { AgentTargetOption } from "@/lib/agents/types";
 
 export const DEFAULT_MODEL_VALUE = "__default__";
 
-const FALLBACK_PROVIDERS: AgentProviderOption[] = [
+const FALLBACK_AGENTS: AgentTargetOption[] = [
   {
     id: "mock",
-    label: "Mock local agent",
+    name: "Mock local agent",
+    provider: "mock",
     supported: true,
     models: ["mock"],
   },
 ];
 
 export function useWorkflowRunSettings(): {
-  providers: AgentProviderOption[];
-  effectiveProvider: string;
+  agents: AgentTargetOption[];
+  effectiveAgent: string;
   model: string;
   modelOptions: string[];
   cwd: string;
-  setProvider: (value: string) => void;
+  setAgent: (value: string) => void;
   setModel: (value: string) => void;
   setCwd: (value: string) => void;
 } {
-  const [providers, setProviders] =
-    useState<AgentProviderOption[]>(FALLBACK_PROVIDERS);
-  const [provider, setProviderState] = useState("mock");
+  const [agents, setAgents] = useState<AgentTargetOption[]>(FALLBACK_AGENTS);
+  const [agent, setAgentState] = useState("mock");
   const [model, setModel] = useState("");
   const [cwd, setCwd] = useState("");
 
   useEffect(() => {
-    apiJson<{ providers?: AgentProviderOption[] }>(
-      "/api/agents/providers",
+    apiJson<{ targets?: AgentTargetOption[] }>(
+      "/api/agents/targets",
       undefined,
-      "PROVIDER_DETECTION_FAILED",
+      "AGENT_TARGET_DETECTION_FAILED",
     )
-      .then((data: { providers?: AgentProviderOption[] }) => {
-        const nextProviders =
-          data.providers && data.providers.length > 0
-            ? data.providers
-            : FALLBACK_PROVIDERS;
-        setProviders(nextProviders);
-        const preferredProvider =
-          nextProviders.find((item) => item.supported && item.id === "codex") ??
-          nextProviders.find((item) => item.supported && item.id !== "mock") ??
-          nextProviders.find((item) => item.supported);
-        if (preferredProvider) {
-          setProviderState(preferredProvider.id);
+      .then((data: { targets?: AgentTargetOption[] }) => {
+        const nextAgents =
+          data.targets && data.targets.length > 0
+            ? data.targets
+            : FALLBACK_AGENTS;
+        setAgents(nextAgents);
+        const preferredAgent =
+          nextAgents.find(
+            (item) => item.supported && item.id === "local:codex",
+          ) ??
+          nextAgents.find((item) => item.supported && item.id !== "mock") ??
+          nextAgents.find((item) => item.supported);
+        if (preferredAgent) {
+          setAgentState(preferredAgent.id);
         }
       })
       .catch(() => {
-        setProviders(FALLBACK_PROVIDERS);
+        setAgents(FALLBACK_AGENTS);
       });
   }, []);
 
-  const effectiveProvider = provider || FALLBACK_PROVIDERS[0].id;
-  const selectedProvider =
-    providers.find((item) => item.id === effectiveProvider) ?? providers[0];
+  const effectiveAgent = agent || FALLBACK_AGENTS[0].id;
+  const selectedAgent =
+    agents.find((item) => item.id === effectiveAgent) ?? agents[0];
   const modelOptions = useMemo(
-    () => selectedProvider?.models ?? [],
-    [selectedProvider?.models],
+    () => selectedAgent?.models ?? [],
+    [selectedAgent?.models],
   );
 
-  function setProvider(value: string) {
-    setProviderState(value);
+  function setAgent(value: string) {
+    setAgentState(value);
     setModel("");
   }
 
   return {
-    providers,
-    effectiveProvider,
+    agents,
+    effectiveAgent,
     model,
     modelOptions,
     cwd,
-    setProvider,
+    setAgent,
     setModel,
     setCwd,
   };

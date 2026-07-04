@@ -18,13 +18,13 @@ import type { ReactNode } from "react";
 import { DiagnosticsPanel } from "@/components/workflow/DiagnosticsPanel";
 import { DEFAULT_MODEL_VALUE } from "@/components/workflow/useWorkflowRunSettings";
 import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
-import type { AgentProviderOption } from "@/lib/agents/types";
+import type { AgentTargetOption } from "@/lib/agents/types";
 import type { WorkflowDiagnostic } from "@/lib/workflow/types";
 
 type CreateWorkflowPanelProps = {
   prompt: string;
-  providers: AgentProviderOption[];
-  provider: string;
+  agents: AgentTargetOption[];
+  agent: string;
   model: string;
   modelOptions: string[];
   cwd: string;
@@ -32,7 +32,7 @@ type CreateWorkflowPanelProps = {
   createError?: string;
   createDiagnostics: WorkflowDiagnostic[];
   onPromptChange: (value: string) => void;
-  onProviderChange: (value: string) => void;
+  onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
   onCreate: () => Promise<void>;
@@ -70,11 +70,11 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
       </div>
 
       <div className="create-controls">
-        <ControlField label="Provider">
-          <ProviderSelect
-            providers={props.providers}
-            value={props.provider}
-            onValueChange={props.onProviderChange}
+        <ControlField label="Agent">
+          <AgentSelect
+            agents={props.agents}
+            value={props.agent}
+            onValueChange={props.onAgentChange}
           />
         </ControlField>
         <ControlField label="Model">
@@ -129,12 +129,12 @@ function ControlField(props: { label: string; children: ReactNode }) {
   );
 }
 
-function ProviderSelect(props: {
-  providers: AgentProviderOption[];
+function AgentSelect(props: {
+  agents: AgentTargetOption[];
   value: string;
   onValueChange: (value: string) => void;
 }) {
-  const options = props.providers;
+  const options = props.agents;
   const selectedValue = props.value || options[0]?.id || "mock";
   const selected = options.find((item) => item.id === selectedValue);
 
@@ -149,12 +149,12 @@ function ProviderSelect(props: {
     >
       <SelectTrigger className="control-select">
         <PlatformIcon size={16} />
-        <span className="select-display">{selected?.label ?? "Provider"}</span>
+        <span className="select-display">{selected?.name ?? "Agent"}</span>
       </SelectTrigger>
       <SelectContent align="start">
         {options.map((item) => (
           <SelectItem key={item.id} value={item.id} disabled={!item.supported}>
-            {item.label}
+            {item.name}
           </SelectItem>
         ))}
       </SelectContent>

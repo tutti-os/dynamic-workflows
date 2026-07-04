@@ -20,12 +20,12 @@ import {
 } from "@tutti-os/ui-system";
 import { DEFAULT_MODEL_VALUE } from "@/components/workflow/useWorkflowRunSettings";
 import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
-import type { AgentProviderOption } from "@/lib/agents/types";
+import type { AgentTargetOption } from "@/lib/agents/types";
 
 type RunInputsDialogProps = {
   open: boolean;
-  providers: AgentProviderOption[];
-  provider: string;
+  agents: AgentTargetOption[];
+  agent: string;
   model: string;
   modelOptions: string[];
   cwd: string;
@@ -36,7 +36,7 @@ type RunInputsDialogProps = {
   missingCwd: boolean;
   isRunning: boolean;
   onOpenChange: (open: boolean) => void;
-  onProviderChange: (value: string) => void;
+  onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
   onRunInputChange: (name: string, value: string) => void;
@@ -65,11 +65,11 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
               <label>Run settings</label>
             </div>
             <label className="run-dialog-control-field">
-              <span>Provider</span>
-              <ProviderSelect
-                providers={props.providers}
-                value={props.provider}
-                onValueChange={props.onProviderChange}
+              <span>Agent</span>
+              <AgentSelect
+                agents={props.agents}
+                value={props.agent}
+                onValueChange={props.onAgentChange}
               />
             </label>
             <label className="run-dialog-control-field">
@@ -171,13 +171,13 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
   );
 }
 
-function ProviderSelect(props: {
-  providers: AgentProviderOption[];
+function AgentSelect(props: {
+  agents: AgentTargetOption[];
   value: string;
   onValueChange: (value: string) => void;
 }) {
-  const selectedValue = props.value || props.providers[0]?.id || "";
-  const selected = props.providers.find((item) => item.id === selectedValue);
+  const selectedValue = props.value || props.agents[0]?.id || "";
+  const selected = props.agents.find((item) => item.id === selectedValue);
 
   return (
     <Select
@@ -190,12 +190,12 @@ function ProviderSelect(props: {
     >
       <SelectTrigger className="control-select">
         <PlatformIcon size={16} />
-        <span className="select-display">{selected?.label ?? "Provider"}</span>
+        <span className="select-display">{selected?.name ?? "Agent"}</span>
       </SelectTrigger>
       <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
-        {props.providers.map((item) => (
+        {props.agents.map((item) => (
           <SelectItem key={item.id} value={item.id} disabled={!item.supported}>
-            {item.label}
+            {item.name}
           </SelectItem>
         ))}
       </SelectContent>

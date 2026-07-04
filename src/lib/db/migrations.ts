@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -36,6 +36,10 @@ export function migrateDb(database: Database.Database): void {
       if (currentVersion < 5) {
         applySchemaV5(database);
         recordSchemaMigration(database, 5);
+      }
+      if (currentVersion < 6) {
+        applySchemaV6(database);
+        recordSchemaMigration(database, 6);
       }
     })();
 }
@@ -184,4 +188,26 @@ function applySchemaV5(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_workflow_run_checkpoints_run_id
       ON workflow_run_checkpoints(run_id);
   `);
+}
+
+function applySchemaV6(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_runs RENAME COLUMN provider TO agent;
+    ALTER TABLE workflow_generations RENAME COLUMN provider TO agent;
+    ALTER TABLE workflow_edit_jobs RENAME COLUMN provider TO agent;
+  `);
+
+  // Stored values move from provider ids to agent target ids so retry and
+  // resume paths keep resolving after the rename.
+  for (const table of [
+    "workflow_runs",
+    "workflow_generations",
+    "workflow_edit_jobs",
+  ]) {
+    database.exec(`
+      UPDATE ${table} SET agent = 'local:codex' WHERE agent = 'codex';
+      UPDATE ${table} SET agent = 'local:claude-code'
+        WHERE agent IN ('claude-code', 'claude');
+    `);
+  }
 }

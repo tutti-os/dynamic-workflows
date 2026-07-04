@@ -34,6 +34,15 @@ describe("migrateDb", () => {
           "updated_at",
         ]),
       );
+      for (const table of [
+        "workflow_runs",
+        "workflow_generations",
+        "workflow_edit_jobs",
+      ]) {
+        const columns = readColumnNames(database, table);
+        expect(columns).toContain("agent");
+        expect(columns).not.toContain("provider");
+      }
       expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
     } finally {
       database.close();
@@ -89,6 +98,24 @@ describe("migrateDb", () => {
           'workflow-1', 'Existing', 'Existing workflow', NULL,
           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
         );
+
+        INSERT INTO workflow_versions (
+          id, workflow_id, version, script, meta_json, created_at
+        ) VALUES (
+          'version-1', 'workflow-1', 1, 'export const meta = {}', '{}',
+          '2026-01-01T00:00:00.000Z'
+        );
+
+        INSERT INTO workflow_runs (
+          id, workflow_id, workflow_version_id, executor_kind, status,
+          provider, input_json, started_at
+        ) VALUES
+          ('run-1', 'workflow-1', 'version-1', 'local-agent', 'completed',
+           'codex', '{}', '2026-01-02T00:00:00.000Z'),
+          ('run-2', 'workflow-1', 'version-1', 'local-agent', 'completed',
+           'claude-code', '{}', '2026-01-03T00:00:00.000Z'),
+          ('run-3', 'workflow-1', 'version-1', 'mock', 'completed',
+           'mock', '{}', '2026-01-04T00:00:00.000Z');
       `);
 
       migrateDb(database);
@@ -109,6 +136,18 @@ describe("migrateDb", () => {
       expect(readColumnNames(database, "workflow_edit_jobs")).toContain(
         "agent_session_id",
       );
+      const runColumns = readColumnNames(database, "workflow_runs");
+      expect(runColumns).toContain("agent");
+      expect(runColumns).not.toContain("provider");
+      expect(
+        database
+          .prepare("SELECT id, agent FROM workflow_runs ORDER BY id")
+          .all(),
+      ).toEqual([
+        { id: "run-1", agent: "local:codex" },
+        { id: "run-2", agent: "local:claude-code" },
+        { id: "run-3", agent: "mock" },
+      ]);
     } finally {
       database.close();
     }

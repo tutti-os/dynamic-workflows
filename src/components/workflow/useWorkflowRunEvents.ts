@@ -21,7 +21,7 @@ import type {
 export type PendingRunContext = {
   workflowVersionId: string;
   executorKind: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   input: unknown;
@@ -169,7 +169,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     if (event.type === "node_started") {
       setEventLog((events) => [
         ...events,
-        `${event.nodeId}: started via ${event.provider}${event.model ? ` / ${event.model}` : ""}`,
+        `${event.nodeId}: started via ${event.agent}${event.model ? ` / ${event.model}` : ""}`,
       ]);
       return;
     }
@@ -278,7 +278,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
           input.detail?.currentVersion?.id ??
           "",
         executorKind: context?.executorKind ?? "local-agent",
-        provider: context?.provider,
+        agent: context?.agent,
         model: context?.model,
         cwd: context?.cwd,
         runInput: context?.input ?? {},

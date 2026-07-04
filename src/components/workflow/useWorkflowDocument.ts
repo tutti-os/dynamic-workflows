@@ -66,7 +66,7 @@ export function useWorkflowDocument(input: {
   agentEditWorkflow: (input: {
     instruction: string;
     baseVersionId?: string;
-    provider?: string;
+    agent?: string;
     model?: string;
     cwd?: string;
   }) => Promise<void>;
@@ -521,7 +521,7 @@ export function useWorkflowDocument(input: {
   async function agentEditWorkflow(input: {
     instruction: string;
     baseVersionId?: string;
-    provider?: string;
+    agent?: string;
     model?: string;
     cwd?: string;
   }) {
@@ -542,7 +542,7 @@ export function useWorkflowDocument(input: {
           body: JSON.stringify({
             instruction,
             baseVersionId: input.baseVersionId,
-            provider: input.provider,
+            agent: input.agent,
             model: input.model,
             cwd: input.cwd,
           }),

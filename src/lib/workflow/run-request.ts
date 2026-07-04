@@ -13,7 +13,7 @@ type PreparedWorkflowRun = WorkflowRunJobOptions;
 type WorkflowRunRequestBody = {
   script?: string;
   versionId?: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   inputs?: unknown;
@@ -63,14 +63,14 @@ export async function prepareCurrentWorkflowRun(input: {
   return {
     workflowId: input.workflowId,
     version,
-    executorKind: body.provider === "mock" ? "mock" : "local-agent",
-    provider: body.provider,
+    executorKind: body.agent === "mock" ? "mock" : "local-agent",
+    agent: body.agent,
     model: body.model,
     cwd,
     inputs,
     input: {
       inputs,
-      provider: body.provider,
+      agent: body.agent,
       model: body.model,
       cwd,
       autoSavedVersion: script !== requestedVersion.script,
@@ -108,14 +108,14 @@ export function prepareRetryWorkflowRun(input: {
     workflowId: input.workflowId,
     version,
     executorKind: sourceRun.executorKind,
-    provider: sourceRun.provider ?? undefined,
+    agent: sourceRun.agent ?? undefined,
     model: sourceRun.model ?? undefined,
     cwd,
     inputs,
     input: {
       inputs,
       retryOfRunId: sourceRun.id,
-      provider: sourceRun.provider,
+      agent: sourceRun.agent,
       model: sourceRun.model,
       cwd,
     },

@@ -4,7 +4,7 @@ import {
   latestAssistantText,
   newestAssistantText,
   parseNextopJson,
-  parseProviderOptions,
+  parseProviderAvailability,
   parseSessionFromOutput,
   resolveNextopCliPath,
 } from "./nextopCliAdapter";
@@ -39,36 +39,29 @@ describe("nextop cli adapter", () => {
     expect(() => parseNextopJson("not json")).toThrow(/invalid JSON/);
   });
 
-  it("maps provider availability to provider options", () => {
+  it("maps provider availability by provider id", () => {
     expect(
-      parseProviderOptions({
+      parseProviderAvailability({
         providers: [
           { provider: "claude-code", status: "unavailable", detail: "login" },
           { provider: "codex", status: "available" },
         ],
       }),
-    ).toEqual([
-      {
-        id: "codex",
-        label: "Codex",
-        supported: true,
-        models: [],
-        reason: undefined,
-      },
-      {
-        id: "claude-code",
-        label: "Claude Code",
-        supported: false,
-        models: [],
-        reason: "login",
-      },
-    ]);
+    ).toEqual(
+      new Map([
+        [
+          "claude-code",
+          { provider: "claude-code", supported: false, reason: "login" },
+        ],
+        ["codex", { provider: "codex", supported: true, reason: undefined }],
+      ]),
+    );
   });
 
-  it("uses local Codex detection when Nextop reports Codex unavailable", async () => {
+  it("lists agent targets using local Codex detection when Nextop reports Codex unavailable", async () => {
     const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       providerDetectionTimeoutMs: 123,
       providerModelsTimeoutMs: 456,
       commandDetector: async (command) =>
@@ -96,13 +89,22 @@ describe("nextop cli adapter", () => {
       },
     });
 
-    await expect(adapter.listProviders()).resolves.toEqual([
+    await expect(adapter.listTargets()).resolves.toEqual([
       {
-        id: "codex",
-        label: "Codex",
+        id: "local:codex",
+        name: "Codex",
+        provider: "codex",
         supported: true,
         models: ["gpt-5.5"],
         reason: "/Users/me/.local/bin/codex",
+      },
+      {
+        id: "local:claude-code",
+        name: "Claude Code",
+        provider: "claude-code",
+        supported: false,
+        models: [],
+        reason: undefined,
       },
     ]);
     expect(calls).toContainEqual({
@@ -117,7 +119,7 @@ describe("nextop cli adapter", () => {
 
   it("falls back to local Codex when provider discovery fails", async () => {
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       commandDetector: async (command) =>
         command === "codex" ? "/Users/me/.local/bin/codex" : undefined,
       runner: async (args) => {
@@ -128,13 +130,22 @@ describe("nextop cli adapter", () => {
       },
     });
 
-    await expect(adapter.listProviders()).resolves.toEqual([
+    await expect(adapter.listTargets()).resolves.toEqual([
       {
-        id: "codex",
-        label: "Codex",
+        id: "local:codex",
+        name: "Codex",
+        provider: "codex",
         supported: true,
         models: [],
         reason: "/Users/me/.local/bin/codex",
+      },
+      {
+        id: "local:claude-code",
+        name: "Claude Code",
+        provider: "claude-code",
+        supported: false,
+        models: [],
+        reason: undefined,
       },
     ]);
   });
@@ -168,7 +179,7 @@ describe("nextop cli adapter", () => {
   it("streams session refs and final text from polling", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
@@ -211,7 +222,7 @@ describe("nextop cli adapter", () => {
     const events = [];
     for await (const event of adapter.run({
       runId: "run-1:scan",
-      provider: "codex",
+      agent: "local:codex",
       cwd: "/tmp/project",
       prompt: "scan",
       model: "gpt-5",
@@ -235,7 +246,7 @@ describe("nextop cli adapter", () => {
       type: "session_ref",
       session: {
         agentSessionId: "session-1",
-        provider: "codex",
+        agent: "local:codex",
         model: "gpt-5",
         status: "running",
       },
@@ -252,7 +263,7 @@ describe("nextop cli adapter", () => {
     const calls: string[][] = [];
     let pollCount = 0;
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
@@ -309,7 +320,7 @@ describe("nextop cli adapter", () => {
     const events = [];
     for await (const event of adapter.run({
       runId: "run-1:scan",
-      provider: "codex",
+      agent: "local:codex",
       cwd: "/tmp/project",
       prompt: "scan",
       model: "gpt-5",
@@ -332,7 +343,7 @@ describe("nextop cli adapter", () => {
       type: "session_ref",
       session: {
         agentSessionId: "session-1",
-        provider: "codex",
+        agent: "local:codex",
         model: "gpt-5",
         status: "completed",
       },
@@ -348,7 +359,7 @@ describe("nextop cli adapter", () => {
   it("sends prompts to an existing session when resumeSessionId is provided", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
@@ -408,7 +419,7 @@ describe("nextop cli adapter", () => {
     const events = [];
     for await (const event of adapter.run({
       runId: "run-1:revise",
-      provider: "codex",
+      agent: "local:codex",
       cwd: "/tmp/project",
       prompt: "revise",
       resumeSessionId: "session-1",
@@ -456,7 +467,7 @@ describe("nextop cli adapter", () => {
   it("reads final text from descending tail pages after completion", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
@@ -524,7 +535,7 @@ describe("nextop cli adapter", () => {
     const events = [];
     for await (const event of adapter.run({
       runId: "run-1:scan",
-      provider: "codex",
+      agent: "local:codex",
       cwd: "/tmp/project",
       prompt: "scan",
       model: "gpt-5",
@@ -568,7 +579,7 @@ describe("nextop cli adapter", () => {
     const calls: string[][] = [];
     const abortController = new AbortController();
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
@@ -597,7 +608,7 @@ describe("nextop cli adapter", () => {
     const events = [];
     for await (const event of adapter.run({
       runId: "run-1:scan",
-      provider: "codex",
+      agent: "local:codex",
       cwd: "/tmp/project",
       prompt: "scan",
       model: "gpt-5",
@@ -626,7 +637,7 @@ describe("nextop cli adapter", () => {
   it("opens sessions with the session-id flag", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
-      includeMockProvider: false,
+      includeMockTarget: false,
       runner: async (args) => {
         calls.push(args);
         return {

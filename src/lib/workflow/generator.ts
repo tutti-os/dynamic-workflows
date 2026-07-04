@@ -18,7 +18,7 @@ export type EditedWorkflowScript = GeneratedWorkflowScript;
 
 export async function generateWorkflowScript(input: {
   description: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
 }): Promise<string> {
@@ -27,11 +27,11 @@ export async function generateWorkflowScript(input: {
 
 export async function generateWorkflowScriptWithRepair(input: {
   description: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
 }): Promise<GeneratedWorkflowScript> {
-  if (!input.description.trim() || input.provider === "mock" || !input.provider) {
+  if (!input.description.trim() || input.agent === "mock" || !input.agent) {
     const script = personalizeSample(input.description);
     assertWorkflowScriptValid(script);
     return {
@@ -50,14 +50,14 @@ Rules:
 - Use "export const meta = { name, description }"; add requiresCwd: true when the workflow must be launched from an explicit project directory.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
-- A normal agent can include provider and model to override the run defaults.
+- A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
 - Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
-- A loop can include provider and model as defaults for its steps.
+- A loop can include agent and model as defaults for its steps.
 - Use cwd on loop({...}) as the default cwd for its steps; step cwd overrides loop cwd.
 - loop maxIterations must be an integer from 1 to 10.
 - loop steps must be agent({ id, label, prompt }) calls; use session: { mode: "inherit", key: "role_room" } when a role should keep its own conversation across iterations.
-- A loop step agent can include provider and model to override the loop and run defaults for that role.
+- A loop step agent can include agent and model to override the loop and run defaults for that role.
 - A loop step can include cwd when that role must run in a specific directory.
 - Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
 - Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
@@ -78,7 +78,7 @@ Rules:
   const cwd = resolveWorkflowCwd(input.cwd);
   const generated = stripCodeFence(
     (await collectAgentText({
-      provider: input.provider,
+      agent: input.agent,
       model: input.model,
       cwd,
       prompt,
@@ -99,7 +99,7 @@ Rules:
 
     const repaired = stripCodeFence(
       await collectAgentText({
-        provider: input.provider,
+        agent: input.agent,
         model: input.model,
         cwd,
         prompt: buildRepairPrompt({
@@ -122,7 +122,7 @@ Rules:
 export async function editWorkflowScriptWithRepair(input: {
   currentScript: string;
   instruction: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   onEvent?: (event: AgentRuntimeEvent) => void;
@@ -131,7 +131,7 @@ export async function editWorkflowScriptWithRepair(input: {
   if (!input.instruction.trim()) {
     throw new Error("Instruction is required");
   }
-  if (input.provider === "mock" || !input.provider) {
+  if (input.agent === "mock" || !input.agent) {
     return {
       script: input.currentScript,
       repaired: false,
@@ -146,7 +146,7 @@ export async function editWorkflowScriptWithRepair(input: {
   });
   const edited = stripCodeFence(
     await collectAgentText({
-      provider: input.provider,
+      agent: input.agent,
       model: input.model,
       cwd,
       prompt,
@@ -168,7 +168,7 @@ export async function editWorkflowScriptWithRepair(input: {
 
     const repaired = stripCodeFence(
       await collectAgentText({
-        provider: input.provider,
+        agent: input.agent,
         model: input.model,
         cwd,
         prompt: buildEditRepairPrompt({
@@ -206,7 +206,7 @@ function stripCodeFence(value: string): string {
 }
 
 async function collectAgentText(input: {
-  provider: string;
+  agent: string;
   model?: string;
   cwd: string;
   prompt: string;
@@ -215,7 +215,7 @@ async function collectAgentText(input: {
   let text = "";
   for await (const event of runAgent({
     runId: randomUUID(),
-    provider: input.provider,
+    agent: input.agent,
     cwd: input.cwd,
     prompt: input.prompt,
     model: input.model,
@@ -258,14 +258,14 @@ Rules:
 - Use "export const meta = { name, description }"; add requiresCwd: true when the workflow must be launched from an explicit project directory.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
-- A normal agent can include provider and model to override the run defaults.
+- A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
 - Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
-- A loop can include provider and model as defaults for its steps.
+- A loop can include agent and model as defaults for its steps.
 - Use cwd on loop({...}) as the default cwd for its steps; step cwd overrides loop cwd.
 - loop maxIterations must be an integer from 1 to 10.
 - loop steps must be agent({ id, label, prompt }) calls; use session: { mode: "inherit", key: "role_room" } when a role should keep its own conversation across iterations.
-- A loop step agent can include provider and model to override the loop and run defaults for that role.
+- A loop step agent can include agent and model to override the loop and run defaults for that role.
 - A loop step can include cwd when that role must run in a specific directory.
 - Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
 - Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
@@ -304,14 +304,14 @@ Rules:
 - Keep "export const meta = { name, description }"; update meta only when useful for the requested edit.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
-- A normal agent can include provider and model to override the run defaults.
+- A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
 - Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows.
-- A loop can include provider and model as defaults for its steps.
+- A loop can include agent and model as defaults for its steps.
 - Use cwd on loop({...}) as the default cwd for its steps; step cwd overrides loop cwd.
 - loop maxIterations must be an integer from 1 to 10.
 - loop steps must be agent({ id, label, prompt }) calls.
-- A loop step agent can include provider and model to override the loop and run defaults for that role.
+- A loop step agent can include agent and model to override the loop and run defaults for that role.
 - Use appendPrompt on inherited loop steps only when later iterations should send deltas.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
@@ -356,7 +356,7 @@ Rules:
 - Return the complete updated JavaScript workflow script only, no markdown fences.
 - Preserve the requested edit and unrelated existing behavior.
 - Use only supported workflow primitives: meta, phase, agent, loop.
-- Preserve or add provider and model on agent or loop step objects when the user asks for role-specific agent targets.
+- Preserve or add agent and model on agent or loop step objects when the user asks for role-specific agent targets.
 - Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
 - Do not modify files in the working directory; only return the updated workflow script.`;
 }

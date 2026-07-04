@@ -41,7 +41,7 @@ export async function POST(
   const body = (await request.json()) as {
     instruction?: string;
     baseVersionId?: string;
-    provider?: string;
+    agent?: string;
     model?: string;
     cwd?: string;
   };
@@ -55,7 +55,7 @@ export async function POST(
       workflowId: id,
       instruction,
       baseVersionId: body.baseVersionId,
-      provider: body.provider,
+      agent: body.agent,
       model: body.model,
       cwd: body.cwd,
     });

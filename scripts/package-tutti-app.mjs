@@ -317,7 +317,7 @@ function packageAgents({ cliScope, environment }) {
     "- It requires `TUTTI_APP_DATA_DIR` and maps workflow data to `DYNAMIC_WORKFLOWS_DATA_DIR` under that directory.",
     "- The package directory is treated as read-only at runtime.",
     "- Workflow cwd validation is rooted at `DYNAMIC_WORKFLOWS_CWD_ROOT`, falling back to `TUTTI_WORKSPACE_ROOT` and then this package directory.",
-    "- Agent/provider discovery uses `TUTTI_CLI`; `bootstrap.sh` also sets `NEXTOP_CLI_PATH` from it for existing adapter compatibility.",
+    "- Agent target discovery uses `TUTTI_CLI`; `bootstrap.sh` also sets `NEXTOP_CLI_PATH` from it for existing adapter compatibility.",
     "- The manifest healthcheck is `GET /api/health`.",
     "",
     "CLI integration:",

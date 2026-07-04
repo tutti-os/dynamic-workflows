@@ -84,7 +84,7 @@ describe("workflow version publishing", () => {
     const firstEdit = createWorkflowEditJob({
       workflowId: created.workflow.id,
       instruction: "Split the first step",
-      provider: "codex",
+      agent: "local:codex",
       model: "default",
       cwd: "/tmp",
     });
@@ -108,7 +108,7 @@ describe("workflow version publishing", () => {
     expect(retry.workflowId).toBe(firstEdit.workflowId);
     expect(retry.baseVersionId).toBe(firstEdit.baseVersionId);
     expect(retry.instruction).toBe(firstEdit.instruction);
-    expect(retry.provider).toBe(firstEdit.provider);
+    expect(retry.agent).toBe(firstEdit.agent);
     expect(retry.model).toBe(firstEdit.model);
     expect(retry.cwd).toBe(firstEdit.cwd);
   });
@@ -129,7 +129,7 @@ describe("workflow version publishing", () => {
     const edit = createWorkflowEditJob({
       workflowId: created.workflow.id,
       instruction: "Split the first step",
-      provider: "codex",
+      agent: "local:codex",
     });
     markWorkflowEditJobRunning(edit.id);
 
@@ -163,7 +163,7 @@ describe("workflow version publishing", () => {
       workflowId: created.workflow.id,
       workflowVersionId: version.id,
       executorKind: "mock",
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
       request: { inputs: {} },
     });

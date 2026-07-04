@@ -117,7 +117,7 @@ function RunDetailHeader(props: {
         <Badge variant={runStatusBadge(run.status)}>{run.status}</Badge>
         <Badge variant="default">{props.versionLabel}</Badge>
         <span>
-          {run.provider ?? run.executorKind}
+          {run.agent ?? run.executorKind}
           {run.model ? ` · ${run.model}` : ""}
         </span>
       </div>
@@ -202,7 +202,7 @@ function RunNodeDetailSection(props: {
             <RunFact label="Agent Session" value={session.agentSessionId} />
             <RunFact
               label="Agent"
-              value={`${session.provider}${session.model ? ` · ${session.model}` : ""}`}
+              value={`${session.agent}${session.model ? ` · ${session.model}` : ""}`}
             />
           </>
         ) : null}

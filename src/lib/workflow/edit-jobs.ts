@@ -68,7 +68,7 @@ async function runEditJob(editId: string) {
     const edited = await editWorkflowScriptWithRepair({
       currentScript: baseVersion.script,
       instruction: edit.instruction,
-      provider: edit.provider ?? undefined,
+      agent: edit.agent ?? undefined,
       model: edit.model ?? undefined,
       cwd: edit.cwd ?? undefined,
       onEvent: (event) => {

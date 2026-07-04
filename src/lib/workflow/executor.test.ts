@@ -30,7 +30,7 @@ describe("runWorkflow", () => {
         type: "session_ref",
         session: {
           agentSessionId: input.resumeSessionId ?? "session-1",
-          provider: input.provider,
+          agent: input.agent,
           model: input.model,
           status: "running",
         },
@@ -54,7 +54,7 @@ describe("runWorkflow", () => {
 const first = await agent({ id: "first", session: { mode: "inherit", key: "writer" }, prompt: "one" })
 const second = await agent({ id: "second", session: { mode: "inherit", key: "writer" }, prompt: "two" })
 `,
-      provider: "codex",
+      agent: "local:codex",
       model: "gpt-5",
       cwd: process.cwd(),
     })) {
@@ -105,7 +105,7 @@ const second = await agent({ id: "second", session: { mode: "inherit", key: "wri
 const first = await agent({ id: "first", cwd: "lib", prompt: "one" })
 const second = await agent({ id: "second", inputs: { first }, prompt: "two {{first}}" })
 `,
-      provider: "codex",
+      agent: "local:codex",
       cwd: "src",
     })) {
       // drain
@@ -128,7 +128,7 @@ const second = await agent({ id: "second", inputs: { first }, prompt: "two {{fir
         type: "session_ref",
         session: {
           agentSessionId: input.attachSessionId ?? "session-2",
-          provider: input.provider,
+          agent: input.agent,
           model: input.model,
           status: "running",
         },
@@ -150,7 +150,7 @@ const second = await agent({ id: "second", inputs: { first }, prompt: "two {{fir
 const first = await agent({ id: "first", session: { mode: "inherit", key: "writer" }, prompt: "one" })
 const second = await agent({ id: "second", inputs: { first }, session: { mode: "inherit", key: "writer" }, prompt: "two {{first}}" })
 `,
-      provider: "codex",
+      agent: "local:codex",
       model: "gpt-5",
       cwd: process.cwd(),
       recovery: {
@@ -220,7 +220,7 @@ const second = await agent({ id: "second", inputs: { first }, session: { mode: "
 export const meta = { name: "cwd", description: "cwd", requiresCwd: true }
 const first = await agent({ id: "first", cwd: "lib", prompt: "cwd {{workflow.cwd}}" })
 `,
-      provider: "codex",
+      agent: "local:codex",
       cwd: "src",
     })) {
       // drain
@@ -238,7 +238,7 @@ const first = await agent({ id: "first", cwd: "lib", prompt: "cwd {{workflow.cwd
 export const meta = { name: "cwd", description: "cwd", requiresCwd: true }
 const first = await agent({ id: "first", prompt: "one" })
 `,
-        provider: "codex",
+        agent: "local:codex",
       })) {
         // drain
       }
@@ -278,7 +278,7 @@ const delivery = await loop({
   until: { source: "review", includes: "PASS:" },
 })
 `,
-      provider: "codex",
+      agent: "local:codex",
       cwd: process.cwd(),
     })) {
       // drain
@@ -290,11 +290,11 @@ const delivery = await loop({
     ]);
   });
 
-  it("lets loop steps override loop and run provider settings", async () => {
+  it("lets loop steps override loop and run agent settings", async () => {
     const calls: AgentRunInput[] = [];
     const nodeStarts: Array<{
       nodeId: string;
-      provider: string;
+      agent: string;
       model?: string;
     }> = [];
 
@@ -317,24 +317,24 @@ const delivery = await loop({
       script: `
 const delivery = await loop({
   id: "delivery",
-  provider: "claude-code",
+  agent: "local:claude-code",
   model: "claude-sonnet-4",
   maxIterations: 1,
   steps: [
-    agent({ id: "rd", provider: "codex", model: "gpt-5.1", prompt: "work" }),
+    agent({ id: "rd", agent: "local:codex", model: "gpt-5.1", prompt: "work" }),
     agent({ id: "review", prompt: "review {{rd}}" }),
   ],
   until: { source: "review", includes: "PASS:" },
 })
 `,
-      provider: "mock",
+      agent: "mock",
       model: "mock",
       cwd: process.cwd(),
     })) {
       if (event.type === "node_started") {
         nodeStarts.push({
           nodeId: event.nodeId,
-          provider: event.provider,
+          agent: event.agent,
           model: event.model,
         });
       }
@@ -342,12 +342,12 @@ const delivery = await loop({
 
     expect(nodeStarts).toContainEqual({
       nodeId: "delivery",
-      provider: "claude-code",
+      agent: "local:claude-code",
       model: "claude-sonnet-4",
     });
-    expect(calls.map((call) => [call.provider, call.model])).toEqual([
-      ["codex", "gpt-5.1"],
-      ["claude-code", "claude-sonnet-4"],
+    expect(calls.map((call) => [call.agent, call.model])).toEqual([
+      ["local:codex", "gpt-5.1"],
+      ["local:claude-code", "claude-sonnet-4"],
     ]);
   });
 
@@ -383,7 +383,7 @@ const delivery = await loop({
   until: { source: "review", includes: "PASS:" },
 })
 `,
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
       recovery: {
         loopStates: {
@@ -464,7 +464,7 @@ const delivery = await loop({
         type: "session_ref",
         session: {
           agentSessionId: input.resumeSessionId ?? "session-1",
-          provider: input.provider,
+          agent: input.agent,
           status: "running",
         },
       };
@@ -485,7 +485,7 @@ const delivery = await loop({
 const first = await agent({ id: "first", cwd: "src", session: { mode: "inherit", key: "writer" }, prompt: "one" })
 const second = await agent({ id: "second", cwd: "tools", session: { mode: "inherit", key: "writer" }, prompt: "two" })
 `,
-      provider: "codex",
+      agent: "local:codex",
       cwd: process.cwd(),
     })) {
       events.push(event);
@@ -519,7 +519,7 @@ const second = await agent({ id: "second", cwd: "tools", session: { mode: "inher
         type: "session_ref",
         session: {
           agentSessionId,
-          provider: input.provider,
+          agent: input.agent,
           status: "running",
         },
       };
@@ -558,7 +558,7 @@ feedback: {{acceptance}}\`,
   until: { source: "acceptance", includes: "PASS:" },
 })
 `,
-      provider: "codex",
+      agent: "local:codex",
       cwd: process.cwd(),
       inputs: { task: "ship loop" },
     })) {
@@ -633,7 +633,7 @@ const debate = await loop({
   until: { source: "moderator", includes: "RESOLVED:" },
 })
 `,
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
     })) {
       events.push(event);
@@ -679,7 +679,7 @@ const debate = await loop({
   until: { source: "moderator", includes: "RESOLVED:" },
 })
 `,
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
     })) {
       events.push(event);
@@ -708,7 +708,7 @@ const debate = await loop({
         type: "session_ref",
         session: {
           agentSessionId: `session-${calls.length}`,
-          provider: input.provider,
+          agent: input.agent,
           status: "running",
         },
       };
@@ -740,7 +740,7 @@ const debate = await loop({
   until: { source: "moderator", includes: "RESOLVED:" },
 })
 `,
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
     })) {
       // drain
@@ -768,7 +768,7 @@ const debate = await loop({
         session: {
           agentSessionId:
             input.resumeSessionId ?? (isRd ? "rd-session" : "qa-session"),
-          provider: input.provider,
+          agent: input.agent,
           status: "running",
         },
       };
@@ -797,7 +797,7 @@ const delivery = await loop({
   until: { source: "qa", includes: "PASS:" },
 })
 `,
-      provider: "codex",
+      agent: "local:codex",
       cwd: process.cwd(),
     })) {
       events.push(event);

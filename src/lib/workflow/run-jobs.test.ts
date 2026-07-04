@@ -64,7 +64,7 @@ describe("workflow run jobs recovery", () => {
       workflowId: detail.workflow.id,
       workflowVersionId: version.id,
       executorKind: "mock",
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
       request: { inputs: {} },
     });
@@ -79,7 +79,7 @@ describe("workflow run jobs recovery", () => {
       runId: run.id,
       nodeId: "first",
       node,
-      provider: "mock",
+      agent: "mock",
     });
     appendRunLogEvent(run.logPath, {
       type: "node_completed",
@@ -142,7 +142,7 @@ describe("workflow run jobs recovery", () => {
       workflowId: detail.workflow.id,
       workflowVersionId: version.id,
       executorKind: "mock",
-      provider: "mock",
+      agent: "mock",
       cwd: process.cwd(),
       request: { inputs: {} },
     });

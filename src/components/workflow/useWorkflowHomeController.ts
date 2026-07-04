@@ -15,7 +15,7 @@ const DEFAULT_WORKFLOW_PROMPT =
   "Inspect a repository, run architecture and security review agents, then synthesize an implementation brief.";
 
 type WorkflowHomeControllerInput = {
-  effectiveProvider: string;
+  effectiveAgent: string;
   model: string;
   cwd: string;
 };
@@ -125,7 +125,7 @@ export function useWorkflowHomeController(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             prompt: trimmed,
-            provider: input.effectiveProvider,
+            agent: input.effectiveAgent,
             model: input.model || undefined,
             cwd: input.cwd || undefined,
           }),

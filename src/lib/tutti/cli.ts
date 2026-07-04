@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { listAgentProviders } from "@/lib/agents/runtime";
-import type { AgentProviderOption } from "@/lib/agents/types";
+import { listAgentTargets } from "@/lib/agents/runtime";
+import type { AgentTargetOption } from "@/lib/agents/types";
 import {
   createWorkflowFromScript,
   getWorkflowDetail,
@@ -71,8 +71,8 @@ export async function handleDynamicWorkflowsCliRequest(
     switch (normalizedPath.join("/")) {
       case "status":
         return cliJson(await statusCommand());
-      case "providers":
-        return cliJson({ providers: await listAgentProviders() });
+      case "agents":
+        return cliJson({ agents: await listAgentTargets() });
       case "list":
         return listCommand(input, context);
       case "show":
@@ -99,7 +99,7 @@ export async function handleDynamicWorkflowsCliRequest(
 
 async function statusCommand() {
   const workflows = listWorkflows();
-  const providers = await readProvidersForStatus();
+  const agents = await readAgentTargetsForStatus();
   const latestRuns = workflows.flatMap((item) =>
     item.latestRun ? [item.latestRun] : [],
   );
@@ -115,26 +115,26 @@ async function statusCommand() {
       latestRunningCount: latestRuns.filter((run) => run.status === "running")
         .length,
     },
-    providers,
+    agents,
   };
 }
 
-async function readProvidersForStatus(): Promise<{
+async function readAgentTargetsForStatus(): Promise<{
   ok: boolean;
-  items: AgentProviderOption[];
+  items: AgentTargetOption[];
   error?: string;
 }> {
   try {
     return {
       ok: true,
-      items: await listAgentProviders(),
+      items: await listAgentTargets(),
     };
   } catch (error) {
     return {
       ok: false,
       items: [],
       error:
-        error instanceof Error ? error.message : "Provider detection failed.",
+        error instanceof Error ? error.message : "Agent target detection failed.",
     };
   }
 }
@@ -229,12 +229,12 @@ function validateCommand(input: CliInput) {
 
 async function createCommand(input: CliInput) {
   const prompt = readRequiredString(input, ["prompt"]);
-  const provider = readOptionalString(input, ["provider"]);
+  const agent = readOptionalString(input, ["agent"]);
   const model = readOptionalString(input, ["model"]);
   const cwd = readOptionalString(input, ["cwd"]);
   const generated = await generateWorkflowScriptWithRepair({
     description: prompt,
-    provider,
+    agent,
     model,
     cwd,
   });
@@ -251,7 +251,7 @@ async function createCommand(input: CliInput) {
 
 async function runCommand(input: CliInput) {
   const workflowId = readRequiredString(input, ["workflow-id", "workflowId"]);
-  const provider = readOptionalString(input, ["provider"]) ?? "mock";
+  const agent = readOptionalString(input, ["agent"]) ?? "mock";
   const model = readOptionalString(input, ["model"]);
   const cwd = readOptionalString(input, ["cwd"]);
   const versionId = readOptionalString(input, ["version-id", "versionId"]);
@@ -259,7 +259,7 @@ async function runCommand(input: CliInput) {
   const result = await runWorkflowForCli({
     workflowId,
     versionId,
-    provider,
+    agent,
     model,
     cwd,
     inputs,
@@ -285,7 +285,7 @@ async function resumeCommand(input: CliInput) {
 async function runWorkflowForCli(input: {
   workflowId: string;
   versionId?: string;
-  provider: string;
+  agent: string;
   model?: string;
   cwd?: string;
   inputs: Record<string, string>;
@@ -322,14 +322,14 @@ async function runWorkflowForCli(input: {
   const run = startWorkflowRunJob({
     workflowId: input.workflowId,
     version,
-    executorKind: input.provider === "mock" ? "mock" : "local-agent",
-    provider: input.provider,
+    executorKind: input.agent === "mock" ? "mock" : "local-agent",
+    agent: input.agent,
     model: input.model,
     cwd,
     inputs: input.inputs,
     input: {
       inputs: input.inputs,
-      provider: input.provider,
+      agent: input.agent,
       model: input.model,
       cwd,
     },
@@ -351,7 +351,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
       kind: node.kind,
       label: node.label,
       phase: node.phase,
-      provider: node.provider,
+      agent: node.agent,
       model: node.model,
       cwd: node.cwd,
       session: node.session,
@@ -367,7 +367,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
               id: step.id,
               kind: step.kind,
               label: step.label,
-              provider: step.provider,
+              agent: step.agent,
               model: step.model,
               cwd: step.cwd,
               session: step.session,

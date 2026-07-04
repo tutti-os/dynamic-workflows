@@ -88,7 +88,7 @@ function readRunResultFromEvents(events: WorkflowRunEvent[]) {
       executorKind: "local-agent",
       externalRunId: null,
       status: "running",
-      provider: null,
+      agent: null,
       model: null,
       cwd: null,
       input: {},
@@ -112,7 +112,7 @@ function readRunResultFromEvents(events: WorkflowRunEvent[]) {
 
 function formatRunNodeEvent(event: WorkflowRunEvent): string {
   if (event.type === "node_started") {
-    return `started via ${event.provider}${event.model ? ` / ${event.model}` : ""}`;
+    return `started via ${event.agent}${event.model ? ` / ${event.model}` : ""}`;
   }
   if (event.type === "node_event") {
     return `event: ${formatCompactJson(event.event)}`;

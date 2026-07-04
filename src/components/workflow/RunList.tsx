@@ -80,7 +80,7 @@ function RunListItem(props: {
         <div>
           <strong>{run.id}</strong>
           <span>
-            {run.provider ?? run.executorKind}
+            {run.agent ?? run.executorKind}
             {run.model ? ` · ${run.model}` : ""} · {props.versionLabel}
           </span>
         </div>

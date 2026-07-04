@@ -1,6 +1,7 @@
-export type AgentProviderOption = {
+export type AgentTargetOption = {
   id: string;
-  label: string;
+  name: string;
+  provider: string;
   supported: boolean;
   models: string[];
   reason?: string;
@@ -8,7 +9,7 @@ export type AgentProviderOption = {
 
 export type AgentRunInput = {
   runId: string;
-  provider: string;
+  agent: string;
   cwd: string;
   prompt: string;
   model?: string;
@@ -27,7 +28,7 @@ export type AgentSessionStatus =
 export type AgentSessionRef = {
   agentSessionId: string;
   providerSessionId?: string;
-  provider: string;
+  agent: string;
   model?: string;
   status?: AgentSessionStatus;
   title?: string;
@@ -102,7 +103,7 @@ export type AgentRuntimeEvent =
 export type AgentRuntimeAdapter = {
   id: string;
   label: string;
-  listProviders(): Promise<AgentProviderOption[]>;
+  listTargets(): Promise<AgentTargetOption[]>;
   run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent>;
   cancel?(runId: string): Promise<void>;
   openSession?(agentSessionId: string): Promise<void>;

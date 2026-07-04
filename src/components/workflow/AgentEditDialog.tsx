@@ -25,19 +25,19 @@ import type {
   WorkflowEditJobRecord,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows";
-import type { AgentProviderOption } from "@/lib/agents/types";
+import type { AgentTargetOption } from "@/lib/agents/types";
 
 type AgentEditDialogProps = {
   open: boolean;
   workflowId: string;
   baseVersion: WorkflowVersionRecord | null;
-  providers: AgentProviderOption[];
-  provider: string;
+  agents: AgentTargetOption[];
+  agent: string;
   model: string;
   modelOptions: string[];
   cwd: string;
   onOpenChange: (open: boolean) => void;
-  onProviderChange: (value: string) => void;
+  onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
   onVersionCreated: (version: WorkflowVersionRecord) => Promise<void>;
@@ -76,7 +76,7 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
 
   useEffect(() => {
     void recoverActiveEdit();
-    // Intentionally only keyed by workflow; provider/model changes should not
+    // Intentionally only keyed by workflow; agent/model changes should not
     // cause recovery requests.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.workflowId]);
@@ -123,7 +123,7 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
           body: JSON.stringify({
             instruction: trimmed,
             baseVersionId: props.baseVersion.id,
-            provider: props.provider,
+            agent: props.agent,
             model: props.model || undefined,
             cwd: props.cwd || undefined,
           }),
@@ -307,12 +307,12 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
 
           <section className="agent-edit-settings">
             <label className="run-dialog-control-field">
-              <span>Provider</span>
-              <ProviderSelect
-                providers={props.providers}
-                value={props.provider}
+              <span>Agent</span>
+              <AgentSelect
+                agents={props.agents}
+                value={props.agent}
                 disabled={isActive}
-                onValueChange={props.onProviderChange}
+                onValueChange={props.onAgentChange}
               />
             </label>
             <label className="run-dialog-control-field">
@@ -398,14 +398,14 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
   );
 }
 
-function ProviderSelect(props: {
-  providers: AgentProviderOption[];
+function AgentSelect(props: {
+  agents: AgentTargetOption[];
   value: string;
   disabled: boolean;
   onValueChange: (value: string) => void;
 }) {
-  const selectedValue = props.value || props.providers[0]?.id || "";
-  const selected = props.providers.find((item) => item.id === selectedValue);
+  const selectedValue = props.value || props.agents[0]?.id || "";
+  const selected = props.agents.find((item) => item.id === selectedValue);
 
   return (
     <Select
@@ -419,12 +419,12 @@ function ProviderSelect(props: {
     >
       <SelectTrigger className="control-select">
         <PlatformIcon size={16} />
-        <span className="select-display">{selected?.label ?? "Provider"}</span>
+        <span className="select-display">{selected?.name ?? "Agent"}</span>
       </SelectTrigger>
       <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
-        {props.providers.map((item) => (
+        {props.agents.map((item) => (
           <SelectItem key={item.id} value={item.id} disabled={!item.supported}>
-            {item.label}
+            {item.name}
           </SelectItem>
         ))}
       </SelectContent>

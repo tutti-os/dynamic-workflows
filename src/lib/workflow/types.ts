@@ -37,7 +37,7 @@ export type WorkflowLoopStep = {
   label: string;
   prompt: string;
   appendPrompt?: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   session?: WorkflowSessionSpec;
@@ -69,7 +69,7 @@ export type WorkflowNode = {
   variableName?: string;
   prompt?: string;
   message?: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   session?: WorkflowSessionSpec;
@@ -120,7 +120,7 @@ export type ParsedWorkflow = {
 export type WorkflowRunRequest = {
   runId?: string;
   script: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   inputs?: Record<string, string>;
@@ -168,7 +168,7 @@ export type WorkflowNodeSessionRef = {
   nodeId: string;
   agentSessionId: string;
   providerSessionId?: string;
-  provider: string;
+  agent: string;
   model?: string;
   status: WorkflowNodeSessionStatus;
   title?: string;
@@ -187,7 +187,7 @@ export type WorkflowRunEvent =
       runId: string;
       nodeId: string;
       node: WorkflowNode;
-      provider: string;
+      agent: string;
       model?: string;
     }
   | {

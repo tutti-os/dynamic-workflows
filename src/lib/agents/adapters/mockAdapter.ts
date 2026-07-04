@@ -1,19 +1,22 @@
 import type {
-  AgentProviderOption,
   AgentRunInput,
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
+  AgentTargetOption,
 } from "../types";
+
+export const MOCK_AGENT_TARGET_ID = "mock";
 
 export function createMockAgentAdapter(): AgentRuntimeAdapter {
   return {
     id: "mock",
     label: "Mock agent adapter",
-    async listProviders(): Promise<AgentProviderOption[]> {
+    async listTargets(): Promise<AgentTargetOption[]> {
       return [
         {
-          id: "mock",
-          label: "Mock local agent",
+          id: MOCK_AGENT_TARGET_ID,
+          name: "Mock local agent",
+          provider: "mock",
           supported: true,
           models: ["mock"],
         },

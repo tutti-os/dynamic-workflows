@@ -6,19 +6,19 @@ Use `--json` for machine-readable output:
 
 ```bash
 tutti --json dynamic-workflows status
-tutti --json dynamic-workflows providers
+tutti --json dynamic-workflows agents
 tutti --json dynamic-workflows list --limit 20
 tutti --json dynamic-workflows show --workflow-id <id> --include-script
 tutti --json dynamic-workflows validate --script '<workflow-js>'
-tutti --json dynamic-workflows create --prompt 'Summarize this repo and propose next steps' --provider codex
-tutti --json dynamic-workflows run --workflow-id <id> --provider codex --inputs '{"topic":"release"}'
+tutti --json dynamic-workflows create --prompt 'Summarize this repo and propose next steps' --agent local:codex
+tutti --json dynamic-workflows run --workflow-id <id> --agent local:codex --inputs '{"topic":"release"}'
 tutti --json dynamic-workflows resume --workflow-id <id> --run-id <run-id>
 ```
 
 Commands:
 
-- `status`: runtime health, cwd root, workflow count, and provider detection status.
-- `providers`: local agent providers and model options discovered through `TUTTI_CLI`.
+- `status`: runtime health, cwd root, workflow count, and agent target detection status.
+- `agents`: local agent targets and model options discovered through `TUTTI_CLI`.
 - `list`: saved workflow summaries with version and latest run status.
 - `show`: one workflow, parsed node summary, versions, and recent runs.
 - `validate`: parser diagnostics for a workflow script without saving it.
@@ -26,4 +26,4 @@ Commands:
 - `run`: start the current saved workflow version in the background and persist a run record.
 - `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.
 
-`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `provider` is omitted, nodes without an explicit provider run with `mock` so local smoke checks stay safe.
+`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe.

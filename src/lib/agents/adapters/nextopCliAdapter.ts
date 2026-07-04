@@ -4,17 +4,17 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type {
-  AgentProviderOption,
   AgentRunInput,
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
   AgentSessionRef,
   AgentSessionStatus,
+  AgentTargetOption,
 } from "../types";
-import { createMockAgentAdapter } from "./mockAdapter";
+import { createMockAgentAdapter, MOCK_AGENT_TARGET_ID } from "./mockAdapter";
 
 type NextopCliAdapterOptions = {
-  includeMockProvider?: boolean;
+  includeMockTarget?: boolean;
   cliPath?: string;
   pollIntervalMs?: number;
   providerDetectionTimeoutMs?: number;
@@ -71,6 +71,7 @@ type NextopMessage = {
 type NextopSession = {
   agentSessionId?: unknown;
   providerSessionId?: unknown;
+  agentTargetId?: unknown;
   provider?: unknown;
   model?: unknown;
   status?: unknown;
@@ -95,6 +96,37 @@ const DEFAULT_LOCAL_COMMAND_TIMEOUT_MS = 2_000;
 const POLL_SUMMARY_LIMIT = 100;
 const TAIL_SUMMARY_LIMIT = 50;
 const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed", "canceled"]);
+
+type NextopAgentTargetSpec = {
+  id: string;
+  name: string;
+  provider: string;
+  startPath: string[];
+};
+
+// Daemon-owned system Agent Targets. Session creation is target-aware in
+// tuttid: only the per-target start commands can launch sessions, so every
+// launchable target needs an explicit CLI start path here.
+const NEXTOP_AGENT_TARGETS: NextopAgentTargetSpec[] = [
+  {
+    id: "local:codex",
+    name: "Codex",
+    provider: "codex",
+    startPath: ["codex", "start"],
+  },
+  {
+    id: "local:claude-code",
+    name: "Claude Code",
+    provider: "claude-code",
+    startPath: ["claude", "start"],
+  },
+];
+
+export type NextopProviderAvailability = {
+  provider: string;
+  supported: boolean;
+  reason?: string;
+};
 
 export function createNextopCliAgentAdapter(
   options: NextopCliAdapterOptions = {},
@@ -126,46 +158,71 @@ export function createNextopCliAgentAdapter(
   const adapter: AgentRuntimeAdapter = {
     id: "nextop-cli",
     label: "Nextop CLI agent adapter",
-    async listProviders(): Promise<AgentProviderOption[]> {
-      const providersOutput = await readNextopProviderOptions(
+    async listTargets(): Promise<AgentTargetOption[]> {
+      const availability = await readNextopProviderAvailability(
         runner,
         providerDetectionTimeoutMs,
       );
-      const providerOptions = await applyLocalProviderDetections(
-        providersOutput,
-        commandDetector,
-      );
-      const realProviders = await Promise.all(
-        providerOptions.map(async (provider) => ({
-          ...provider,
-          models: provider.supported
-            ? await readProviderModels(
-                provider.id,
-                runner,
-                providerModelsTimeoutMs,
-              )
-            : [],
-        })),
-      );
-
-      if (options.includeMockProvider === false) {
-        return realProviders;
+      const codexPath = await commandDetector("codex");
+      if (codexPath && !availability.get("codex")?.supported) {
+        availability.set("codex", {
+          provider: "codex",
+          supported: true,
+          reason: codexPath,
+        });
       }
 
-      return [...(await mockAdapter.listProviders()), ...realProviders];
+      const targets = await Promise.all(
+        NEXTOP_AGENT_TARGETS.map(async (spec): Promise<AgentTargetOption> => {
+          const status = availability.get(spec.provider);
+          const supported = status?.supported === true;
+          return {
+            id: spec.id,
+            name: spec.name,
+            provider: spec.provider,
+            supported,
+            models: supported
+              ? await readProviderModels(
+                  spec.provider,
+                  runner,
+                  providerModelsTimeoutMs,
+                )
+              : [],
+            reason: status?.reason,
+          };
+        }),
+      );
+
+      if (options.includeMockTarget === false) {
+        return targets;
+      }
+
+      return [...(await mockAdapter.listTargets()), ...targets];
     },
     async *run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent> {
       console.info(
-        `[agent-runtime:${adapter.id}] provider=${input.provider} runId=${input.runId} cwd=${input.cwd}`,
+        `[agent-runtime:${adapter.id}] agent=${input.agent} runId=${input.runId} cwd=${input.cwd}`,
       );
 
-      if (input.provider === "mock") {
+      if (input.agent === MOCK_AGENT_TARGET_ID) {
         yield* mockAdapter.run(input);
         return;
       }
 
-      const provider = normalizeNextopProvider(input.provider);
-      const model = input.model || (await resolveDefaultModel(provider, runner));
+      const target = findNextopAgentTarget(input.agent);
+      if (!target) {
+        yield {
+          type: "error",
+          code: "UNKNOWN_AGENT_TARGET",
+          message: `Unknown agent target "${input.agent}". Known agent targets: ${knownAgentTargetIds().join(", ")}.`,
+          retryable: false,
+        };
+        yield { type: "done", status: "failed", reason: "error" };
+        return;
+      }
+
+      const model =
+        input.model || (await resolveDefaultModel(target.provider, runner));
       let cancelPromise: Promise<void> | undefined;
       const requestCancel = () => {
         const agentSessionId = activeSessions.get(input.runId);
@@ -196,7 +253,7 @@ export function createNextopCliAgentAdapter(
           activeSessions.set(input.runId, attachSessionId);
           const fallbackSession: RequiredSessionRef = {
             agentSessionId: attachSessionId,
-            provider,
+            agent: target.id,
             model,
             status: "running",
           };
@@ -231,7 +288,7 @@ export function createNextopCliAgentAdapter(
           activeSessions.set(input.runId, resumeSessionId);
           const fallbackSession: RequiredSessionRef = {
             agentSessionId: resumeSessionId,
-            provider,
+            agent: target.id,
             model,
             status: "running",
           };
@@ -272,13 +329,13 @@ export function createNextopCliAgentAdapter(
           yield {
             type: "status",
             status: "spawning",
-            message: `Starting ${provider} session through Nextop CLI.`,
+            message: `Starting ${target.name} agent session through Nextop CLI.`,
           };
 
           const startOutput = await runner(
             [
               "--json",
-              ...providerStartPath(provider),
+              ...target.startPath,
               "--model",
               model,
               "--prompt",
@@ -295,7 +352,7 @@ export function createNextopCliAgentAdapter(
         const agentSessionId = initialSession.agentSessionId;
         activeSessions.set(input.runId, agentSessionId);
 
-        yield sessionRefEvent(input, provider, model, initialSession);
+        yield sessionRefEvent(input, target.id, model, initialSession);
         yield {
           type: "status",
           status: "running",
@@ -338,7 +395,7 @@ export function createNextopCliAgentAdapter(
             latestText = nextText;
           }
 
-          yield sessionRefEvent(input, provider, model, {
+          yield sessionRefEvent(input, target.id, model, {
             ...initialSession,
             ...summary.session,
             agentSessionId,
@@ -465,68 +522,43 @@ export function parseNextopJson(stdout: string): unknown {
   }
 }
 
-export function parseProviderOptions(value: unknown): AgentProviderOption[] {
+export function parseProviderAvailability(
+  value: unknown,
+): Map<string, NextopProviderAvailability> {
   const output = value as NextopProvidersOutput;
   const providers = Array.isArray(output.providers) ? output.providers : [];
-  return providers
-    .flatMap((item): AgentProviderOption[] => {
-      if (!item || typeof item !== "object") {
-        return [];
-      }
-      const provider = normalizeNextopProvider(
-        String((item as NextopProviderStatus).provider ?? ""),
-      );
-      if (!provider) {
-        return [];
-      }
-      const status = readOptionalString((item as NextopProviderStatus).status);
-      return [
-        {
-          id: provider,
-          label: providerLabel(provider),
-          supported: status === "available",
-          models: [],
-          reason: readOptionalString((item as NextopProviderStatus).detail),
-        },
-      ];
-    })
-    .sort((left, right) => providerSortOrder(left.id) - providerSortOrder(right.id));
+  const availability = new Map<string, NextopProviderAvailability>();
+  for (const item of providers) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const provider = normalizeNextopProvider(
+      String((item as NextopProviderStatus).provider ?? ""),
+    );
+    if (!provider) {
+      continue;
+    }
+    const status = readOptionalString((item as NextopProviderStatus).status);
+    availability.set(provider, {
+      provider,
+      supported: status === "available",
+      reason: readOptionalString((item as NextopProviderStatus).detail),
+    });
+  }
+  return availability;
 }
 
-async function readNextopProviderOptions(
+async function readNextopProviderAvailability(
   runner: NextopCliRunner,
   timeoutMs: number,
-): Promise<AgentProviderOption[]> {
+): Promise<Map<string, NextopProviderAvailability>> {
   try {
-    return parseProviderOptions(
+    return parseProviderAvailability(
       await runner(["--json", "agent", "providers"], { timeoutMs }),
     );
   } catch {
-    return [];
+    return new Map();
   }
-}
-
-async function applyLocalProviderDetections(
-  providers: AgentProviderOption[],
-  commandDetector: LocalCommandDetector,
-): Promise<AgentProviderOption[]> {
-  const byId = new Map(providers.map((provider) => [provider.id, provider]));
-  const codexPath = await commandDetector("codex");
-
-  if (codexPath) {
-    const existing = byId.get("codex");
-    byId.set("codex", {
-      id: "codex",
-      label: "Codex",
-      supported: true,
-      models: existing?.models ?? [],
-      reason: existing?.supported ? existing.reason : codexPath,
-    });
-  }
-
-  return [...byId.values()].sort(
-    (left, right) => providerSortOrder(left.id) - providerSortOrder(right.id),
-  );
 }
 
 export function parseSessionFromOutput(value: unknown): RequiredSessionRef {
@@ -535,8 +567,8 @@ export function parseSessionFromOutput(value: unknown): RequiredSessionRef {
   if (!session.agentSessionId) {
     throw new Error("Nextop CLI did not return agentSessionId.");
   }
-  if (!session.provider) {
-    throw new Error("Nextop CLI did not return session provider.");
+  if (!session.agent) {
+    throw new Error("Nextop CLI did not return a resolvable agent target.");
   }
   return session as RequiredSessionRef;
 }
@@ -553,7 +585,7 @@ function createResumedSession(
   return {
     ...session,
     agentSessionId: session.agentSessionId || fallbackSession.agentSessionId,
-    provider: session.provider || fallbackSession.provider,
+    agent: session.agent || fallbackSession.agent,
     status: session.status ?? "running",
   };
 }
@@ -620,7 +652,7 @@ export function newestAssistantText(messages: NextopMessage[]): string {
 
 type RequiredSessionRef = AgentSessionRef & {
   agentSessionId: string;
-  provider: string;
+  agent: string;
   lastError?: string;
 };
 
@@ -916,15 +948,29 @@ function oldestMessageVersion(messages: NextopMessage[]): number | undefined {
   }, undefined);
 }
 
-function providerStartPath(provider: string): string[] {
-  switch (normalizeNextopProvider(provider)) {
-    case "codex":
-      return ["codex", "start"];
-    case "claude-code":
-      return ["claude", "start"];
-    default:
-      return ["agent", "start", "--provider", provider];
+function findNextopAgentTarget(
+  agent: string,
+): NextopAgentTargetSpec | undefined {
+  const value = agent.trim();
+  return NEXTOP_AGENT_TARGETS.find((target) => target.id === value);
+}
+
+function knownAgentTargetIds(): string[] {
+  return [
+    MOCK_AGENT_TARGET_ID,
+    ...NEXTOP_AGENT_TARGETS.map((target) => target.id),
+  ];
+}
+
+function agentTargetIdForProvider(
+  provider: string | undefined,
+): string | undefined {
+  if (!provider) {
+    return undefined;
   }
+  const normalized = normalizeNextopProvider(provider);
+  return NEXTOP_AGENT_TARGETS.find((target) => target.provider === normalized)
+    ?.id;
 }
 
 function normalizeNextopProvider(provider: string): string {
@@ -938,31 +984,9 @@ function normalizeNextopProvider(provider: string): string {
   return value;
 }
 
-function providerLabel(provider: string): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "claude-code":
-      return "Claude Code";
-    default:
-      return provider;
-  }
-}
-
-function providerSortOrder(provider: string): number {
-  switch (provider) {
-    case "codex":
-      return 0;
-    case "claude-code":
-      return 1;
-    default:
-      return 10;
-  }
-}
-
 function sessionRefEvent(
   input: AgentRunInput,
-  provider: string,
+  agent: string,
   model: string,
   session: RequiredSessionRef,
 ): Extract<AgentRuntimeEvent, { type: "session_ref" }> {
@@ -973,7 +997,7 @@ function sessionRefEvent(
       ...(session.providerSessionId
         ? { providerSessionId: session.providerSessionId }
         : {}),
-      provider: session.provider || provider,
+      agent: session.agent || agent,
       model: session.model || model || input.model,
       ...(session.status ? { status: session.status } : {}),
       ...(session.title ? { title: session.title } : {}),
@@ -988,7 +1012,9 @@ function normalizeSession(value: unknown): Partial<RequiredSessionRef> {
   }
   const agentSessionId = readOptionalString(session.agentSessionId);
   const providerSessionId = readOptionalString(session.providerSessionId);
-  const provider = readOptionalString(session.provider);
+  const agent =
+    readOptionalString(session.agentTargetId) ??
+    agentTargetIdForProvider(readOptionalString(session.provider));
   const settings = readRecord(session.settings);
   const model =
     readOptionalString(session.model) ??
@@ -1000,7 +1026,7 @@ function normalizeSession(value: unknown): Partial<RequiredSessionRef> {
   return {
     ...(agentSessionId ? { agentSessionId } : {}),
     ...(providerSessionId ? { providerSessionId } : {}),
-    ...(provider ? { provider: normalizeNextopProvider(provider) } : {}),
+    ...(agent ? { agent } : {}),
     ...(model ? { model } : {}),
     ...(status ? { status } : {}),
     ...(title ? { title } : {}),

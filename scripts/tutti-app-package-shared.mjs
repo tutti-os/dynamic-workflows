@@ -13,19 +13,19 @@ export function cliManifest(options = {}) {
         path: ["status"],
         summary: "Show Dynamic Workflows runtime status",
         description:
-          "Report app health, workflow counts, cwd root, and agent provider detection status.",
+          "Report app health, workflow counts, cwd root, and agent target detection status.",
         inputSchema: objectSchema({}),
         output: jsonOutput(),
         handler: httpHandler("/tutti/cli/status"),
       },
       {
-        path: ["providers"],
-        summary: "List available agent providers",
+        path: ["agents"],
+        summary: "List available agent targets",
         description:
-          "List providers and model options detected through the local Tutti CLI.",
+          "List agent targets and model options detected through the local Tutti CLI.",
         inputSchema: objectSchema({}),
         output: jsonOutput(),
-        handler: httpHandler("/tutti/cli/providers"),
+        handler: httpHandler("/tutti/cli/agents"),
       },
       {
         path: ["list"],
@@ -90,10 +90,10 @@ export function cliManifest(options = {}) {
               type: "string",
               description: "Natural-language workflow request.",
             },
-            provider: {
+            agent: {
               type: "string",
               description:
-                "Optional agent provider for generation, such as codex or claude-code.",
+                "Optional agent target id for generation, such as local:codex or local:claude-code.",
             },
             model: {
               type: "string",
@@ -131,10 +131,10 @@ export function cliManifest(options = {}) {
               description:
                 "JSON object string containing external workflow inputs.",
             },
-            provider: {
+            agent: {
               type: "string",
               description:
-                "Agent provider for nodes without an explicit provider. Defaults to mock.",
+                "Agent target id for nodes without an explicit agent, such as local:codex. Defaults to mock.",
             },
             model: {
               type: "string",
@@ -189,19 +189,19 @@ export function commandsMarkdown(options = {}) {
     "",
     "```bash",
     `tutti --json ${scope} status`,
-    `tutti --json ${scope} providers`,
+    `tutti --json ${scope} agents`,
     `tutti --json ${scope} list --limit 20`,
     `tutti --json ${scope} show --workflow-id <id> --include-script`,
     `tutti --json ${scope} validate --script '<workflow-js>'`,
-    `tutti --json ${scope} create --prompt 'Summarize this repo and propose next steps' --provider codex`,
-    `tutti --json ${scope} run --workflow-id <id> --provider codex --inputs '{"topic":"release"}'`,
+    `tutti --json ${scope} create --prompt 'Summarize this repo and propose next steps' --agent local:codex`,
+    `tutti --json ${scope} run --workflow-id <id> --agent local:codex --inputs '{"topic":"release"}'`,
     `tutti --json ${scope} resume --workflow-id <id> --run-id <run-id>`,
     "```",
     "",
     "Commands:",
     "",
-    "- `status`: runtime health, cwd root, workflow count, and provider detection status.",
-    "- `providers`: local agent providers and model options discovered through `TUTTI_CLI`.",
+    "- `status`: runtime health, cwd root, workflow count, and agent target detection status.",
+    "- `agents`: local agent targets and model options discovered through `TUTTI_CLI`.",
     "- `list`: saved workflow summaries with version and latest run status.",
     "- `show`: one workflow, parsed node summary, versions, and recent runs.",
     "- `validate`: parser diagnostics for a workflow script without saving it.",
@@ -209,7 +209,7 @@ export function commandsMarkdown(options = {}) {
     "- `run`: start the current saved workflow version in the background and persist a run record.",
     "- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.",
     "",
-    "`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `provider` is omitted, nodes without an explicit provider run with `mock` so local smoke checks stay safe.",
+    "`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe.",
     "",
   ].join("\n");
 }

@@ -14,7 +14,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const body = (await request.json()) as {
     prompt?: string;
-    provider?: string;
+    agent?: string;
     model?: string;
     cwd?: string;
   };
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   try {
     const detail = createPendingWorkflowGeneration({
       prompt,
-      provider: body.provider,
+      agent: body.agent,
       model: body.model,
       cwd: body.cwd,
     });

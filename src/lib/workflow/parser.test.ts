@@ -111,7 +111,7 @@ const delivery = await loop({
   label: "Delivery Loop",
   maxIterations: 3,
   onMaxIterations: "complete",
-  provider: "claude-code",
+  agent: "local:claude-code",
   model: "claude-sonnet-4",
   cwd: "src",
   session: { mode: "inherit", key: "delivery", scope: "step" },
@@ -119,7 +119,7 @@ const delivery = await loop({
     agent({
       id: "rd",
       label: "RD",
-      provider: "codex",
+      agent: "local:codex",
       model: "gpt-5.1",
       cwd: "src/lib",
       session: { mode: "inherit", key: "rd_room" },
@@ -143,7 +143,7 @@ Previous acceptance: {{acceptance}}\`,
       id: "delivery_loop",
       kind: "loop",
       label: "Delivery Loop",
-      provider: "claude-code",
+      agent: "local:claude-code",
       model: "claude-sonnet-4",
       cwd: "src",
       variableName: "delivery",
@@ -158,13 +158,19 @@ Previous acceptance: {{acceptance}}\`,
     expect(
       parsed.nodes[0].loop?.steps.map((step) => [
         step.id,
-        step.provider,
+        step.agent,
         step.model,
         step.session,
         step.cwd,
       ]),
     ).toEqual([
-      ["rd", "codex", "gpt-5.1", { mode: "inherit", key: "rd_room" }, "src/lib"],
+      [
+        "rd",
+        "local:codex",
+        "gpt-5.1",
+        { mode: "inherit", key: "rd_room" },
+        "src/lib",
+      ],
       ["acceptance", undefined, undefined, undefined, undefined],
     ]);
     expect(parsed.nodes[0].loop?.steps[0].appendPrompt).toBe(

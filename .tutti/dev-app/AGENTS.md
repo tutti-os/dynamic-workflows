@@ -23,4 +23,4 @@ Data and integration:
 - Workflow data uses `DYNAMIC_WORKFLOWS_DATA_DIR`, defaulting to `TUTTI_APP_DATA_DIR` and then `.data` only outside the Tutti runtime.
 - Workflow cwd validation uses `DYNAMIC_WORKFLOWS_CWD_ROOT`, defaulting to `TUTTI_WORKSPACE_ROOT` and then the project root.
 - CLI command handlers are declared in `tutti.cli.json` and served by the source app under `/tutti/cli/*`.
-- Agent/provider discovery should use `TUTTI_CLI`; `bootstrap.sh` also sets `NEXTOP_CLI_PATH` from it for existing adapter compatibility.
+- Agent target discovery should use `TUTTI_CLI`; `bootstrap.sh` also sets `NEXTOP_CLI_PATH` from it for existing adapter compatibility.

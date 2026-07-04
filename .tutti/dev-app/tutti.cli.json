@@ -11,7 +11,7 @@
         "status"
       ],
       "summary": "Show Dynamic Workflows runtime status",
-      "description": "Report app health, workflow counts, cwd root, and agent provider detection status.",
+      "description": "Report app health, workflow counts, cwd root, and agent target detection status.",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -28,10 +28,10 @@
     },
     {
       "path": [
-        "providers"
+        "agents"
       ],
-      "summary": "List available agent providers",
-      "description": "List providers and model options detected through the local Tutti CLI.",
+      "summary": "List available agent targets",
+      "description": "List agent targets and model options detected through the local Tutti CLI.",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -43,7 +43,7 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/providers"
+        "path": "/tutti/cli/agents"
       }
     },
     {
@@ -144,9 +144,9 @@
             "type": "string",
             "description": "Natural-language workflow request."
           },
-          "provider": {
+          "agent": {
             "type": "string",
-            "description": "Optional agent provider for generation, such as codex or claude-code."
+            "description": "Optional agent target id for generation, such as local:codex or local:claude-code."
           },
           "model": {
             "type": "string",
@@ -188,9 +188,9 @@
             "type": "string",
             "description": "JSON object string containing external workflow inputs."
           },
-          "provider": {
+          "agent": {
             "type": "string",
-            "description": "Agent provider for nodes without an explicit provider. Defaults to mock."
+            "description": "Agent target id for nodes without an explicit agent, such as local:codex. Defaults to mock."
           },
           "model": {
             "type": "string",

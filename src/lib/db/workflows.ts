@@ -56,7 +56,7 @@ export type WorkflowGenerationRecord = {
   id: string;
   workflowId: string;
   prompt: string;
-  provider: string | null;
+  agent: string | null;
   model: string | null;
   cwd: string | null;
   status: WorkflowGenerationStatus;
@@ -86,7 +86,7 @@ export type WorkflowEditJobRecord = {
   baseVersionId: string;
   createdVersionId: string | null;
   instruction: string;
-  provider: string | null;
+  agent: string | null;
   model: string | null;
   cwd: string | null;
   agentSessionId: string | null;
@@ -105,7 +105,7 @@ export type WorkflowRunRecord = {
   executorKind: string;
   externalRunId: string | null;
   status: WorkflowRunStatus;
-  provider: string | null;
+  agent: string | null;
   model: string | null;
   cwd: string | null;
   input: unknown;
@@ -166,7 +166,7 @@ type RunRow = {
   executor_kind: string;
   external_run_id: string | null;
   status: WorkflowRunStatus;
-  provider: string | null;
+  agent: string | null;
   model: string | null;
   cwd: string | null;
   input_json: string;
@@ -180,7 +180,7 @@ type GenerationRow = {
   id: string;
   workflow_id: string;
   prompt: string;
-  provider: string | null;
+  agent: string | null;
   model: string | null;
   cwd: string | null;
   status: WorkflowGenerationStatus;
@@ -197,7 +197,7 @@ type EditJobRow = {
   base_version_id: string;
   created_version_id: string | null;
   instruction: string;
-  provider: string | null;
+  agent: string | null;
   model: string | null;
   cwd: string | null;
   agent_session_id: string | null;
@@ -320,7 +320,7 @@ export function createWorkflowFromScript(script: string): WorkflowDetail {
 
 export function createPendingWorkflowGeneration(input: {
   prompt: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
 }): WorkflowDetail {
@@ -357,7 +357,7 @@ export function createPendingWorkflowGeneration(input: {
         .prepare(
           `
           INSERT INTO workflow_generations (
-            id, workflow_id, prompt, provider, model, cwd, status,
+            id, workflow_id, prompt, agent, model, cwd, status,
             generation_json, error_json, created_at, started_at, finished_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
@@ -366,7 +366,7 @@ export function createPendingWorkflowGeneration(input: {
           generationId,
           workflowId,
           prompt,
-          input.provider ?? null,
+          input.agent ?? null,
           input.model ?? null,
           input.cwd ?? null,
           "pending",
@@ -574,7 +574,7 @@ export function createWorkflowEditJob(input: {
   workflowId: string;
   baseVersionId?: string;
   instruction: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
 }): WorkflowEditJobRecord {
@@ -601,7 +601,7 @@ export function createWorkflowEditJob(input: {
       `
       INSERT INTO workflow_edit_jobs (
         id, workflow_id, base_version_id, created_version_id, instruction,
-        provider, model, cwd, agent_session_id, status, result_json, error_json,
+        agent, model, cwd, agent_session_id, status, result_json, error_json,
         created_at, started_at, finished_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
@@ -612,7 +612,7 @@ export function createWorkflowEditJob(input: {
       baseVersionId,
       null,
       instruction,
-      input.provider ?? null,
+      input.agent ?? null,
       input.model ?? null,
       input.cwd ?? null,
       null,
@@ -821,7 +821,7 @@ export function createWorkflowEditRetry(
     workflowId: edit.workflowId,
     baseVersionId: edit.baseVersionId,
     instruction: edit.instruction,
-    provider: edit.provider ?? undefined,
+    agent: edit.agent ?? undefined,
     model: edit.model ?? undefined,
     cwd: edit.cwd ?? undefined,
   });
@@ -1077,7 +1077,7 @@ export function createWorkflowRun(input: {
   workflowId: string;
   workflowVersionId: string;
   executorKind: string;
-  provider?: string;
+  agent?: string;
   model?: string;
   cwd?: string;
   request: unknown;
@@ -1091,7 +1091,7 @@ export function createWorkflowRun(input: {
       `
       INSERT INTO workflow_runs (
         id, workflow_id, workflow_version_id, executor_kind, external_run_id,
-        status, provider, model, cwd, input_json, result_json, log_path,
+        status, agent, model, cwd, input_json, result_json, log_path,
         started_at, finished_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
@@ -1103,7 +1103,7 @@ export function createWorkflowRun(input: {
       input.executorKind,
       null,
       "running",
-      input.provider ?? null,
+      input.agent ?? null,
       input.model ?? null,
       input.cwd ?? null,
       JSON.stringify(input.request),
@@ -1358,7 +1358,7 @@ function mapRun(row: RunRow): WorkflowRunRecord {
     executorKind: row.executor_kind,
     externalRunId: row.external_run_id,
     status: row.status,
-    provider: row.provider,
+    agent: row.agent,
     model: row.model,
     cwd: row.cwd,
     input: parseJson(row.input_json, {}),
@@ -1374,7 +1374,7 @@ function mapGeneration(row: GenerationRow): WorkflowGenerationRecord {
     id: row.id,
     workflowId: row.workflow_id,
     prompt: row.prompt,
-    provider: row.provider,
+    agent: row.agent,
     model: row.model,
     cwd: row.cwd,
     status: row.status,
@@ -1410,7 +1410,7 @@ function mapEditJob(row: EditJobRow): WorkflowEditJobRecord {
     baseVersionId: row.base_version_id,
     createdVersionId: row.created_version_id,
     instruction: row.instruction,
-    provider: row.provider,
+    agent: row.agent,
     model: row.model,
     cwd: row.cwd,
     agentSessionId: row.agent_session_id,

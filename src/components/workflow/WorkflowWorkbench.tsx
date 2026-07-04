@@ -67,12 +67,12 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     resetRunStateForVersionRef.current();
   }, []);
   const {
-    providers,
-    effectiveProvider,
+    agents,
+    effectiveAgent,
     model,
     modelOptions,
     cwd,
-    setProvider,
+    setAgent,
     setModel,
     setCwd,
   } = useWorkflowRunSettings();
@@ -189,7 +189,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     parsed,
     script,
     isScriptDirty: isDirty,
-    effectiveProvider,
+    effectiveAgent,
     model,
     cwd,
     requiresCwd,
@@ -337,8 +337,8 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
 
       <RunInputsDialog
         open={isRunInputDialogOpen}
-        providers={providers}
-        provider={effectiveProvider}
+        agents={agents}
+        agent={effectiveAgent}
         model={model}
         modelOptions={modelOptions}
         cwd={cwd}
@@ -349,7 +349,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         missingCwd={missingCwd}
         isRunning={isRunning}
         onOpenChange={setIsRunInputDialogOpen}
-        onProviderChange={setProvider}
+        onAgentChange={setAgent}
         onModelChange={setModel}
         onCwdChange={setCwd}
         onRunInputChange={setRunInputValue}
@@ -372,13 +372,13 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         open={isAgentEditDialogOpen}
         workflowId={workflowId}
         baseVersion={selectedVersion}
-        providers={providers}
-        provider={effectiveProvider}
+        agents={agents}
+        agent={effectiveAgent}
         model={model}
         modelOptions={modelOptions}
         cwd={cwd}
         onOpenChange={setIsAgentEditDialogOpen}
-        onProviderChange={setProvider}
+        onAgentChange={setAgent}
         onModelChange={setModel}
         onCwdChange={setCwd}
         onVersionCreated={handleAgentEditVersionCreated}

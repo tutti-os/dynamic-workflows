@@ -36,7 +36,7 @@ export function useWorkflowRunController(input: {
   parsed: ParsedWorkflow;
   script: string;
   isScriptDirty: boolean;
-  effectiveProvider: string;
+  effectiveAgent: string;
   model: string;
   cwd: string;
   requiresCwd: boolean;
@@ -137,7 +137,7 @@ export function useWorkflowRunController(input: {
           ...runInput.runContext,
           workflowVersionId: startResponse.run.workflowVersionId,
           executorKind: startResponse.run.executorKind,
-          provider: startResponse.run.provider ?? undefined,
+          agent: startResponse.run.agent ?? undefined,
           model: startResponse.run.model ?? undefined,
           cwd: startResponse.run.cwd ?? undefined,
           input: startResponse.run.input,
@@ -226,7 +226,7 @@ export function useWorkflowRunController(input: {
         ? { versionId: selectedVersionId }
         : {}),
       inputs: input.workflowInputPayload,
-      provider: input.effectiveProvider,
+      agent: input.effectiveAgent,
       model: input.model || undefined,
       cwd: input.cwd || undefined,
     };
@@ -239,13 +239,13 @@ export function useWorkflowRunController(input: {
         workflowVersionId:
           selectedVersionId ?? "",
         executorKind:
-          input.effectiveProvider === "mock" ? "mock" : "local-agent",
-        provider: input.effectiveProvider,
+          input.effectiveAgent === "mock" ? "mock" : "local-agent",
+        agent: input.effectiveAgent,
         model: input.model || undefined,
         cwd: input.cwd || undefined,
         input: {
           inputs: input.workflowInputPayload,
-          provider: input.effectiveProvider,
+          agent: input.effectiveAgent,
           model: input.model || undefined,
           cwd: input.cwd || undefined,
           autoSavedVersion: input.isScriptDirty,
@@ -298,12 +298,12 @@ export function useWorkflowRunController(input: {
       runContext: {
         workflowVersionId: sourceRun.workflowVersionId,
         executorKind: sourceRun.executorKind,
-        provider: sourceRun.provider ?? undefined,
+        agent: sourceRun.agent ?? undefined,
         model: sourceRun.model ?? undefined,
         cwd: sourceRun.cwd ?? undefined,
         input: {
           retryOfRunId: runId,
-          provider: sourceRun.provider,
+          agent: sourceRun.agent,
           model: sourceRun.model,
           cwd: sourceRun.cwd,
         },
@@ -344,12 +344,12 @@ export function useWorkflowRunController(input: {
       runContext: {
         workflowVersionId: sourceRun.workflowVersionId,
         executorKind: sourceRun.executorKind,
-        provider: sourceRun.provider ?? undefined,
+        agent: sourceRun.agent ?? undefined,
         model: sourceRun.model ?? undefined,
         cwd: sourceRun.cwd ?? undefined,
         input: {
           resumeOfRunId: runId,
-          provider: sourceRun.provider,
+          agent: sourceRun.agent,
           model: sourceRun.model,
           cwd: sourceRun.cwd,
         },

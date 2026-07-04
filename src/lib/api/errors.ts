@@ -20,7 +20,7 @@ export type ApiErrorCode =
   | "WORKFLOW_DUPLICATE_FAILED"
   | "WORKFLOW_DELETE_FAILED"
   | "WORKFLOW_RUN_FAILED"
-  | "PROVIDER_DETECTION_FAILED"
+  | "AGENT_TARGET_DETECTION_FAILED"
   | "LEGACY_RUN_ENDPOINT"
   | "UNKNOWN_ERROR";
 
@@ -58,7 +58,7 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   WORKFLOW_DUPLICATE_FAILED: "Workflow duplication failed.",
   WORKFLOW_DELETE_FAILED: "Workflow deletion failed.",
   WORKFLOW_RUN_FAILED: "Workflow run failed.",
-  PROVIDER_DETECTION_FAILED: "Provider detection failed.",
+  AGENT_TARGET_DETECTION_FAILED: "Agent target detection failed.",
   LEGACY_RUN_ENDPOINT:
     "Use the workflow detail page to run a versioned, logged workflow.",
   UNKNOWN_ERROR: "Something went wrong.",

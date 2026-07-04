@@ -5,13 +5,13 @@ let defaultAdapter: AgentRuntimeAdapter | undefined;
 
 export function getAgentRuntimeAdapter(): AgentRuntimeAdapter {
   defaultAdapter ??= createNextopCliAgentAdapter({
-    includeMockProvider: true,
+    includeMockTarget: true,
   });
   return defaultAdapter;
 }
 
-export async function listAgentProviders() {
-  return getAgentRuntimeAdapter().listProviders();
+export async function listAgentTargets() {
+  return getAgentRuntimeAdapter().listTargets();
 }
 
 export function runAgent(input: Parameters<AgentRuntimeAdapter["run"]>[0]) {
