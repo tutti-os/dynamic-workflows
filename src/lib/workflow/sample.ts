@@ -75,6 +75,7 @@ phase("RD delivery and acceptance", () => {
     label: "RD delivery loop",
     cwd: ".",
     maxIterations: 4,
+    onMaxIterations: "fail",
     steps: [
       agent({
         id: "rd",
@@ -123,8 +124,8 @@ FAIL: <具体打回意见>
   });
 
   agent({
-    id: "final_summary",
-    label: "Final Summary",
+    id: "submit_mr",
+    label: "Submit MR",
     cwd: ".",
     inputs: { delivery_loop },
     prompt: \`
@@ -134,7 +135,22 @@ FAIL: <具体打回意见>
 循环执行结果：
 {{delivery_loop}}
 
-请总结最终交付、迭代次数、是否通过、最后验收意见。
+验收已经通过。请在上述 cwd 对应的项目目录中提交本次交付对应的 MR/PR。
+
+要求：
+1. 先检查 git status 和当前分支，只提交与原始需求及本次 RD 交付相关的变更。
+2. 如当前分支不适合直接提交，请创建语义清晰的新分支。
+3. 提交前根据项目实际情况运行必要的 focused checks；如果检查无法运行，请说明原因。
+4. commit message 要简洁描述本次交付。
+5. push 分支并使用仓库可用工具创建 MR/PR。
+6. 如果缺少 remote、认证、权限或 MR/PR 工具不可用，不要伪造链接；请报告阻塞点，并输出已准备好的分支、commit 和下一步命令。
+
+最终只输出：
+- MR/PR 链接或阻塞原因
+- 分支名
+- commit id
+- 已运行的检查
+- 本次提交摘要
 \`,
   });
 });

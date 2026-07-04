@@ -11,8 +11,10 @@ import {
 import { renderPrompt, renderTemplate } from "./templates";
 import type {
   ParsedWorkflow,
+  WorkflowLoopRecoveryState,
   WorkflowLoopStep,
   WorkflowNode,
+  WorkflowRunRecoveryState,
   WorkflowRunEvent,
   WorkflowRunRequest,
   WorkflowSessionSpec,
@@ -37,13 +39,23 @@ export async function* runWorkflow(
       return sessionKey ? [[node.id, sessionKey] as const] : [];
     }),
   );
-  const outputs: Record<string, string> = {};
-  const sessionIdsByKey: Record<string, string> = {};
-  const sessionCwdsByKey: Record<string, string> = {};
+  const recovery = normalizeRecoveryState(request.recovery);
+  const outputs: Record<string, string> = { ...recovery.outputs };
+  const sessionIdsByKey: Record<string, string> = {
+    ...recovery.sessionIdsByKey,
+  };
+  const sessionCwdsByKey: Record<string, string> = {
+    ...recovery.sessionCwdsByKey,
+  };
   const failed = new Set<string>();
-  const completed = new Set<string>();
+  const completed = new Set<string>(
+    recovery.completedNodeIds.filter((nodeId) =>
+      executableNodes.some((node) => node.id === nodeId),
+    ),
+  );
   const running = new Set<string>();
   let canceled = false;
+  let failureError: string | undefined;
 
   yield { type: "run_started", runId, parsed };
 
@@ -72,6 +84,7 @@ export async function* runWorkflow(
             nodeId: node.id,
             error: "Node dependencies could not be resolved.",
           };
+          failureError ??= "Node dependencies could not be resolved.";
         }
       }
       break;
@@ -89,6 +102,8 @@ export async function* runWorkflow(
       outputs,
       sessionIdsByKey,
       sessionCwdsByKey,
+      attachSessionIdsByNodeId: recovery.attachSessionIdsByNodeId,
+      loopStatesByNodeId: recovery.loopStates,
     })) {
       yield event;
 
@@ -98,13 +113,15 @@ export async function* runWorkflow(
         if (sessionKey && agentSessionId) {
           const previousSessionId = sessionIdsByKey[sessionKey];
           sessionIdsByKey[sessionKey] = agentSessionId;
-          yield createWorkflowSessionStatusEvent({
-            runId,
-            nodeId: event.nodeId,
-            sessionKey,
-            agentSessionId,
-            previousSessionId,
-          });
+          if (previousSessionId !== agentSessionId) {
+            yield createWorkflowSessionStatusEvent({
+              runId,
+              nodeId: event.nodeId,
+              sessionKey,
+              agentSessionId,
+              previousSessionId,
+            });
+          }
         }
       }
 
@@ -117,6 +134,7 @@ export async function* runWorkflow(
       if (event.type === "node_failed") {
         running.delete(event.nodeId);
         failed.add(event.nodeId);
+        failureError ??= event.error;
       }
 
       if (isSignalAborted(normalizedRequest.signal)) {
@@ -137,6 +155,7 @@ export async function* runWorkflow(
     status,
     outputs,
     ...(status === "canceled" ? { error: "Run canceled." } : {}),
+    ...(status === "failed" && failureError ? { error: failureError } : {}),
   };
 }
 
@@ -147,6 +166,8 @@ async function* streamNodeBatch(input: {
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
+  attachSessionIdsByNodeId: Record<string, string>;
+  loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   type QueueItem =
     | {
@@ -183,6 +204,8 @@ async function* streamNodeBatch(input: {
           outputs: input.outputs,
           sessionIdsByKey: input.sessionIdsByKey,
           sessionCwdsByKey: input.sessionCwdsByKey,
+          attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
+          loopStatesByNodeId: input.loopStatesByNodeId,
         })) {
           push({ event });
         }
@@ -219,6 +242,8 @@ async function* runNode(input: {
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
+  attachSessionIdsByNodeId: Record<string, string>;
+  loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   if (input.node.kind === "loop") {
     yield* runLoopNode(input);
@@ -234,6 +259,8 @@ async function* runAgentNode(input: {
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
+  attachSessionIdsByNodeId: Record<string, string>;
+  loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const nodeRunId = `${input.runId}:${input.node.id}`;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
@@ -246,6 +273,7 @@ async function* runAgentNode(input: {
   const resumeSessionId = sessionKey
     ? input.sessionIdsByKey[sessionKey]
     : undefined;
+  const attachSessionId = input.attachSessionIdsByNodeId[input.node.id];
   let output = "";
 
   yield {
@@ -274,7 +302,9 @@ async function* runAgentNode(input: {
           type: "status",
           status: "running",
           stage: "running",
-          message: resumeSessionId
+          message: attachSessionId
+            ? `Workflow session "${sessionKey}" is attaching to agent session ${attachSessionId}.`
+            : resumeSessionId
             ? `Workflow session "${sessionKey}" is reusing agent session ${resumeSessionId}.`
             : `Workflow session "${sessionKey}" is starting a new agent session.`,
         },
@@ -288,6 +318,7 @@ async function* runAgentNode(input: {
       prompt,
       model,
       resumeSessionId,
+      attachSessionId,
       signal: input.request.signal,
     })) {
       throwIfAborted(input.request.signal);
@@ -337,6 +368,8 @@ async function* runLoopNode(input: {
   outputs: Record<string, string>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
+  attachSessionIdsByNodeId: Record<string, string>;
+  loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const loop = input.node.loop;
   const provider = input.node.provider ?? input.request.provider ?? "mock";
@@ -362,13 +395,11 @@ async function* runLoopNode(input: {
     return;
   }
 
-  const previousStepOutputs: Record<string, string> = {};
-  const iterations: Array<{
-    index: number;
-    outputs: Record<string, string>;
-    untilOutput: string;
-    untilMatched: boolean;
-  }> = [];
+  const recoveredLoop = input.loopStatesByNodeId[input.node.id];
+  const previousStepOutputs: Record<string, string> = {
+    ...(recoveredLoop?.previousStepOutputs ?? {}),
+  };
+  const iterations = [...(recoveredLoop?.iterations ?? [])];
   let stopReason: "until_matched" | "max_iterations_reached" =
     "max_iterations_reached";
 
@@ -381,10 +412,44 @@ async function* runLoopNode(input: {
       message: `Loop "${input.node.id}" started with maxIterations=${loop.maxIterations}.`,
     });
 
-    for (let iteration = 1; iteration <= loop.maxIterations; iteration += 1) {
+    const recoveredStopReason = readRecoveredLoopStopReason(recoveredLoop, loop);
+    if (recoveredStopReason) {
+      stopReason = recoveredStopReason;
+      const output = formatLoopOutput({
+        node: input.node,
+        stopReason,
+        iterations,
+        latestStepOutputs: previousStepOutputs,
+      });
+      if (shouldFailRecoveredLoop(loop, stopReason)) {
+        yield {
+          type: "node_failed",
+          runId: input.runId,
+          nodeId: input.node.id,
+          error: output,
+        };
+        return;
+      }
+      yield {
+        type: "node_completed",
+        runId: input.runId,
+        nodeId: input.node.id,
+        output,
+      };
+      return;
+    }
+
+    for (
+      let iteration = recoveredLoop?.nextIteration ?? 1;
+      iteration <= loop.maxIterations;
+      iteration += 1
+    ) {
       throwIfAborted(input.request.signal);
 
-      const currentStepOutputs: Record<string, string> = {};
+      const currentStepOutputs: Record<string, string> =
+        recoveredLoop?.currentIteration === iteration
+          ? { ...(recoveredLoop.currentStepOutputs ?? {}) }
+          : {};
       yield loopStatusEvent({
         runId: input.runId,
         nodeId: input.node.id,
@@ -393,6 +458,14 @@ async function* runLoopNode(input: {
 
       for (const step of loop.steps) {
         throwIfAborted(input.request.signal);
+        if (currentStepOutputs[step.id] !== undefined) {
+          yield loopStatusEvent({
+            runId: input.runId,
+            nodeId: input.node.id,
+            message: `Loop step ${createLoopStepId(input.node.id, iteration, step.id)} restored from checkpoint.`,
+          });
+          continue;
+        }
 
         const syntheticId = createLoopStepId(input.node.id, iteration, step.id);
         const stepCwd = resolveEffectiveNodeCwd(loopCwd, step.cwd);
@@ -434,9 +507,26 @@ async function* runLoopNode(input: {
           signal: input.request.signal,
           sessionIdsByKey: input.sessionIdsByKey,
           sessionCwdsByKey: input.sessionCwdsByKey,
+          attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
         });
         currentStepOutputs[step.id] = stepOutput;
         previousStepOutputs[step.id] = stepOutput;
+        await saveLoopCheckpoint(input.request, {
+          runId: input.runId,
+          nodeId: input.node.id,
+          state: {
+            nextIteration: iteration,
+            currentIteration: iteration,
+            currentStepOutputs: { ...currentStepOutputs },
+            previousStepOutputs: { ...previousStepOutputs },
+            iterations: [...iterations],
+          },
+        });
+        yield loopStatusEvent({
+          runId: input.runId,
+          nodeId: input.node.id,
+          message: `Loop step ${syntheticId} checkpoint saved.`,
+        });
       }
 
       const untilOutput =
@@ -449,6 +539,15 @@ async function* runLoopNode(input: {
         outputs: { ...currentStepOutputs },
         untilOutput,
         untilMatched,
+      });
+      await saveLoopCheckpoint(input.request, {
+        runId: input.runId,
+        nodeId: input.node.id,
+        state: {
+          nextIteration: iteration + 1,
+          previousStepOutputs: { ...previousStepOutputs },
+          iterations: [...iterations],
+        },
       });
 
       yield loopStatusEvent({
@@ -469,6 +568,18 @@ async function* runLoopNode(input: {
       iterations,
       latestStepOutputs: previousStepOutputs,
     });
+
+    if (
+      shouldFailRecoveredLoop(loop, stopReason)
+    ) {
+      yield {
+        type: "node_failed",
+        runId: input.runId,
+        nodeId: input.node.id,
+        error: output,
+      };
+      return;
+    }
 
     yield {
       type: "node_completed",
@@ -500,6 +611,7 @@ async function* runLoopAgentStep(input: {
   signal?: AbortSignal;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
+  attachSessionIdsByNodeId: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent, string> {
   const provider = input.step.provider ?? input.defaultProvider;
   const model = input.step.model ?? input.defaultModel;
@@ -512,6 +624,7 @@ async function* runLoopAgentStep(input: {
     sessionIdsByKey: input.sessionIdsByKey,
   });
   const sessionNodeId = createLoopStepSessionNodeId(input.nodeId, input.step.id);
+  const attachSessionId = input.attachSessionIdsByNodeId[sessionNodeId];
   let output = "";
 
   yield loopStatusEvent({
@@ -529,8 +642,10 @@ async function* runLoopAgentStep(input: {
     yield loopStatusEvent({
       runId: input.runId,
       nodeId: input.nodeId,
-      message: runContext.resumeSessionId
-        ? `Workflow session "${runContext.sessionKey}" is reusing agent session ${runContext.resumeSessionId} for ${input.syntheticId}${runContext.promptMode === "append" ? " with appendPrompt" : " with full prompt"}.`
+      message: attachSessionId
+        ? `Workflow session "${runContext.sessionKey}" is attaching to agent session ${attachSessionId} for ${input.syntheticId}.`
+        : runContext.resumeSessionId
+          ? `Workflow session "${runContext.sessionKey}" is reusing agent session ${runContext.resumeSessionId} for ${input.syntheticId}${runContext.promptMode === "append" ? " with appendPrompt" : " with full prompt"}.`
         : `Workflow session "${runContext.sessionKey}" is starting a new agent session for ${input.syntheticId}.`,
     });
   }
@@ -542,6 +657,7 @@ async function* runLoopAgentStep(input: {
     prompt: runContext.prompt,
     model,
     resumeSessionId: runContext.resumeSessionId,
+    attachSessionId,
     signal: input.signal,
   })) {
     throwIfAborted(input.signal);
@@ -569,14 +685,16 @@ async function* runLoopAgentStep(input: {
     if (runContext.sessionKey && agentSessionId) {
       const previousSessionId = input.sessionIdsByKey[runContext.sessionKey];
       input.sessionIdsByKey[runContext.sessionKey] = agentSessionId;
-      yield createWorkflowSessionStatusEvent({
-        runId: input.runId,
-        nodeId: sessionNodeId,
-        sessionKey: runContext.sessionKey,
-        agentSessionId,
-        previousSessionId,
-        context: input.syntheticId,
-      });
+      if (previousSessionId !== agentSessionId) {
+        yield createWorkflowSessionStatusEvent({
+          runId: input.runId,
+          nodeId: sessionNodeId,
+          sessionKey: runContext.sessionKey,
+          agentSessionId,
+          previousSessionId,
+          context: input.syntheticId,
+        });
+      }
     }
   }
 
@@ -623,6 +741,142 @@ function assertRequiredWorkflowCwd(
   if (parsed.meta.requiresCwd && !cwd?.trim()) {
     throw new Error("Workflow cwd is required.");
   }
+}
+
+function normalizeRecoveryState(
+  recovery: WorkflowRunRecoveryState | undefined,
+): Required<WorkflowRunRecoveryState> {
+  return {
+    outputs: sanitizeStringRecord(recovery?.outputs),
+    completedNodeIds: Array.isArray(recovery?.completedNodeIds)
+      ? recovery.completedNodeIds.filter(
+          (nodeId): nodeId is string =>
+            typeof nodeId === "string" && Boolean(nodeId.trim()),
+        )
+      : [],
+    sessionIdsByKey: sanitizeStringRecord(recovery?.sessionIdsByKey),
+    sessionCwdsByKey: sanitizeStringRecord(recovery?.sessionCwdsByKey),
+    attachSessionIdsByNodeId: sanitizeStringRecord(
+      recovery?.attachSessionIdsByNodeId,
+    ),
+    loopStates: sanitizeLoopRecoveryStates(recovery?.loopStates),
+  };
+}
+
+function sanitizeStringRecord(
+  value: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === "string" &&
+        Boolean(entry[0].trim()) &&
+        typeof entry[1] === "string" &&
+        Boolean(entry[1].trim()),
+    ),
+  );
+}
+
+function sanitizeLoopRecoveryStates(
+  value: Record<string, WorkflowLoopRecoveryState> | undefined,
+): Record<string, WorkflowLoopRecoveryState> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([nodeId, state]) => {
+      if (!nodeId.trim() || !state || typeof state !== "object") {
+        return [];
+      }
+      const nextIteration = Number.isInteger(state.nextIteration)
+        ? state.nextIteration
+        : 1;
+      return [
+        [
+          nodeId,
+          {
+            nextIteration,
+            previousStepOutputs: sanitizeStringRecord(state.previousStepOutputs),
+            ...(Number.isInteger(state.currentIteration)
+              ? { currentIteration: state.currentIteration }
+              : {}),
+            currentStepOutputs: sanitizeStringRecord(state.currentStepOutputs),
+            iterations: Array.isArray(state.iterations)
+              ? state.iterations.flatMap((iteration) =>
+                  sanitizeLoopIterationCheckpoint(iteration),
+                )
+              : [],
+          },
+        ],
+      ];
+    }),
+  );
+}
+
+function sanitizeLoopIterationCheckpoint(
+  value: WorkflowLoopRecoveryState["iterations"][number],
+): WorkflowLoopRecoveryState["iterations"] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  if (
+    !Number.isInteger(value.index) ||
+    typeof value.untilOutput !== "string" ||
+    typeof value.untilMatched !== "boolean"
+  ) {
+    return [];
+  }
+  return [
+    {
+      index: value.index,
+      outputs: sanitizeStringRecord(value.outputs),
+      untilOutput: value.untilOutput,
+      untilMatched: value.untilMatched,
+    },
+  ];
+}
+
+function readRecoveredLoopStopReason(
+  recoveredLoop: WorkflowLoopRecoveryState | undefined,
+  loop: NonNullable<WorkflowNode["loop"]>,
+): "until_matched" | "max_iterations_reached" | undefined {
+  const latestIteration = recoveredLoop?.iterations.at(-1);
+  if (!latestIteration) {
+    return undefined;
+  }
+  if (latestIteration.untilMatched) {
+    return "until_matched";
+  }
+  if ((recoveredLoop?.nextIteration ?? 1) > loop.maxIterations) {
+    return "max_iterations_reached";
+  }
+  return undefined;
+}
+
+function shouldFailRecoveredLoop(
+  loop: NonNullable<WorkflowNode["loop"]>,
+  stopReason: "until_matched" | "max_iterations_reached",
+): boolean {
+  return stopReason === "max_iterations_reached" && loop.onMaxIterations === "fail";
+}
+
+async function saveLoopCheckpoint(
+  request: WorkflowRunRequest,
+  checkpoint: {
+    runId: string;
+    nodeId: string;
+    state: WorkflowLoopRecoveryState;
+  },
+): Promise<void> {
+  await request.onCheckpoint?.({
+    runId: checkpoint.runId,
+    nodeId: checkpoint.nodeId,
+    kind: "loop",
+    state: checkpoint.state,
+  });
 }
 
 function assertSessionCwd(input: {

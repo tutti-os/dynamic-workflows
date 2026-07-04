@@ -37,7 +37,8 @@ export function VersionSelect(props: VersionSelectProps) {
         {props.versions.map((version) => (
           <SelectItem key={version.id} value={version.id}>
             v{version.version}
-            {version.id === props.currentVersionId ? " · current" : ""}
+            {version.id === props.currentVersionId ? " · official" : ""}
+            {version.source ? ` · ${formatSource(version.source)}` : ""}
             {" · "}
             {formatDate(version.createdAt)}
           </SelectItem>
@@ -45,6 +46,10 @@ export function VersionSelect(props: VersionSelectProps) {
       </SelectContent>
     </Select>
   );
+}
+
+function formatSource(value: string): string {
+  return value.replaceAll("_", " ");
 }
 
 function formatDate(value: string): string {

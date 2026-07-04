@@ -13,6 +13,7 @@ export type AgentRunInput = {
   prompt: string;
   model?: string;
   resumeSessionId?: string;
+  attachSessionId?: string;
   signal?: AbortSignal;
   metadata?: Record<string, unknown>;
 };

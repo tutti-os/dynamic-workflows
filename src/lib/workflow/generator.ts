@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
+import type { AgentRuntimeEvent } from "@/lib/agents/types";
 import { resolveWorkflowCwd } from "./cwd";
 import {
   assertWorkflowScriptValid,
@@ -12,6 +13,8 @@ export type GeneratedWorkflowScript = {
   repaired: boolean;
   repairAttempts: number;
 };
+
+export type EditedWorkflowScript = GeneratedWorkflowScript;
 
 export async function generateWorkflowScript(input: {
   description: string;
@@ -113,6 +116,77 @@ Rules:
   }
 }
 
+export async function editWorkflowScriptWithRepair(input: {
+  currentScript: string;
+  instruction: string;
+  provider?: string;
+  model?: string;
+  cwd?: string;
+  onEvent?: (event: AgentRuntimeEvent) => void;
+}): Promise<EditedWorkflowScript> {
+  assertWorkflowScriptValid(input.currentScript);
+  if (!input.instruction.trim()) {
+    throw new Error("Instruction is required");
+  }
+  if (input.provider === "mock" || !input.provider) {
+    return {
+      script: input.currentScript,
+      repaired: false,
+      repairAttempts: 0,
+    };
+  }
+
+  const cwd = resolveWorkflowCwd(input.cwd);
+  const prompt = buildEditPrompt({
+    currentScript: input.currentScript,
+    instruction: input.instruction,
+  });
+  const edited = stripCodeFence(
+    await collectAgentText({
+      provider: input.provider,
+      model: input.model,
+      cwd,
+      prompt,
+      onEvent: input.onEvent,
+    }),
+  );
+
+  try {
+    assertWorkflowScriptValid(edited);
+    return {
+      script: edited,
+      repaired: false,
+      repairAttempts: 0,
+    };
+  } catch (error) {
+    if (!(error instanceof WorkflowScriptSyntaxError)) {
+      throw error;
+    }
+
+    const repaired = stripCodeFence(
+      await collectAgentText({
+        provider: input.provider,
+        model: input.model,
+        cwd,
+        prompt: buildEditRepairPrompt({
+          instruction: input.instruction,
+          currentScript: input.currentScript,
+          script: edited,
+          error,
+        }),
+        onEvent: input.onEvent,
+      }),
+    );
+
+    assertWorkflowScriptValid(repaired);
+    return {
+      script: repaired,
+      repaired: true,
+      repairAttempts: 1,
+    };
+  }
+}
+
 function personalizeSample(description: string): string {
   if (!description.trim()) {
     return SAMPLE_WORKFLOW;
@@ -133,6 +207,7 @@ async function collectAgentText(input: {
   model?: string;
   cwd: string;
   prompt: string;
+  onEvent?: (event: AgentRuntimeEvent) => void;
 }): Promise<string> {
   let text = "";
   for await (const event of runAgent({
@@ -142,6 +217,7 @@ async function collectAgentText(input: {
     prompt: input.prompt,
     model: input.model,
   })) {
+    input.onEvent?.(event);
     if (event.type === "text_delta") {
       text += event.text;
     }
@@ -202,4 +278,75 @@ Rules:
 
 Broken script:
 ${input.script}`;
+}
+
+function buildEditPrompt(input: {
+  currentScript: string;
+  instruction: string;
+}) {
+  return `Edit this dynamic workflow script according to the user's request.
+
+User request:
+${input.instruction}
+
+Current workflow script:
+${input.currentScript}
+
+Rules:
+- Return the complete updated JavaScript workflow script only, no markdown fences.
+- Preserve unrelated behavior and structure where possible.
+- Keep "export const meta = { name, description }"; update meta only when useful for the requested edit.
+- Use phase("...") to group work.
+- Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
+- Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
+- Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows.
+- Use cwd on loop({...}) as the default cwd for its steps; step cwd overrides loop cwd.
+- loop maxIterations must be an integer from 1 to 10.
+- loop steps must be agent({ id, label, prompt }) calls.
+- Use appendPrompt on inherited loop steps only when later iterations should send deltas.
+- Put upstream values in inputs, for example inputs: { inventory }.
+- Reference inputs inside prompts with {{inventory}}.
+- Use {{workflow.cwd}} in prompts when agents need to know the actual run cwd; do not create a normal {{cwd}} input for this.
+- Do not reuse the same inherited session key across different cwd values.
+- Never use legacy string session values.
+- Do not concatenate prompt strings with +.
+- Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
+- Do not modify files in the working directory; only return the updated workflow script.`;
+}
+
+function buildEditRepairPrompt(input: {
+  instruction: string;
+  currentScript: string;
+  script: string;
+  error: WorkflowScriptSyntaxError;
+}) {
+  const diagnostics = input.error.diagnostics
+    .map((diagnostic) => {
+      const range = diagnostic.range
+        ? ` at ${diagnostic.range.start}-${diagnostic.range.end}`
+        : "";
+      return `- ${diagnostic.severity}${range}: ${diagnostic.message}`;
+    })
+    .join("\n");
+
+  return `Repair this edited dynamic workflow script so it parses and follows the workflow primitives.
+
+User request:
+${input.instruction}
+
+Parser diagnostics:
+${diagnostics}
+
+Original workflow script:
+${input.currentScript}
+
+Broken edited script:
+${input.script}
+
+Rules:
+- Return the complete updated JavaScript workflow script only, no markdown fences.
+- Preserve the requested edit and unrelated existing behavior.
+- Use only supported workflow primitives: meta, phase, agent, loop.
+- Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
+- Do not modify files in the working directory; only return the updated workflow script.`;
 }

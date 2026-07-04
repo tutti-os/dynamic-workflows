@@ -23,6 +23,7 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
       <div aria-label="Loop step flow" className="loop-mini-flow-steps">
         {props.loop.steps.map((step, index) => {
           const sessionView = describeLoopStepSession(props.loop, step);
+          const promptModeView = describeLoopStepPromptMode(step, sessionView);
           return (
             <div className="loop-mini-flow-step-group" key={step.id}>
               <button
@@ -32,7 +33,7 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                     ? "loop-mini-flow-step selected"
                     : "loop-mini-flow-step"
                 }
-                aria-label={`${index + 1} ${step.label} ${step.id} · ${sessionView.label} ${sessionView.badge}${sessionView.inherits ? ` ${step.appendPrompt ? "append" : "full prompt"}` : ""}`}
+                aria-label={`${index + 1} ${step.label} ${step.id} · ${sessionView.label} ${sessionView.badge}${promptModeView ? ` ${promptModeView.label}` : ""}`}
                 title={`Edit ${step.label}`}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -53,9 +54,9 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                 </div>
                 <div className="loop-mini-flow-badges">
                   <span className="loop-step-badge">{sessionView.badge}</span>
-                  {sessionView.inherits ? (
-                    <span className="loop-step-badge">
-                      {step.appendPrompt ? "append" : "full prompt"}
+                  {promptModeView ? (
+                    <span className="loop-step-badge" title={promptModeView.title}>
+                      {promptModeView.label}
                     </span>
                   ) : null}
                 </div>
@@ -123,8 +124,29 @@ function describeLoopStepSession(
   }
   return {
     label: session.key,
-    title: `Inherits workflow session ${session.key}`,
-    badge: "inherits",
+    title: `Reuses workflow session ${session.key} across loop iterations`,
+    badge: "reuse session",
     inherits: true,
+  };
+}
+
+function describeLoopStepPromptMode(
+  step: WorkflowLoopStep,
+  sessionView: { inherits: boolean },
+): { label: string; title: string } | undefined {
+  if (!sessionView.inherits) {
+    return undefined;
+  }
+  if (step.appendPrompt) {
+    return {
+      label: "appendPrompt",
+      title:
+        "First iteration sends the full prompt; later iterations reuse the session and send appendPrompt.",
+    };
+  }
+  return {
+    label: "full prompt",
+    title:
+      "Every iteration reuses the same session but sends this step's full prompt.",
   };
 }

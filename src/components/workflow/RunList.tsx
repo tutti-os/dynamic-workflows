@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   DirectoryIcon,
+  PlayIcon,
   RefreshIcon,
   Spinner,
   StatusDot,
@@ -10,6 +11,7 @@ import {
 import type { WorkflowRunRecord } from "@/lib/db/workflows";
 import {
   canRetryRun,
+  canResumeRun,
   formatDate,
   getRunVersionLabel,
   runStatusBadge,
@@ -24,6 +26,7 @@ export function RunList(props: {
   retryingRunId?: string;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
+  onResumeRun: (runId: string) => void;
 }) {
   return (
     <div className="run-list">
@@ -38,6 +41,7 @@ export function RunList(props: {
             retrying={props.retryingRunId === run.id}
             onSelectRun={props.onSelectRun}
             onRetryRun={props.onRetryRun}
+            onResumeRun={props.onResumeRun}
           />
         ))
       ) : (
@@ -58,6 +62,7 @@ function RunListItem(props: {
   retrying: boolean;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
+  onResumeRun: (runId: string) => void;
 }) {
   const { run } = props;
 
@@ -82,7 +87,23 @@ function RunListItem(props: {
         <Badge variant={runStatusBadge(run.status)}>{run.status}</Badge>
         <time>{formatDate(run.startedAt)}</time>
       </button>
-      {canRetryRun(run.status) ? (
+      {canResumeRun(run.status) ? (
+        <Button
+          className="run-row-action"
+          size="sm"
+          variant="outline"
+          type="button"
+          disabled={props.isRunning}
+          onClick={() => props.onResumeRun(run.id)}
+        >
+          {props.retrying ? (
+            <Spinner size={14} />
+          ) : (
+            <PlayIcon data-icon="inline-start" />
+          )}
+          Resume
+        </Button>
+      ) : canRetryRun(run.status) ? (
         <Button
           className="run-row-action"
           size="sm"

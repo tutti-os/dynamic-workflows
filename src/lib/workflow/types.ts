@@ -55,6 +55,7 @@ export type WorkflowLoopUntil = {
 
 export type WorkflowLoopSpec = {
   maxIterations: number;
+  onMaxIterations: "fail" | "complete";
   session?: WorkflowSessionSpec;
   steps: WorkflowLoopStep[];
   until: WorkflowLoopUntil;
@@ -123,7 +124,38 @@ export type WorkflowRunRequest = {
   model?: string;
   cwd?: string;
   inputs?: Record<string, string>;
+  recovery?: WorkflowRunRecoveryState;
+  onCheckpoint?: (checkpoint: WorkflowRunCheckpoint) => void | Promise<void>;
   signal?: AbortSignal;
+};
+
+export type WorkflowRunRecoveryState = {
+  outputs?: Record<string, string>;
+  completedNodeIds?: string[];
+  sessionIdsByKey?: Record<string, string>;
+  sessionCwdsByKey?: Record<string, string>;
+  attachSessionIdsByNodeId?: Record<string, string>;
+  loopStates?: Record<string, WorkflowLoopRecoveryState>;
+};
+
+export type WorkflowLoopRecoveryState = {
+  nextIteration: number;
+  previousStepOutputs: Record<string, string>;
+  currentIteration?: number;
+  currentStepOutputs?: Record<string, string>;
+  iterations: Array<{
+    index: number;
+    outputs: Record<string, string>;
+    untilOutput: string;
+    untilMatched: boolean;
+  }>;
+};
+
+export type WorkflowRunCheckpoint = {
+  runId: string;
+  nodeId: string;
+  kind: "loop";
+  state: WorkflowLoopRecoveryState;
 };
 
 export type WorkflowNodeSessionStatus =

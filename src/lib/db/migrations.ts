@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -24,6 +24,18 @@ export function migrateDb(database: Database.Database): void {
       if (currentVersion < 2) {
         applySchemaV2(database);
         recordSchemaMigration(database, 2);
+      }
+      if (currentVersion < 3) {
+        applySchemaV3(database);
+        recordSchemaMigration(database, 3);
+      }
+      if (currentVersion < 4) {
+        applySchemaV4(database);
+        recordSchemaMigration(database, 4);
+      }
+      if (currentVersion < 5) {
+        applySchemaV5(database);
+        recordSchemaMigration(database, 5);
       }
     })();
 }
@@ -118,5 +130,58 @@ function applySchemaV2(database: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_workflow_generations_workflow_id
       ON workflow_generations(workflow_id, created_at DESC);
+  `);
+}
+
+function applySchemaV3(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_versions ADD COLUMN source TEXT;
+    ALTER TABLE workflow_versions ADD COLUMN base_version_id TEXT;
+    ALTER TABLE workflow_versions ADD COLUMN note TEXT;
+
+    CREATE TABLE IF NOT EXISTS workflow_edit_jobs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      base_version_id TEXT NOT NULL,
+      created_version_id TEXT,
+      instruction TEXT NOT NULL,
+      provider TEXT,
+      model TEXT,
+      cwd TEXT,
+      status TEXT NOT NULL,
+      result_json TEXT,
+      error_json TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+      FOREIGN KEY (base_version_id) REFERENCES workflow_versions(id),
+      FOREIGN KEY (created_version_id) REFERENCES workflow_versions(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_edit_jobs_workflow_id
+      ON workflow_edit_jobs(workflow_id, created_at DESC);
+  `);
+}
+
+function applySchemaV4(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_edit_jobs ADD COLUMN agent_session_id TEXT;
+  `);
+}
+
+function applySchemaV5(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_run_checkpoints (
+      run_id TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      checkpoint_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (run_id, node_id),
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_checkpoints_run_id
+      ON workflow_run_checkpoints(run_id);
   `);
 }

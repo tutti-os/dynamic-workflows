@@ -25,6 +25,8 @@ type WorkflowHeaderProps = {
   hasParseErrors: boolean;
   canRun: boolean;
   viewingOldVersion: boolean;
+  agentEditing: boolean;
+  publishingVersion: boolean;
   duplicating: boolean;
   deleting: boolean;
   running: boolean;
@@ -35,6 +37,8 @@ type WorkflowHeaderProps = {
   onSave: () => void;
   onReset: () => void;
   onRestore: () => void;
+  onAgentEdit: () => void;
+  onPublishVersion: () => void;
   onDuplicate: () => void;
   onExport: () => void;
   onDelete: () => void;
@@ -81,7 +85,7 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
               onValueChange={props.onSelectVersion}
             />
             {props.viewingOldVersion ? (
-              <Badge variant="warning">viewing old version</Badge>
+              <Badge variant="warning">not official</Badge>
             ) : null}
             {props.dirty ? <Badge variant="warning">unsaved</Badge> : null}
             {props.requiresCwd ? (
@@ -100,6 +104,8 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
         hasParseErrors={props.hasParseErrors}
         canRun={props.canRun}
         viewingOldVersion={props.viewingOldVersion}
+        agentEditing={props.agentEditing}
+        publishingVersion={props.publishingVersion}
         canExport={Boolean(props.selectedVersion)}
         duplicating={props.duplicating}
         deleting={props.deleting}
@@ -108,6 +114,8 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
         onSave={props.onSave}
         onReset={props.onReset}
         onRestore={props.onRestore}
+        onAgentEdit={props.onAgentEdit}
+        onPublishVersion={props.onPublishVersion}
         onDuplicate={props.onDuplicate}
         onExport={props.onExport}
         onDelete={props.onDelete}

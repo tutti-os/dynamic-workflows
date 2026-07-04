@@ -25,3 +25,11 @@ export async function openAgentSession(agentSessionId: string) {
   }
   await adapter.openSession(agentSessionId);
 }
+
+export async function cancelAgentRun(runId: string) {
+  const adapter = getAgentRuntimeAdapter();
+  if (!adapter.cancel) {
+    return;
+  }
+  await adapter.cancel(runId);
+}

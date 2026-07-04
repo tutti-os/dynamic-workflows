@@ -4,6 +4,7 @@ import {
   CheckIcon,
   CopyIcon,
   LaunchIcon,
+  PlayIcon,
   RefreshIcon,
   Spinner,
   WarningLinedIcon,
@@ -12,6 +13,7 @@ import type { WorkflowRunRecord } from "@/lib/db/workflows";
 import type { RunDetail, RunNodeDetail } from "@/lib/workflow/run-detail";
 import {
   canRetryRun,
+  canResumeRun,
   formatDate,
   formatJson,
   getRunError,
@@ -28,6 +30,7 @@ export function RunDetailPanel(props: {
   retryingRunId?: string;
   copiedRunField?: string;
   onRetryRun: (runId: string) => void;
+  onResumeRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
@@ -44,6 +47,7 @@ export function RunDetailPanel(props: {
         retrying={props.retryingRunId === run.id}
         copied={props.copiedRunField === `id:${run.id}`}
         onRetryRun={props.onRetryRun}
+        onResumeRun={props.onResumeRun}
         onCopyRunText={props.onCopyRunText}
       />
 
@@ -100,6 +104,7 @@ function RunDetailHeader(props: {
   retrying: boolean;
   copied: boolean;
   onRetryRun: (runId: string) => void;
+  onResumeRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
 }) {
   const { run } = props;
@@ -120,6 +125,22 @@ function RunDetailHeader(props: {
           label="Copy ID"
           onClick={() => props.onCopyRunText(`id:${run.id}`, run.id)}
         />
+        {canResumeRun(run.status) ? (
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            disabled={props.isRunning}
+            onClick={() => props.onResumeRun(run.id)}
+          >
+            {props.retrying ? (
+              <Spinner size={14} />
+            ) : (
+              <PlayIcon data-icon="inline-start" />
+            )}
+            Resume
+          </Button>
+        ) : null}
         {canRetryRun(run.status) ? (
           <Button
             size="sm"

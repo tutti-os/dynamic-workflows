@@ -12,6 +12,7 @@ export type ApiErrorCode =
   | "WORKFLOW_SCRIPT_INVALID"
   | "WORKFLOW_CWD_INVALID"
   | "WORKFLOW_GENERATION_FAILED"
+  | "WORKFLOW_EDIT_FAILED"
   | "WORKFLOW_REPAIR_FAILED"
   | "WORKFLOW_IMPORT_FAILED"
   | "WORKFLOW_SAVE_FAILED"
@@ -49,6 +50,7 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   WORKFLOW_CWD_INVALID:
     "The working directory is invalid or outside the allowed workspace.",
   WORKFLOW_GENERATION_FAILED: "Workflow generation failed.",
+  WORKFLOW_EDIT_FAILED: "Workflow edit failed.",
   WORKFLOW_REPAIR_FAILED: "The agent could not repair this workflow script.",
   WORKFLOW_IMPORT_FAILED: "Workflow import failed.",
   WORKFLOW_SAVE_FAILED: "Workflow save failed.",

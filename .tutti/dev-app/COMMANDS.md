@@ -1,6 +1,6 @@
 # Dynamic Workflows CLI
 
-The local debug app exposes the `dynamic-workflows` scope through `tutti.cli.json`. Commands return Tutti `CliCommandOutput` objects and are routed to the source Next app under `/tutti/cli/*`.
+The dev package exposes the `dynamic-workflows` scope through `tutti.cli.json`. Commands return Tutti `CliCommandOutput` objects and are routed to the source Next app under `/tutti/cli/*`.
 
 Use `--json` for machine-readable output:
 
@@ -12,6 +12,7 @@ tutti --json dynamic-workflows show --workflow-id <id> --include-script
 tutti --json dynamic-workflows validate --script '<workflow-js>'
 tutti --json dynamic-workflows create --prompt 'Summarize this repo and propose next steps' --provider codex
 tutti --json dynamic-workflows run --workflow-id <id> --provider codex --inputs '{"topic":"release"}'
+tutti --json dynamic-workflows resume --workflow-id <id> --run-id <run-id>
 ```
 
 Commands:
@@ -22,6 +23,7 @@ Commands:
 - `show`: one workflow, parsed node summary, versions, and recent runs.
 - `validate`: parser diagnostics for a workflow script without saving it.
 - `create`: generate and save a workflow from a natural-language prompt.
-- `run`: execute a saved workflow current version and persist a run record.
+- `run`: start the current saved workflow version in the background and persist a run record.
+- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.
 
 `run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `provider` is omitted, nodes without an explicit provider run with `mock` so local smoke checks stay safe.

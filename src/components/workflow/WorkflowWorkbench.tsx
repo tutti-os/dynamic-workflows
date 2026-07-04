@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { AgentEditDialog } from "@/components/workflow/AgentEditDialog";
 import { RunInputsDialog } from "@/components/workflow/RunInputsDialog";
 import { WorkflowHeader } from "@/components/workflow/WorkflowHeader";
 import { WorkflowDetailsDialog } from "@/components/workflow/WorkflowDetailsDialog";
@@ -54,6 +55,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
   const [activeTab, setActiveTab] = useState<InspectorTab>("edit");
   const [mainView, setMainView] = useState<MainView>("graph");
   const [isRunInputDialogOpen, setIsRunInputDialogOpen] = useState(false);
+  const [isAgentEditDialogOpen, setIsAgentEditDialogOpen] = useState(false);
   const appendRunEventLogRef = useRef<(message: string) => void>(() => {});
   const resetRunStateForVersionRef = useRef<() => void>(() => {});
   const appendDocumentEventLog = useCallback((message: string) => {
@@ -119,7 +121,10 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     isDeletingWorkflow,
     isGeneratingWorkflow,
     isRetryingGeneration,
+    isAgentEditingWorkflow,
+    isPublishingVersion,
     generationError,
+    agentEditError,
     isViewingOldVersion,
     setMetadataName,
     setMetadataDescription,
@@ -134,6 +139,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     duplicateCurrentWorkflow,
     deleteCurrentWorkflow,
     retryWorkflowGeneration,
+    publishSelectedVersion,
     exportSelectedVersion,
   } = useWorkflowDocument({
     workflowId,
@@ -171,6 +177,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     resetVersionRunState,
     submitRunInputDialog,
     retryRun,
+    resumeRun,
     cancelCurrentRun,
     selectRun,
     copyRunText,
@@ -250,6 +257,22 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     setIsRunInputDialogOpen(true);
   }
 
+  function openAgentEditDialog() {
+    if (isDirty) {
+      appendEventLog("agent edit blocked: unsaved changes");
+      return;
+    }
+    setIsAgentEditDialogOpen(true);
+  }
+
+  async function handleAgentEditVersionCreated(version: WorkflowVersionRecord) {
+    const nextDetail = await loadWorkflow();
+    const created =
+      nextDetail.versions.find((item) => item.id === version.id) ?? version;
+    applyVersion(created);
+    resetVersionViewState();
+  }
+
   if (isLoading) {
     return (
       <main className="app-shell">
@@ -291,6 +314,8 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         hasParseErrors={hasParseErrors}
         canRun={parsed.nodes.length > 0 && !hasParseErrors}
         viewingOldVersion={isViewingOldVersion}
+        agentEditing={isAgentEditingWorkflow || isAgentEditDialogOpen}
+        publishingVersion={isPublishingVersion}
         duplicating={isDuplicatingWorkflow}
         deleting={isDeletingWorkflow}
         running={isRunning}
@@ -301,6 +326,8 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         onSave={() => void saveCurrentVersion()}
         onReset={resetScriptChanges}
         onRestore={() => void restoreSelectedVersion()}
+        onAgentEdit={openAgentEditDialog}
+        onPublishVersion={() => void publishSelectedVersion()}
         onDuplicate={() => void duplicateCurrentWorkflow()}
         onExport={exportSelectedVersion}
         onDelete={() => void deleteCurrentWorkflow()}
@@ -341,6 +368,24 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         onSave={() => void saveDetailsDialog()}
       />
 
+      <AgentEditDialog
+        open={isAgentEditDialogOpen}
+        workflowId={workflowId}
+        baseVersion={selectedVersion}
+        providers={providers}
+        provider={effectiveProvider}
+        model={model}
+        modelOptions={modelOptions}
+        cwd={cwd}
+        onOpenChange={setIsAgentEditDialogOpen}
+        onProviderChange={setProvider}
+        onModelChange={setModel}
+        onCwdChange={setCwd}
+        onVersionCreated={handleAgentEditVersionCreated}
+        onOpenAgentSession={openAgentSession}
+        onLogEvent={appendEventLog}
+      />
+
       <section className="workspace">
         <WorkflowPreviewPane
           mainView={mainView}
@@ -378,7 +423,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           graphParsed={graphParsed}
           parsedDiagnostics={parsed.diagnostics}
           parseError={parseError}
-          scriptSaveError={scriptSaveError}
+          scriptSaveError={scriptSaveError ?? agentEditError}
           scriptSaveDiagnostics={scriptSaveDiagnostics}
           runningCount={runningCount}
           completedCount={completedCount}
@@ -405,6 +450,7 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
           onSelectLoopStep={setSelectedLoopStepId}
           onSelectRun={selectRun}
           onRetryRun={(runId) => void retryRun(runId)}
+          onResumeRun={(runId) => void resumeRun(runId)}
           onCopyRunText={(key, text) => void copyRunText(key, text)}
           onOpenAgentSession={(agentSessionId) =>
             void openAgentSession(agentSessionId)

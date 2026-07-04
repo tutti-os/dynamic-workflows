@@ -1148,9 +1148,45 @@ a {
   max-width: min(520px, calc(100vw - 32px));
 }
 
+.agent-edit-dialog {
+  width: min(660px, calc(100vw - 32px));
+  max-width: min(660px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 40px));
+}
+
 .workflow-details-dialog-body {
   display: grid;
   gap: 12px;
+}
+
+.agent-edit-dialog-body {
+  display: grid;
+  max-height: min(520px, calc(100vh - 220px));
+  gap: 14px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.agent-edit-status-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.agent-edit-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--border-1);
+  padding-top: 12px;
+}
+
+.agent-edit-settings .run-dialog-control-field-wide {
+  grid-column: 1 / -1;
 }
 
 .workflow-input-dialog-status {

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { getApiErrorMessage } from "@/lib/api/errors";
 import type {
   WorkflowDetail,
+  WorkflowRunRecord,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows";
 import {
@@ -45,6 +46,8 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
   resetVersionRunState: () => void;
   startRunEvents: (options: {
     initialLog: string;
+    initialRun?: WorkflowRunRecord;
+    runId?: string;
     runContext: PendingRunContext;
   }) => void;
   handleRunEvent: (event: WorkflowRunEvent) => void;
@@ -91,10 +94,25 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
   }, [nodeOutputs]);
 
   const startRunEvents = useCallback(
-    (options: { initialLog: string; runContext: PendingRunContext }) => {
-      activeRunIdRef.current = undefined;
+    (options: {
+      initialLog: string;
+      initialRun?: WorkflowRunRecord;
+      runId?: string;
+      runContext: PendingRunContext;
+    }) => {
+      activeRunIdRef.current = options.runId ?? options.initialRun?.id;
       pendingRunContextRef.current = options.runContext;
-      setLiveRun(null);
+      const initialLiveRun = options.initialRun
+        ? {
+            run: options.initialRun,
+            log: "",
+            logSizeBytes: 0,
+            logReturnedBytes: 0,
+            logTruncated: false,
+          }
+        : null;
+      setLiveRun(initialLiveRun);
+      setSelectedRun(initialLiveRun);
       setNodeOutputs({});
       setNodeStatuses(createInitialRunSummary(input.parsed).nodeStatuses);
       setEventLog([options.initialLog]);

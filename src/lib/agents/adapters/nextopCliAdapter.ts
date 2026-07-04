@@ -181,11 +181,47 @@ export function createNextopCliAgentAdapter(
       input.signal?.addEventListener("abort", abortListener, { once: true });
 
       try {
+        const attachSessionId = input.attachSessionId?.trim();
         const resumeSessionId = input.resumeSessionId?.trim();
         let latestVersion = 0;
         let initialSession: RequiredSessionRef;
 
-        if (resumeSessionId) {
+        if (attachSessionId) {
+          yield {
+            type: "status",
+            status: "spawning",
+            message: `Attaching to Nextop session ${attachSessionId}.`,
+          };
+
+          activeSessions.set(input.runId, attachSessionId);
+          const fallbackSession: RequiredSessionRef = {
+            agentSessionId: attachSessionId,
+            provider,
+            model,
+            status: "running",
+          };
+          const baseline = parseSessionSummary(
+            await runner(
+              [
+                "--json",
+                "agent",
+                "session-summary",
+                "--session-id",
+                attachSessionId,
+                "--limit",
+                "1",
+              ],
+              { signal: input.signal },
+            ),
+            fallbackSession,
+          );
+          latestVersion = baseline.latestVersion;
+          initialSession = {
+            ...fallbackSession,
+            ...baseline.session,
+            agentSessionId: attachSessionId,
+          };
+        } else if (resumeSessionId) {
           yield {
             type: "status",
             status: "spawning",

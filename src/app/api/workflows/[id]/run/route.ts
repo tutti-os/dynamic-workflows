@@ -1,8 +1,6 @@
 import { prepareCurrentWorkflowRun } from "@/lib/workflow/run-request";
-import {
-  createWorkflowRunErrorStream,
-  createWorkflowRunStreamResponse,
-} from "@/lib/workflow/run-response";
+import { startWorkflowRunJob } from "@/lib/workflow/run-jobs";
+import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 
 export async function POST(
   request: Request,
@@ -10,9 +8,10 @@ export async function POST(
 ) {
   const { id } = await context.params;
   try {
-    const run = await prepareCurrentWorkflowRun({ workflowId: id, request });
-    return createWorkflowRunStreamResponse({ request, ...run });
+    const options = await prepareCurrentWorkflowRun({ workflowId: id, request });
+    const run = startWorkflowRunJob(options);
+    return Response.json({ run });
   } catch (error) {
-    return createWorkflowRunErrorStream(error);
+    return toWorkflowApiErrorResponse(error, "WORKFLOW_RUN_FAILED");
   }
 }

@@ -5,6 +5,7 @@ import {
   EMPTY_LOG_PREVIEW,
   readRunLogPreview,
 } from "@/lib/workflow/run-log";
+import { markWorkflowRunInterruptedIfStale } from "@/lib/workflow/run-jobs";
 
 export async function GET(
   _request: Request,
@@ -15,10 +16,11 @@ export async function GET(
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
 
-  const run = getWorkflowRun(runId);
-  if (!run || run.workflowId !== id) {
+  const existingRun = getWorkflowRun(runId);
+  if (!existingRun || existingRun.workflowId !== id) {
     return NextResponse.json(apiError("RUN_NOT_FOUND"), { status: 404 });
   }
+  const run = await markWorkflowRunInterruptedIfStale(existingRun);
 
   const logPreview = run.logPath
     ? await readRunLogPreview(run.logPath)

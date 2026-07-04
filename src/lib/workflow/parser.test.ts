@@ -110,6 +110,7 @@ const delivery = await loop({
   id: "delivery_loop",
   label: "Delivery Loop",
   maxIterations: 3,
+  onMaxIterations: "complete",
   cwd: "src",
   session: { mode: "inherit", key: "delivery", scope: "step" },
   steps: [
@@ -143,6 +144,7 @@ Previous acceptance: {{acceptance}}\`,
       templateRefs: ["task"],
       loop: {
         maxIterations: 3,
+        onMaxIterations: "complete",
         session: { mode: "inherit", key: "delivery", scope: "step" },
         until: { source: "acceptance", includes: "PASS:" },
       },
@@ -218,9 +220,10 @@ const broken = await loop({
 
     expect(parsed.meta.requiresCwd).toBe(true);
     expect(parsed.externalInputs).toEqual(["requirement"]);
+    expect(parsed.nodes[0].loop?.onMaxIterations).toBe("fail");
     expect(parsed.nodes.map((node) => [node.id, node.cwd])).toEqual([
       ["delivery_loop", "."],
-      ["final_summary", "."],
+      ["submit_mr", "."],
     ]);
   });
 });

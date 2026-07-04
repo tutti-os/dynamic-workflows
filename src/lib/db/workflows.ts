@@ -5,6 +5,7 @@ import {
   parseWorkflowScript,
 } from "@/lib/workflow/parser";
 import type {
+  WorkflowLoopRecoveryState,
   ParsedWorkflow,
   WorkflowDiagnostic,
   WorkflowMeta,
@@ -26,10 +27,18 @@ export type WorkflowVersionRecord = {
   version: number;
   script: string;
   meta: WorkflowMeta;
+  source: string | null;
+  baseVersionId: string | null;
+  note: string | null;
   createdAt: string;
 };
 
-export type WorkflowRunStatus = "running" | "completed" | "failed" | "canceled";
+export type WorkflowRunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "interrupted";
 
 export type WorkflowGenerationStatus =
   | "pending"
@@ -58,6 +67,37 @@ export type WorkflowGenerationRecord = {
   finishedAt: string | null;
 };
 
+export type WorkflowEditJobStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+export type WorkflowEditJobError = {
+  code?: string;
+  message: string;
+  diagnostics?: WorkflowDiagnostic[];
+};
+
+export type WorkflowEditJobRecord = {
+  id: string;
+  workflowId: string;
+  baseVersionId: string;
+  createdVersionId: string | null;
+  instruction: string;
+  provider: string | null;
+  model: string | null;
+  cwd: string | null;
+  agentSessionId: string | null;
+  status: WorkflowEditJobStatus;
+  result: unknown;
+  error: WorkflowEditJobError | null;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+};
+
 export type WorkflowRunRecord = {
   id: string;
   workflowId: string;
@@ -73,6 +113,13 @@ export type WorkflowRunRecord = {
   logPath: string | null;
   startedAt: string;
   finishedAt: string | null;
+};
+
+export type WorkflowRunCheckpointRecord = {
+  runId: string;
+  nodeId: string;
+  checkpoint: WorkflowLoopRecoveryState;
+  updatedAt: string;
 };
 
 export type WorkflowListItem = {
@@ -106,6 +153,9 @@ type VersionRow = {
   version: number;
   script: string;
   meta_json: string;
+  source: string | null;
+  base_version_id: string | null;
+  note: string | null;
   created_at: string;
 };
 
@@ -139,6 +189,31 @@ type GenerationRow = {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+};
+
+type EditJobRow = {
+  id: string;
+  workflow_id: string;
+  base_version_id: string;
+  created_version_id: string | null;
+  instruction: string;
+  provider: string | null;
+  model: string | null;
+  cwd: string | null;
+  agent_session_id: string | null;
+  status: WorkflowEditJobStatus;
+  result_json: string | null;
+  error_json: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+type RunCheckpointRow = {
+  run_id: string;
+  node_id: string;
+  checkpoint_json: string;
+  updated_at: string;
 };
 
 export function listWorkflows(): WorkflowListItem[] {
@@ -218,11 +293,22 @@ export function createWorkflowFromScript(script: string): WorkflowDetail {
         .prepare(
           `
           INSERT INTO workflow_versions (
-            id, workflow_id, version, script, meta_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
+            id, workflow_id, version, script, meta_json, source,
+            base_version_id, note, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
-        .run(versionId, workflowId, 1, script, JSON.stringify(parsed.meta), now);
+        .run(
+          versionId,
+          workflowId,
+          1,
+          script,
+          JSON.stringify(parsed.meta),
+          "import",
+          null,
+          null,
+          now,
+        );
     })();
 
   const detail = getWorkflowDetail(workflowId);
@@ -405,8 +491,9 @@ export function completeWorkflowGeneration(input: {
         .prepare(
           `
           INSERT INTO workflow_versions (
-            id, workflow_id, version, script, meta_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
+            id, workflow_id, version, script, meta_json, source,
+            base_version_id, note, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
         .run(
@@ -415,6 +502,9 @@ export function completeWorkflowGeneration(input: {
           version.next_version,
           input.script,
           JSON.stringify(parsed.meta),
+          "generation",
+          null,
+          null,
           now,
         );
 
@@ -480,14 +570,276 @@ export function failWorkflowGeneration(input: {
   return getWorkflowGeneration(input.generationId);
 }
 
+export function createWorkflowEditJob(input: {
+  workflowId: string;
+  baseVersionId?: string;
+  instruction: string;
+  provider?: string;
+  model?: string;
+  cwd?: string;
+}): WorkflowEditJobRecord {
+  const detail = getWorkflowDetail(input.workflowId);
+  if (!detail?.currentVersion) {
+    throw new Error("Workflow version not found");
+  }
+
+  const baseVersionId = input.baseVersionId ?? detail.currentVersion.id;
+  const baseVersion = getWorkflowVersion(baseVersionId);
+  if (!baseVersion || baseVersion.workflowId !== input.workflowId) {
+    throw new Error("Workflow version not found");
+  }
+
+  const instruction = input.instruction.trim();
+  if (!instruction) {
+    throw new Error("Instruction is required");
+  }
+
+  const now = new Date().toISOString();
+  const editId = randomUUID();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO workflow_edit_jobs (
+        id, workflow_id, base_version_id, created_version_id, instruction,
+        provider, model, cwd, agent_session_id, status, result_json, error_json,
+        created_at, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    )
+    .run(
+      editId,
+      input.workflowId,
+      baseVersionId,
+      null,
+      instruction,
+      input.provider ?? null,
+      input.model ?? null,
+      input.cwd ?? null,
+      null,
+      "pending",
+      null,
+      null,
+      now,
+      null,
+      null,
+    );
+
+  const edit = getWorkflowEditJob(editId);
+  if (!edit) {
+    throw new Error("Failed to create workflow edit");
+  }
+  return edit;
+}
+
+export function getWorkflowEditJob(editId: string): WorkflowEditJobRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM workflow_edit_jobs WHERE id = ?")
+    .get(editId) as EditJobRow | undefined;
+  return row ? mapEditJob(row) : null;
+}
+
+export function listWorkflowEditJobs(input: {
+  workflowId: string;
+  limit?: number;
+}): WorkflowEditJobRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_edit_jobs
+      WHERE workflow_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `,
+    )
+    .all(input.workflowId, input.limit ?? 20) as EditJobRow[];
+  return rows.map(mapEditJob);
+}
+
+export function markWorkflowEditJobRunning(
+  editId: string,
+): WorkflowEditJobRecord | null {
+  const edit = getWorkflowEditJob(editId);
+  if (!edit || edit.status === "completed") {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_edit_jobs
+      SET status = 'running',
+        started_at = COALESCE(started_at, ?),
+        finished_at = NULL,
+        error_json = NULL
+      WHERE id = ?
+        AND status != 'completed'
+    `,
+    )
+    .run(now, editId);
+
+  return getWorkflowEditJob(editId);
+}
+
+export function updateWorkflowEditJobAgentSession(input: {
+  editId: string;
+  agentSessionId: string;
+}): WorkflowEditJobRecord | null {
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_edit_jobs
+      SET agent_session_id = ?
+      WHERE id = ?
+    `,
+    )
+    .run(input.agentSessionId, input.editId);
+
+  return getWorkflowEditJob(input.editId);
+}
+
+export function completeWorkflowEditJob(input: {
+  editId: string;
+  script: string;
+  result: unknown;
+}): WorkflowEditJobRecord {
+  const edit = getWorkflowEditJob(input.editId);
+  if (!edit) {
+    throw new Error("Workflow edit not found");
+  }
+  if (edit.status === "canceled") {
+    return edit;
+  }
+
+  const version = createWorkflowVersion({
+    workflowId: edit.workflowId,
+    script: input.script,
+    publish: false,
+    source: "agent_edit",
+    baseVersionId: edit.baseVersionId,
+    note: edit.instruction,
+  });
+
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_edit_jobs
+      SET status = 'completed',
+        created_version_id = ?,
+        result_json = ?,
+        error_json = NULL,
+        finished_at = ?
+      WHERE id = ?
+        AND status != 'canceled'
+    `,
+    )
+    .run(
+      version.id,
+      JSON.stringify(input.result),
+      now,
+      input.editId,
+    );
+
+  const completed = getWorkflowEditJob(input.editId);
+  if (!completed) {
+    throw new Error("Workflow edit not found");
+  }
+  if (completed.status === "canceled") {
+    return completed;
+  }
+  return completed;
+}
+
+export function failWorkflowEditJob(input: {
+  editId: string;
+  error: WorkflowEditJobError;
+}): WorkflowEditJobRecord | null {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_edit_jobs
+      SET status = 'failed',
+        error_json = ?,
+        finished_at = ?
+      WHERE id = ?
+        AND status NOT IN ('completed', 'canceled')
+    `,
+    )
+    .run(JSON.stringify(input.error), now, input.editId);
+
+  return getWorkflowEditJob(input.editId);
+}
+
+export function cancelWorkflowEditJob(input: {
+  editId: string;
+  error?: WorkflowEditJobError;
+}): WorkflowEditJobRecord | null {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_edit_jobs
+      SET status = 'canceled',
+        error_json = ?,
+        finished_at = ?
+      WHERE id = ?
+        AND status IN ('pending', 'running')
+    `,
+    )
+    .run(
+      input.error
+        ? JSON.stringify(input.error)
+        : JSON.stringify({ message: "Workflow edit canceled." }),
+      now,
+      input.editId,
+    );
+
+  return getWorkflowEditJob(input.editId);
+}
+
+export function markWorkflowEditJobStale(editId: string): WorkflowEditJobRecord | null {
+  return failWorkflowEditJob({
+    editId,
+    error: {
+      code: "WORKFLOW_EDIT_STALE",
+      message: "Workflow edit runner was interrupted. Retry this edit.",
+    },
+  });
+}
+
+export function createWorkflowEditRetry(
+  editId: string,
+): WorkflowEditJobRecord {
+  const edit = getWorkflowEditJob(editId);
+  if (!edit) {
+    throw new Error("Workflow edit not found");
+  }
+
+  return createWorkflowEditJob({
+    workflowId: edit.workflowId,
+    baseVersionId: edit.baseVersionId,
+    instruction: edit.instruction,
+    provider: edit.provider ?? undefined,
+    model: edit.model ?? undefined,
+    cwd: edit.cwd ?? undefined,
+  });
+}
+
 export function createWorkflowVersion(input: {
   workflowId: string;
   script: string;
+  publish?: boolean;
+  source?: string;
+  baseVersionId?: string;
+  note?: string;
 }): WorkflowVersionRecord {
   const database = getDb();
   const parsed = assertWorkflowScriptValid(input.script);
   const now = new Date().toISOString();
   const versionId = randomUUID();
+  const publish = input.publish ?? true;
 
   const version = database
     .prepare(
@@ -505,8 +857,9 @@ export function createWorkflowVersion(input: {
         .prepare(
           `
           INSERT INTO workflow_versions (
-            id, workflow_id, version, script, meta_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
+            id, workflow_id, version, script, meta_json, source,
+            base_version_id, note, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
         .run(
@@ -515,22 +868,39 @@ export function createWorkflowVersion(input: {
           version.next_version,
           input.script,
           JSON.stringify(parsed.meta),
+          input.source ?? null,
+          input.baseVersionId ?? null,
+          input.note ?? null,
           now,
         );
 
-      database
-        .prepare(
-          `
-          UPDATE workflows
-          SET current_version_id = ?, updated_at = ?
-          WHERE id = ?
-        `,
-        )
-        .run(
-          versionId,
-          now,
-          input.workflowId,
-        );
+      if (publish) {
+        database
+          .prepare(
+            `
+            UPDATE workflows
+            SET name = ?, description = ?, current_version_id = ?, updated_at = ?
+            WHERE id = ?
+          `,
+          )
+          .run(
+            parsed.meta.name,
+            parsed.meta.description,
+            versionId,
+            now,
+            input.workflowId,
+          );
+      } else {
+        database
+          .prepare(
+            `
+            UPDATE workflows
+            SET updated_at = ?
+            WHERE id = ?
+          `,
+          )
+          .run(now, input.workflowId);
+      }
     })();
 
   const created = getWorkflowVersion(versionId);
@@ -538,6 +908,43 @@ export function createWorkflowVersion(input: {
     throw new Error("Failed to create workflow version");
   }
   return created;
+}
+
+export function publishWorkflowVersion(input: {
+  workflowId: string;
+  versionId: string;
+}): WorkflowDetail {
+  const version = getWorkflowVersion(input.versionId);
+  if (!version || version.workflowId !== input.workflowId) {
+    throw new Error("Workflow version not found");
+  }
+
+  const now = new Date().toISOString();
+  const result = getDb()
+    .prepare(
+      `
+      UPDATE workflows
+      SET name = ?, description = ?, current_version_id = ?, updated_at = ?
+      WHERE id = ?
+    `,
+    )
+    .run(
+      version.meta.name,
+      version.meta.description,
+      input.versionId,
+      now,
+      input.workflowId,
+    );
+
+  if (result.changes === 0) {
+    throw new Error("Workflow not found");
+  }
+
+  const detail = getWorkflowDetail(input.workflowId);
+  if (!detail) {
+    throw new Error("Workflow not found");
+  }
+  return detail;
 }
 
 export function updateWorkflowMetadata(input: {
@@ -613,8 +1020,9 @@ export function duplicateWorkflow(input: {
         .prepare(
           `
           INSERT INTO workflow_versions (
-            id, workflow_id, version, script, meta_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
+            id, workflow_id, version, script, meta_json, source,
+            base_version_id, note, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
         .run(
@@ -623,6 +1031,9 @@ export function duplicateWorkflow(input: {
           1,
           sourceVersion.script,
           JSON.stringify(sourceVersion.meta),
+          "duplicate",
+          sourceVersion.id,
+          null,
           now,
         );
     })();
@@ -731,11 +1142,119 @@ export function updateWorkflowRun(input: {
     );
 }
 
+export function markWorkflowRunRunning(input: {
+  runId: string;
+  result?: unknown;
+}): WorkflowRunRecord | null {
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_runs
+      SET status = 'running',
+        result_json = COALESCE(?, result_json),
+        finished_at = NULL
+      WHERE id = ?
+    `,
+    )
+    .run(
+      input.result === undefined ? null : JSON.stringify(input.result),
+      input.runId,
+    );
+
+  return getWorkflowRun(input.runId);
+}
+
+export function markWorkflowRunInterrupted(input: {
+  runId: string;
+  result?: unknown;
+}): WorkflowRunRecord | null {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      UPDATE workflow_runs
+      SET status = 'interrupted',
+        result_json = COALESCE(?, result_json),
+        finished_at = ?
+      WHERE id = ?
+        AND status = 'running'
+    `,
+    )
+    .run(
+      input.result === undefined ? null : JSON.stringify(input.result),
+      now,
+      input.runId,
+    );
+
+  return getWorkflowRun(input.runId);
+}
+
 export function getWorkflowRun(runId: string): WorkflowRunRecord | null {
   const row = getDb()
     .prepare("SELECT * FROM workflow_runs WHERE id = ?")
     .get(runId) as RunRow | undefined;
   return row ? mapRun(row) : null;
+}
+
+export function upsertWorkflowRunCheckpoint(input: {
+  runId: string;
+  nodeId: string;
+  checkpoint: WorkflowLoopRecoveryState;
+}): WorkflowRunCheckpointRecord {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `
+      INSERT INTO workflow_run_checkpoints (
+        run_id, node_id, checkpoint_json, updated_at
+      ) VALUES (?, ?, ?, ?)
+      ON CONFLICT(run_id, node_id) DO UPDATE SET
+        checkpoint_json = excluded.checkpoint_json,
+        updated_at = excluded.updated_at
+    `,
+    )
+    .run(
+      input.runId,
+      input.nodeId,
+      JSON.stringify(input.checkpoint),
+      now,
+    );
+
+  const checkpoint = getWorkflowRunCheckpoint(input.runId, input.nodeId);
+  if (!checkpoint) {
+    throw new Error("Failed to save workflow run checkpoint");
+  }
+  return checkpoint;
+}
+
+export function getWorkflowRunCheckpoint(
+  runId: string,
+  nodeId: string,
+): WorkflowRunCheckpointRecord | null {
+  const row = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_run_checkpoints
+      WHERE run_id = ? AND node_id = ?
+    `,
+    )
+    .get(runId, nodeId) as RunCheckpointRow | undefined;
+  return row ? mapRunCheckpoint(row) : null;
+}
+
+export function listWorkflowRunCheckpoints(
+  runId: string,
+): WorkflowRunCheckpointRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_run_checkpoints
+      WHERE run_id = ?
+      ORDER BY updated_at ASC
+    `,
+    )
+    .all(runId) as RunCheckpointRow[];
+  return rows.map(mapRunCheckpoint);
 }
 
 export function getWorkflowVersion(
@@ -824,6 +1343,9 @@ function mapVersion(row: VersionRow): WorkflowVersionRecord {
     version: row.version,
     script: row.script,
     meta: parseJson(row.meta_json, { name: "workflow", description: "" }),
+    source: row.source,
+    baseVersionId: row.base_version_id,
+    note: row.note,
     createdAt: row.created_at,
   };
 }
@@ -861,6 +1383,41 @@ function mapGeneration(row: GenerationRow): WorkflowGenerationRecord {
       : null,
     error: row.error_json
       ? parseJson<WorkflowGenerationError | null>(row.error_json, null)
+      : null,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function mapRunCheckpoint(row: RunCheckpointRow): WorkflowRunCheckpointRecord {
+  return {
+    runId: row.run_id,
+    nodeId: row.node_id,
+    checkpoint: parseJson<WorkflowLoopRecoveryState>(row.checkpoint_json, {
+      nextIteration: 1,
+      previousStepOutputs: {},
+      iterations: [],
+    }),
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapEditJob(row: EditJobRow): WorkflowEditJobRecord {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    baseVersionId: row.base_version_id,
+    createdVersionId: row.created_version_id,
+    instruction: row.instruction,
+    provider: row.provider,
+    model: row.model,
+    cwd: row.cwd,
+    agentSessionId: row.agent_session_id,
+    status: row.status,
+    result: row.result_json ? parseJson<unknown>(row.result_json, null) : null,
+    error: row.error_json
+      ? parseJson<WorkflowEditJobError | null>(row.error_json, null)
       : null,
     createdAt: row.created_at,
     startedAt: row.started_at,

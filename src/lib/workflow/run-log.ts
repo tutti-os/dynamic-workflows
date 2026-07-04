@@ -66,3 +66,14 @@ export async function readRunLogPreview(logPath: string): Promise<RunLogPreview>
     return EMPTY_LOG_PREVIEW;
   }
 }
+
+export async function readRunLog(logPath: string | null): Promise<string> {
+  if (!logPath) {
+    return "";
+  }
+  try {
+    return await fsPromises.readFile(logPath, "utf8");
+  } catch {
+    return "";
+  }
+}

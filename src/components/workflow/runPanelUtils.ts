@@ -45,6 +45,9 @@ export function runStatusTone(status: WorkflowRunRecord["status"]) {
   if (status === "running") {
     return "blue" as const;
   }
+  if (status === "interrupted") {
+    return "amber" as const;
+  }
   if (status === "failed") {
     return "red" as const;
   }
@@ -61,6 +64,9 @@ export function runStatusBadge(status: WorkflowRunRecord["status"]) {
   if (status === "running") {
     return "pending" as const;
   }
+  if (status === "interrupted") {
+    return "warning" as const;
+  }
   if (status === "failed") {
     return "destructive" as const;
   }
@@ -71,7 +77,11 @@ export function runStatusBadge(status: WorkflowRunRecord["status"]) {
 }
 
 export function canRetryRun(status: WorkflowRunRecord["status"]): boolean {
-  return status === "completed" || status === "failed";
+  return status === "completed" || status === "failed" || status === "interrupted";
+}
+
+export function canResumeRun(status: WorkflowRunRecord["status"]): boolean {
+  return status === "interrupted";
 }
 
 export function formatJson(value: unknown): string {

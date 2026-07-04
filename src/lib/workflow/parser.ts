@@ -281,6 +281,7 @@ function addLoopNode(
   const label = readObjectString(options, "label") ?? humanize(id);
   const session = readSessionSpec(options, state, "loop");
   const maxIterations = readObjectNumber(options, "maxIterations");
+  const onMaxIterations = readLoopOnMaxIterations(options, state);
   const steps = readLoopSteps(options, state);
   const stepIds = new Set(steps.map((step) => step.id));
   const until = readLoopUntil(options, state, stepIds);
@@ -288,7 +289,7 @@ function addLoopNode(
     ...new Set(
       steps.flatMap((step) =>
         step.templateRefs.filter(
-          (ref) => !stepIds.has(ref) && !RESERVED_TEMPLATE_REFS.has(ref),
+          (ref) => !stepIds.has(ref) && !isReservedTemplateRef(ref),
         ),
       ),
     ),
@@ -315,6 +316,7 @@ function addLoopNode(
 
   const loop: WorkflowLoopSpec = {
     maxIterations: Number.isInteger(maxIterations) ? maxIterations : 1,
+    onMaxIterations,
     ...(session ? { session } : {}),
     steps,
     until,
@@ -510,6 +512,25 @@ function readLoopUntil(
     source,
     includes,
   };
+}
+
+function readLoopOnMaxIterations(
+  options: AnyNode | undefined,
+  state: ParserState,
+): WorkflowLoopSpec["onMaxIterations"] {
+  const value = readObjectString(options, "onMaxIterations")?.trim();
+  if (!value) {
+    return "fail";
+  }
+  if (value === "fail" || value === "complete") {
+    return value;
+  }
+  state.diagnostics.push({
+    severity: "error",
+    message: 'loop onMaxIterations must be "fail" or "complete".',
+    range: readObjectPropertyValueRange(options, "onMaxIterations"),
+  });
+  return "fail";
 }
 
 function addDynamicNode(

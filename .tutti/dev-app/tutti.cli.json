@@ -23,8 +23,7 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/status",
-        "timeoutMs": 15000
+        "path": "/tutti/cli/status"
       }
     },
     {
@@ -44,8 +43,7 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/providers",
-        "timeoutMs": 30000
+        "path": "/tutti/cli/providers"
       }
     },
     {
@@ -70,8 +68,7 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/list",
-        "timeoutMs": 15000
+        "path": "/tutti/cli/list"
       }
     },
     {
@@ -103,8 +100,7 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/show",
-        "timeoutMs": 15000
+        "path": "/tutti/cli/show"
       }
     },
     {
@@ -132,8 +128,7 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/validate",
-        "timeoutMs": 15000
+        "path": "/tutti/cli/validate"
       }
     },
     {
@@ -173,16 +168,15 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/create",
-        "timeoutMs": 360000
+        "path": "/tutti/cli/create"
       }
     },
     {
       "path": [
         "run"
       ],
-      "summary": "Run a workflow",
-      "description": "Run the current version of a saved workflow and persist the same run records used by the UI.",
+      "summary": "Start a workflow run",
+      "description": "Start the current version of a saved workflow in the background and return the persisted run record used by the UI.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -205,10 +199,6 @@
           "cwd": {
             "type": "string",
             "description": "Optional working directory, resolved inside the configured workflow cwd root."
-          },
-          "timeout-ms": {
-            "type": "integer",
-            "description": "Maximum run duration in milliseconds. Defaults to 600000 and caps at 3600000."
           }
         },
         "required": [
@@ -222,8 +212,40 @@
       "handler": {
         "kind": "http",
         "method": "POST",
-        "path": "/tutti/cli/run",
-        "timeoutMs": 600000
+        "path": "/tutti/cli/run"
+      }
+    },
+    {
+      "path": [
+        "resume"
+      ],
+      "summary": "Resume an interrupted workflow run",
+      "description": "Resume a recoverable workflow run by reattaching to persisted agent sessions and continuing the same run record.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Workflow id that owns the run."
+          },
+          "run-id": {
+            "type": "string",
+            "description": "Interrupted workflow run id to resume."
+          }
+        },
+        "required": [
+          "workflow-id",
+          "run-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/resume"
       }
     }
   ]

@@ -1,5 +1,6 @@
 import {
   Button,
+  CreateChatIcon,
   DownloadIcon,
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +21,8 @@ type WorkflowActionBarProps = {
   hasParseErrors: boolean;
   canRun: boolean;
   viewingOldVersion: boolean;
+  agentEditing: boolean;
+  publishingVersion: boolean;
   canExport: boolean;
   duplicating: boolean;
   deleting: boolean;
@@ -28,6 +31,8 @@ type WorkflowActionBarProps = {
   onSave: () => void;
   onReset: () => void;
   onRestore: () => void;
+  onAgentEdit: () => void;
+  onPublishVersion: () => void;
   onDuplicate: () => void;
   onExport: () => void;
   onDelete: () => void;
@@ -65,6 +70,25 @@ export function WorkflowActionBar(props: WorkflowActionBarProps) {
       {props.viewingOldVersion ? (
         <Button
           variant="outline"
+          onClick={props.onPublishVersion}
+          disabled={props.publishingVersion || props.dirty || props.hasParseErrors}
+          title={
+            props.dirty
+              ? "Save or discard local edits before publishing this version"
+              : "Set this version as the official workflow version"
+          }
+        >
+          {props.publishingVersion ? (
+            <Spinner size={14} />
+          ) : (
+            <FileCreateIcon data-icon="inline-start" />
+          )}
+          Publish version
+        </Button>
+      ) : null}
+      {props.viewingOldVersion ? (
+        <Button
+          variant="outline"
           onClick={props.onRestore}
           disabled={props.saving || props.dirty || props.hasParseErrors}
           title={
@@ -93,6 +117,18 @@ export function WorkflowActionBar(props: WorkflowActionBarProps) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="workflow-actions-menu">
+          <DropdownMenuItem
+            onSelect={() => props.onAgentEdit()}
+            disabled={props.agentEditing || props.dirty || props.running}
+          >
+            {props.agentEditing ? (
+              <Spinner size={14} />
+            ) : (
+              <CreateChatIcon data-icon="inline-start" />
+            )}
+            AI edit
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem
             onSelect={() => props.onDuplicate()}
             disabled={props.duplicating || props.deleting}

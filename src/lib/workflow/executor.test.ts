@@ -69,7 +69,6 @@ const second = await agent({ id: "second", session: { mode: "inherit", key: "wri
       'Workflow session "writer" is starting a new agent session.',
       'Workflow session "writer" captured agent session session-1.',
       'Workflow session "writer" is reusing agent session session-1.',
-      'Workflow session "writer" confirmed agent session session-1.',
     ]);
     expect(events.at(-1)).toEqual(
       expect.objectContaining({
@@ -116,6 +115,86 @@ const second = await agent({ id: "second", inputs: { first }, prompt: "two {{fir
       path.join(process.cwd(), "src", "lib"),
       path.join(process.cwd(), "src"),
     ]);
+  });
+
+  it("resumes from recovered outputs and attaches running node sessions", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: input.attachSessionId ?? "session-2",
+          provider: input.provider,
+          model: input.model,
+          status: "running",
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: "second done",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const first = await agent({ id: "first", session: { mode: "inherit", key: "writer" }, prompt: "one" })
+const second = await agent({ id: "second", inputs: { first }, session: { mode: "inherit", key: "writer" }, prompt: "two {{first}}" })
+`,
+      provider: "codex",
+      model: "gpt-5",
+      cwd: process.cwd(),
+      recovery: {
+        outputs: {
+          first: "first done",
+        },
+        completedNodeIds: ["first"],
+        sessionIdsByKey: {
+          writer: "session-1",
+        },
+        sessionCwdsByKey: {
+          writer: process.cwd(),
+        },
+        attachSessionIdsByNodeId: {
+          second: "session-2",
+        },
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual(
+      expect.objectContaining({
+        prompt: "two first done",
+        resumeSessionId: "session-1",
+        attachSessionId: "session-2",
+      }),
+    );
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Workflow session "writer" is attaching to agent session session-2.',
+      ]),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "completed",
+        outputs: {
+          first: "first done",
+          second: "second done",
+        },
+      }),
+    );
   });
 
   it("renders the effective agent cwd into workflow cwd template refs", async () => {
@@ -209,6 +288,108 @@ const delivery = await loop({
       path.join(process.cwd(), "src", "lib"),
       path.join(process.cwd(), "src"),
     ]);
+  });
+
+  it("resumes a loop from a persisted step checkpoint", async () => {
+    const calls: AgentRunInput[] = [];
+    const checkpoints: unknown[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: "PASS: accepted",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "draft", prompt: "draft {{iteration}}" }),
+    agent({ id: "review", prompt: "review {{draft}}" }),
+  ],
+  until: { source: "review", includes: "PASS:" },
+})
+`,
+      provider: "mock",
+      cwd: process.cwd(),
+      recovery: {
+        loopStates: {
+          delivery: {
+            nextIteration: 1,
+            currentIteration: 1,
+            currentStepOutputs: {
+              draft: "draft from checkpoint",
+            },
+            previousStepOutputs: {
+              draft: "draft from checkpoint",
+            },
+            iterations: [],
+          },
+        },
+      },
+      onCheckpoint: (checkpoint) => {
+        checkpoints.push(checkpoint);
+      },
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toBe("review draft from checkpoint");
+    expect(checkpoints).toEqual([
+      expect.objectContaining({
+        nodeId: "delivery",
+        kind: "loop",
+        state: expect.objectContaining({
+          nextIteration: 1,
+          currentIteration: 1,
+          currentStepOutputs: {
+            draft: "draft from checkpoint",
+            review: "PASS: accepted",
+          },
+        }),
+      }),
+      expect.objectContaining({
+        nodeId: "delivery",
+        kind: "loop",
+        state: expect.objectContaining({
+          nextIteration: 2,
+          previousStepOutputs: {
+            draft: "draft from checkpoint",
+            review: "PASS: accepted",
+          },
+          iterations: [
+            expect.objectContaining({
+              index: 1,
+              untilMatched: true,
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        "Loop step delivery[1].draft restored from checkpoint.",
+      ]),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "completed",
+      }),
+    );
   });
 
   it("fails when one inherited session key crosses cwd boundaries", async () => {
@@ -362,7 +543,7 @@ feedback: {{acceptance}}\`,
     );
   });
 
-  it("completes with max_iterations_reached when until never matches", async () => {
+  it("fails by default when max_iterations_reached before until matches", async () => {
     runAgentMock.mockImplementation(async function* (
       input: AgentRunInput,
     ): AsyncGenerator<AgentRuntimeEvent> {
@@ -383,6 +564,52 @@ feedback: {{acceptance}}\`,
 const debate = await loop({
   id: "debate",
   maxIterations: 2,
+  steps: [
+    agent({ id: "agent_a", prompt: "A sees {{agent_b}}" }),
+    agent({ id: "agent_b", prompt: "B sees {{agent_a}}" }),
+    agent({ id: "moderator", prompt: "Judge {{agent_a}} {{agent_b}}" }),
+  ],
+  until: { source: "moderator", includes: "RESOLVED:" },
+})
+`,
+      provider: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(runAgentMock).toHaveBeenCalledTimes(6);
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "failed",
+        error: expect.stringContaining("Stop reason: max_iterations_reached"),
+      }),
+    );
+  });
+
+  it("can complete with max_iterations_reached when explicitly configured", async () => {
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      yield {
+        type: "text_delta",
+        text: `NO: ${input.prompt}`,
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const debate = await loop({
+  id: "debate",
+  maxIterations: 2,
+  onMaxIterations: "complete",
   steps: [
     agent({ id: "agent_a", prompt: "A sees {{agent_b}}" }),
     agent({ id: "agent_b", prompt: "B sees {{agent_a}}" }),

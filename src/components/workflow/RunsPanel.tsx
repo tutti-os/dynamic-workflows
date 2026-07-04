@@ -13,6 +13,7 @@ type RunsPanelProps = {
   copiedRunField?: string;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
+  onResumeRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 };
@@ -28,6 +29,7 @@ export function RunsPanel(props: RunsPanelProps) {
         retryingRunId={props.retryingRunId}
         onSelectRun={props.onSelectRun}
         onRetryRun={props.onRetryRun}
+        onResumeRun={props.onResumeRun}
       />
 
       {props.selectedRun ? (
@@ -39,6 +41,7 @@ export function RunsPanel(props: RunsPanelProps) {
           retryingRunId={props.retryingRunId}
           copiedRunField={props.copiedRunField}
           onRetryRun={props.onRetryRun}
+          onResumeRun={props.onResumeRun}
           onCopyRunText={props.onCopyRunText}
           onOpenAgentSession={props.onOpenAgentSession}
         />

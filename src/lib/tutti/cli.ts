@@ -3,11 +3,9 @@ import { listAgentProviders } from "@/lib/agents/runtime";
 import type { AgentProviderOption } from "@/lib/agents/types";
 import {
   createWorkflowFromScript,
-  createWorkflowRun,
   getWorkflowDetail,
-  getWorkflowRun,
+  getWorkflowVersion,
   listWorkflows,
-  updateWorkflowRun,
   type WorkflowRunRecord,
 } from "@/lib/db/workflows";
 import { getWorkflowCwdRoot, resolveWorkflowCwd } from "@/lib/workflow/cwd";
@@ -18,19 +16,14 @@ import {
   WorkflowScriptSyntaxError,
 } from "@/lib/workflow/parser";
 import {
-  appendRunLogEvent,
-  ensureRunLogDirectory,
-} from "@/lib/workflow/run-log";
-import {
-  applyWorkflowRunEvent,
-  createInitialRunSummary,
   readRunResult,
-  toWorkflowRunResult,
-  type WorkflowRunSummary,
 } from "@/lib/workflow/run-state";
-import type { ParsedWorkflow, WorkflowRunEvent } from "@/lib/workflow/types";
-import { runWorkflow, summarizeWorkflow } from "@/lib/workflow/executor";
-import { formatRunError, getRunErrorCode } from "@/lib/workflow/run-response";
+import type { ParsedWorkflow } from "@/lib/workflow/types";
+import { summarizeWorkflow } from "@/lib/workflow/executor";
+import {
+  resumeWorkflowRunJob,
+  startWorkflowRunJob,
+} from "@/lib/workflow/run-jobs";
 
 type CliOutput =
   | {
@@ -90,6 +83,8 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(await createCommand(input));
       case "run":
         return cliJson(await runCommand(input));
+      case "resume":
+        return cliJson(await resumeCommand(input));
       default:
         throw new CliHttpError(
           "unknown_command",
@@ -259,9 +254,11 @@ async function runCommand(input: CliInput) {
   const provider = readOptionalString(input, ["provider"]) ?? "mock";
   const model = readOptionalString(input, ["model"]);
   const cwd = readOptionalString(input, ["cwd"]);
+  const versionId = readOptionalString(input, ["version-id", "versionId"]);
   const inputs = readWorkflowInputs(input);
   const result = await runWorkflowForCli({
     workflowId,
+    versionId,
     provider,
     model,
     cwd,
@@ -274,8 +271,20 @@ async function runCommand(input: CliInput) {
   };
 }
 
+async function resumeCommand(input: CliInput) {
+  const workflowId = readRequiredString(input, ["workflow-id", "workflowId"]);
+  const runId = readRequiredString(input, ["run-id", "runId"]);
+  const run = await resumeWorkflowRunJob({ workflowId, runId });
+
+  return {
+    run,
+    result: readRunResult(run.result),
+  };
+}
+
 async function runWorkflowForCli(input: {
   workflowId: string;
+  versionId?: string;
   provider: string;
   model?: string;
   cwd?: string;
@@ -295,69 +304,40 @@ async function runWorkflowForCli(input: {
     );
   }
 
-  const parsed = assertWorkflowScriptValid(detail.currentVersion.script);
+  const version = input.versionId
+    ? getWorkflowVersion(input.versionId)
+    : detail.currentVersion;
+  if (!version || version.workflowId !== input.workflowId) {
+    throw new CliHttpError(
+      "workflow_version_not_found",
+      "Workflow version not found.",
+      404,
+    );
+  }
+
+  const parsed = assertWorkflowScriptValid(version.script);
   assertRequiredWorkflowInputs(parsed.externalInputs, input.inputs);
   assertRequiredWorkflowCwd(parsed, input.cwd);
   const cwd = resolveWorkflowCwd(input.cwd);
-  const run = createWorkflowRun({
+  const run = startWorkflowRunJob({
     workflowId: input.workflowId,
-    workflowVersionId: detail.currentVersion.id,
+    version,
     executorKind: input.provider === "mock" ? "mock" : "local-agent",
     provider: input.provider,
     model: input.model,
     cwd,
-    request: {
+    inputs: input.inputs,
+    input: {
       inputs: input.inputs,
       provider: input.provider,
       model: input.model,
       cwd,
     },
   });
-  ensureRunLogDirectory(run.logPath);
-
-  let summary = createInitialRunSummary(undefined, {
-    status: "running",
-    queueExecutableNodes: false,
-  });
-
-  try {
-    for await (const event of runWorkflow({
-      runId: run.id,
-      script: detail.currentVersion.script,
-      provider: input.provider,
-      model: input.model,
-      cwd,
-      inputs: input.inputs,
-    })) {
-      appendRunLogEvent(run.logPath, event);
-      summary = applyWorkflowRunEvent(summary, event);
-    }
-  } catch (error) {
-    const finalEvent: WorkflowRunEvent = {
-      type: "run_completed",
-      runId: run.id,
-      status: "failed",
-      outputs: summary.outputs,
-      error: formatRunError(error),
-      errorCode: getRunErrorCode(error),
-    };
-    appendRunLogEvent(run.logPath, finalEvent);
-    summary = applyWorkflowRunEvent(summary, finalEvent);
-  } finally {
-    updateStoredRun(run.id, summary);
-  }
 
   return {
-    run: getWorkflowRun(run.id) ?? run,
+    run,
   };
-}
-
-function updateStoredRun(runId: string, summary: WorkflowRunSummary) {
-  updateWorkflowRun({
-    runId,
-    status: summary.status,
-    result: toWorkflowRunResult(summary),
-  });
 }
 
 function parsedSummary(parsed: ParsedWorkflow) {
@@ -379,6 +359,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
       loop: node.loop
         ? {
             maxIterations: node.loop.maxIterations,
+            onMaxIterations: node.loop.onMaxIterations,
             cwd: node.cwd,
             session: node.loop.session,
             until: node.loop.until,

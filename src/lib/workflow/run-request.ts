@@ -6,12 +6,13 @@ import {
 } from "@/lib/db/workflows";
 import { resolveWorkflowCwd } from "@/lib/workflow/cwd";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
-import type { WorkflowRunStreamOptions } from "@/lib/workflow/run-response";
+import type { WorkflowRunJobOptions } from "@/lib/workflow/run-jobs";
 
-type PreparedWorkflowRun = Omit<WorkflowRunStreamOptions, "request">;
+type PreparedWorkflowRun = WorkflowRunJobOptions;
 
 type WorkflowRunRequestBody = {
   script?: string;
+  versionId?: string;
   provider?: string;
   model?: string;
   cwd?: string;
@@ -31,16 +32,33 @@ export async function prepareCurrentWorkflowRun(input: {
   }
 
   const body = (await input.request.json()) as WorkflowRunRequestBody;
-  const script = body.script ?? detail.currentVersion.script;
+  const requestedVersion = body.versionId
+    ? getWorkflowVersion(body.versionId)
+    : detail.currentVersion;
+  if (
+    !requestedVersion ||
+    requestedVersion.workflowId !== input.workflowId
+  ) {
+    throw new Error("Workflow version not found");
+  }
+
+  const script = body.script ?? requestedVersion.script;
   const parsed = assertWorkflowScriptValid(script);
   const inputs = normalizeWorkflowInputs(body.inputs);
   assertRequiredWorkflowInputs(parsed.externalInputs, inputs);
   assertRequiredWorkflowCwd(parsed, body.cwd);
   const cwd = resolveWorkflowCwd(body.cwd);
   const version =
-    script === detail.currentVersion.script
-      ? detail.currentVersion
-      : createWorkflowVersion({ workflowId: input.workflowId, script });
+    script === requestedVersion.script
+      ? requestedVersion
+      : createWorkflowVersion({
+          workflowId: input.workflowId,
+          script,
+          publish: false,
+          source: "run_draft",
+          baseVersionId: requestedVersion.id,
+          note: "Auto-saved for workflow run",
+        });
 
   return {
     workflowId: input.workflowId,
@@ -55,7 +73,8 @@ export async function prepareCurrentWorkflowRun(input: {
       provider: body.provider,
       model: body.model,
       cwd,
-      autoSavedVersion: version.id !== detail.currentVersion.id,
+      autoSavedVersion: script !== requestedVersion.script,
+      requestedVersionId: requestedVersion.id,
     },
   };
 }

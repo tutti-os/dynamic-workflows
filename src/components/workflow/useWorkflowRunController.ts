@@ -1,10 +1,12 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   apiJson,
   readApiJsonError,
 } from "@/components/workflow/workflowApiClient";
+import { readApiError } from "@/lib/api/errors";
 import type {
   WorkflowDetail,
+  WorkflowRunRecord,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows";
 import type { RunDetail } from "@/lib/workflow/run-detail";
@@ -18,11 +20,14 @@ import {
   useWorkflowRunEvents,
 } from "@/components/workflow/useWorkflowRunEvents";
 import {
-  delay,
   isAbortError,
   readEventStream,
   writeClipboardText,
 } from "@/components/workflow/workflowClientUtils";
+
+type WorkflowRunStartResponse = {
+  run: WorkflowRunRecord;
+};
 
 export function useWorkflowRunController(input: {
   workflowId: string;
@@ -60,6 +65,7 @@ export function useWorkflowRunController(input: {
   runCurrentWorkflow: () => Promise<void>;
   submitRunInputDialog: () => void;
   retryRun: (runId: string) => Promise<void>;
+  resumeRun: (runId: string) => Promise<void>;
   cancelCurrentRun: () => void;
   selectRun: (runId: string) => void;
   copyRunText: (key: string, text: string) => Promise<void>;
@@ -69,7 +75,6 @@ export function useWorkflowRunController(input: {
   const [isCancellingRun, setIsCancellingRun] = useState(false);
   const [retryingRunId, setRetryingRunId] = useState<string | undefined>();
   const [copiedRunField, setCopiedRunField] = useState<string | undefined>();
-  const runAbortControllerRef = useRef<AbortController | null>(null);
   const {
     selectedRun,
     visibleRuns,
@@ -81,7 +86,6 @@ export function useWorkflowRunController(input: {
     resetVersionRunState,
     startRunEvents,
     handleRunEvent,
-    markPendingNodesSkipped,
     getActiveRunId,
     clearPendingRunContext,
     clearLiveRun,
@@ -95,7 +99,7 @@ export function useWorkflowRunController(input: {
     replaceParsed: input.replaceParsed,
   });
 
-  async function executeRunStream(streamInput: {
+  async function executeRunJob(runInput: {
     endpoint: string;
     body?: unknown;
     initialLog: string;
@@ -104,67 +108,95 @@ export function useWorkflowRunController(input: {
     resetScriptAfterRun?: string;
     retryRunId?: string;
   }) {
-    const abortController = new AbortController();
-    runAbortControllerRef.current = abortController;
-    if (streamInput.retryRunId) {
-      setRetryingRunId(streamInput.retryRunId);
+    if (runInput.retryRunId) {
+      setRetryingRunId(runInput.retryRunId);
     }
     setIsRunning(true);
     setIsCancellingRun(false);
-    startRunEvents({
-      initialLog: streamInput.initialLog,
-      runContext: streamInput.runContext,
-    });
-    input.setActiveTab(streamInput.activeTab);
+    input.setActiveTab(runInput.activeTab);
 
     try {
-      const response = await fetch(streamInput.endpoint, {
-        method: "POST",
-        headers: streamInput.body
-          ? { "Content-Type": "application/json" }
-          : undefined,
-        body: streamInput.body ? JSON.stringify(streamInput.body) : undefined,
-        signal: abortController.signal,
+      const startResponse = await apiJson<WorkflowRunStartResponse>(
+        runInput.endpoint,
+        {
+          method: "POST",
+          headers: runInput.body
+            ? { "Content-Type": "application/json" }
+            : undefined,
+          body: runInput.body ? JSON.stringify(runInput.body) : undefined,
+        },
+        "WORKFLOW_RUN_FAILED",
+      );
+
+      startRunEvents({
+        initialLog: runInput.initialLog,
+        initialRun: startResponse.run,
+        runId: startResponse.run.id,
+        runContext: {
+          ...runInput.runContext,
+          workflowVersionId: startResponse.run.workflowVersionId,
+          executorKind: startResponse.run.executorKind,
+          provider: startResponse.run.provider ?? undefined,
+          model: startResponse.run.model ?? undefined,
+          cwd: startResponse.run.cwd ?? undefined,
+          input: startResponse.run.input,
+        },
       });
 
+      const abortController = new AbortController();
+      const response = await fetch(
+        `/api/workflows/${input.workflowId}/runs/${startResponse.run.id}/events`,
+        {
+          signal: abortController.signal,
+        },
+      );
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => undefined);
+        const apiError = readApiError(data, "WORKFLOW_RUN_FAILED");
+        throw new Error(apiError.message);
+      }
       if (!response.body) {
-        throw new Error("Run stream did not start");
+        throw new Error("Run event stream did not start");
       }
 
       await readEventStream(response.body, handleRunEvent);
-      const completedRunId = getActiveRunId();
       await input.loadWorkflow({
         resetScript: Boolean(
-          streamInput.resetScriptAfterRun &&
-            input.script === streamInput.resetScriptAfterRun,
+          runInput.resetScriptAfterRun &&
+            input.script === runInput.resetScriptAfterRun,
         ),
       });
-      if (completedRunId) {
-        await loadRun(completedRunId);
-        clearLiveRun();
-      }
+      await loadRun(startResponse.run.id);
+      clearLiveRun();
     } catch (error) {
       if (isAbortError(error)) {
-        markPendingNodesSkipped();
-        appendEventLog("run: canceled");
-        await refreshWorkflowAfterAbort();
+        appendEventLog("run events: disconnected");
         const runId = getActiveRunId();
         if (runId) {
           await loadRun(runId);
           clearLiveRun();
         }
       } else {
-        appendEventLog(
-          `run failed: ${error instanceof Error ? error.message : "unknown"}`,
-        );
+        const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
+        appendEventLog(`run failed: ${apiError.message}`);
       }
     } finally {
       setIsRunning(false);
       setIsCancellingRun(false);
       setRetryingRunId(undefined);
-      runAbortControllerRef.current = null;
       clearPendingRunContext();
     }
+  }
+
+  async function requestRunCancel(runId: string) {
+    await apiJson<{ ok: boolean; canceled: boolean }>(
+      `/api/workflows/${input.workflowId}/runs/${runId}/cancel`,
+      {
+        method: "POST",
+      },
+      "WORKFLOW_RUN_FAILED",
+    );
   }
 
   async function runCurrentWorkflow() {
@@ -183,21 +215,26 @@ export function useWorkflowRunController(input: {
     }
 
     const runScript = input.script;
+    const selectedVersionId =
+      input.selectedVersion?.id ?? input.detail?.currentVersion?.id;
     const runBody = {
-      script: runScript,
+      ...(input.isScriptDirty ? { script: runScript } : {}),
+      ...(!input.isScriptDirty && selectedVersionId
+        ? { versionId: selectedVersionId }
+        : {}),
       inputs: input.workflowInputPayload,
       provider: input.effectiveProvider,
       model: input.model || undefined,
       cwd: input.cwd || undefined,
     };
-    await executeRunStream({
+    await executeRunJob({
       endpoint: `/api/workflows/${input.workflowId}/run`,
       body: runBody,
       initialLog: "run: started",
       activeTab: "runs",
       runContext: {
         workflowVersionId:
-          input.selectedVersion?.id ?? input.detail?.currentVersion?.id ?? "",
+          selectedVersionId ?? "",
         executorKind:
           input.effectiveProvider === "mock" ? "mock" : "local-agent",
         provider: input.effectiveProvider,
@@ -209,6 +246,7 @@ export function useWorkflowRunController(input: {
           model: input.model || undefined,
           cwd: input.cwd || undefined,
           autoSavedVersion: input.isScriptDirty,
+          requestedVersionId: selectedVersionId,
         },
       },
       resetScriptAfterRun: runScript,
@@ -250,7 +288,7 @@ export function useWorkflowRunController(input: {
       input.applyVersion(sourceVersion);
     }
 
-    await executeRunStream({
+    await executeRunJob({
       endpoint: `/api/workflows/${input.workflowId}/runs/${runId}/retry`,
       initialLog: `retry: ${runId}`,
       activeTab: "runs",
@@ -271,13 +309,63 @@ export function useWorkflowRunController(input: {
     });
   }
 
+  async function resumeRun(runId: string) {
+    if (!input.detail || isRunning) {
+      return;
+    }
+
+    const sourceRun = input.detail.runs.find((run) => run.id === runId);
+    if (!sourceRun) {
+      appendEventLog(`resume failed: run ${runId} not found`);
+      return;
+    }
+    const sourceVersion = input.detail.versions.find(
+      (version) => version.id === sourceRun.workflowVersionId,
+    );
+
+    if (sourceVersion && sourceVersion.id !== input.selectedVersion?.id) {
+      if (
+        input.isScriptDirty &&
+        !window.confirm("Discard unsaved changes and switch to this run version?")
+      ) {
+        return;
+      }
+      input.applyVersion(sourceVersion);
+    }
+
+    await executeRunJob({
+      endpoint: `/api/workflows/${input.workflowId}/runs/${runId}/resume`,
+      initialLog: `resume: ${runId}`,
+      activeTab: "runs",
+      runContext: {
+        workflowVersionId: sourceRun.workflowVersionId,
+        executorKind: sourceRun.executorKind,
+        provider: sourceRun.provider ?? undefined,
+        model: sourceRun.model ?? undefined,
+        cwd: sourceRun.cwd ?? undefined,
+        input: {
+          resumeOfRunId: runId,
+          provider: sourceRun.provider,
+          model: sourceRun.model,
+          cwd: sourceRun.cwd,
+        },
+      },
+      retryRunId: runId,
+    });
+  }
+
   function cancelCurrentRun() {
-    if (!runAbortControllerRef.current || isCancellingRun) {
+    const runId = getActiveRunId();
+    if (!runId || isCancellingRun) {
       return;
     }
     setIsCancellingRun(true);
     appendEventLog("run: cancel requested");
-    runAbortControllerRef.current.abort();
+    void requestRunCancel(runId).catch((error) => {
+      const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
+      setIsCancellingRun(false);
+      appendEventLog(`cancel failed: ${apiError.message}`);
+    });
   }
 
   async function loadRun(runId: string) {
@@ -337,20 +425,6 @@ export function useWorkflowRunController(input: {
     }
   }
 
-  async function refreshWorkflowAfterAbort() {
-    const runId = getActiveRunId();
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      await delay(220);
-      const nextDetail = await input.loadWorkflow();
-      const run = runId
-        ? nextDetail.runs.find((item) => item.id === runId)
-        : undefined;
-      if (!run || run.status !== "running") {
-        return;
-      }
-    }
-  }
-
   return {
     selectedRun,
     visibleRuns,
@@ -367,6 +441,7 @@ export function useWorkflowRunController(input: {
     runCurrentWorkflow,
     submitRunInputDialog,
     retryRun,
+    resumeRun,
     cancelCurrentRun,
     selectRun,
     copyRunText,

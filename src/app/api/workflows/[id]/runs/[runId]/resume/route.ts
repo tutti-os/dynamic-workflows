@@ -1,5 +1,4 @@
-import { prepareRetryWorkflowRun } from "@/lib/workflow/run-request";
-import { startWorkflowRunJob } from "@/lib/workflow/run-jobs";
+import { resumeWorkflowRunJob } from "@/lib/workflow/run-jobs";
 import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 
 export async function POST(
@@ -8,8 +7,7 @@ export async function POST(
 ) {
   const { id, runId } = await context.params;
   try {
-    const options = prepareRetryWorkflowRun({ workflowId: id, runId });
-    const run = startWorkflowRunJob(options);
+    const run = await resumeWorkflowRunJob({ workflowId: id, runId });
     return Response.json({ run });
   } catch (error) {
     return toWorkflowApiErrorResponse(error, "WORKFLOW_RUN_FAILED");

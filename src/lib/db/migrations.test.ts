@@ -15,7 +15,23 @@ describe("migrateDb", () => {
           "workflows",
           "workflow_versions",
           "workflow_runs",
+          "workflow_run_checkpoints",
           "workflow_generations",
+          "workflow_edit_jobs",
+        ]),
+      );
+      expect(readColumnNames(database, "workflow_versions")).toEqual(
+        expect.arrayContaining(["source", "base_version_id", "note"]),
+      );
+      expect(readColumnNames(database, "workflow_edit_jobs")).toContain(
+        "agent_session_id",
+      );
+      expect(readColumnNames(database, "workflow_run_checkpoints")).toEqual(
+        expect.arrayContaining([
+          "run_id",
+          "node_id",
+          "checkpoint_json",
+          "updated_at",
         ]),
       );
       expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
@@ -85,6 +101,14 @@ describe("migrateDb", () => {
       ).toEqual({ name: "Existing" });
       expect(readTableNames(database)).toContain("schema_migrations");
       expect(readTableNames(database)).toContain("workflow_generations");
+      expect(readTableNames(database)).toContain("workflow_edit_jobs");
+      expect(readTableNames(database)).toContain("workflow_run_checkpoints");
+      expect(readColumnNames(database, "workflow_versions")).toEqual(
+        expect.arrayContaining(["source", "base_version_id", "note"]),
+      );
+      expect(readColumnNames(database, "workflow_edit_jobs")).toContain(
+        "agent_session_id",
+      );
     } finally {
       database.close();
     }
@@ -110,4 +134,14 @@ function readCurrentVersion(database: Database.Database): number {
     .prepare("SELECT MAX(version) AS version FROM schema_migrations")
     .get() as { version: number };
   return row.version;
+}
+
+function readColumnNames(
+  database: Database.Database,
+  tableName: string,
+): string[] {
+  const rows = database
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all() as Array<{ name: string }>;
+  return rows.map((row) => row.name);
 }

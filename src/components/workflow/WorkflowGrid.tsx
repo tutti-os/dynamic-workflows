@@ -155,6 +155,9 @@ function runStatusBadge(status: WorkflowRunStatus) {
   if (status === "running") {
     return "pending" as const;
   }
+  if (status === "interrupted") {
+    return "warning" as const;
+  }
   if (status === "failed") {
     return "destructive" as const;
   }
