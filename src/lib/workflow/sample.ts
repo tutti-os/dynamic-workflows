@@ -80,6 +80,8 @@ phase("RD delivery and acceptance", () => {
       agent({
         id: "rd",
         label: "RD Engineer",
+        provider: "codex",
+        model: "gpt-5.5",
         session: { mode: "inherit", key: "rd_room" },
         prompt: \`
 启动工作目录：
@@ -105,6 +107,8 @@ phase("RD delivery and acceptance", () => {
       agent({
         id: "acceptance",
         label: "Acceptance Reviewer",
+        provider: "codex",
+        model: "gpt-5.5",
         session: { mode: "inherit", key: "acceptance_room" },
         prompt: \`启动工作目录：
 {{workflow.cwd}}
@@ -126,6 +130,8 @@ FAIL: <具体打回意见>
   agent({
     id: "submit_mr",
     label: "Submit MR",
+    provider: "codex",
+    model: "gpt-5.5",
     cwd: ".",
     inputs: { delivery_loop },
     prompt: \`

@@ -24,6 +24,18 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
         {props.loop.steps.map((step, index) => {
           const sessionView = describeLoopStepSession(props.loop, step);
           const promptModeView = describeLoopStepPromptMode(step, sessionView);
+          const targetView = describeLoopStepTarget(step);
+          const ariaLabel = [
+            index + 1,
+            step.label,
+            step.id,
+            sessionView.label,
+            sessionView.badge,
+            targetView?.label,
+            promptModeView?.label,
+          ]
+            .filter(Boolean)
+            .join(" ");
           return (
             <div className="loop-mini-flow-step-group" key={step.id}>
               <button
@@ -33,7 +45,7 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                     ? "loop-mini-flow-step selected"
                     : "loop-mini-flow-step"
                 }
-                aria-label={`${index + 1} ${step.label} ${step.id} · ${sessionView.label} ${sessionView.badge}${promptModeView ? ` ${promptModeView.label}` : ""}`}
+                aria-label={ariaLabel}
                 title={`Edit ${step.label}`}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -54,6 +66,11 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                 </div>
                 <div className="loop-mini-flow-badges">
                   <span className="loop-step-badge">{sessionView.badge}</span>
+                  {targetView ? (
+                    <span className="loop-step-badge" title={targetView.title}>
+                      {targetView.label}
+                    </span>
+                  ) : null}
                   {promptModeView ? (
                     <span className="loop-step-badge" title={promptModeView.title}>
                       {promptModeView.label}
@@ -148,5 +165,20 @@ function describeLoopStepPromptMode(
     label: "full prompt",
     title:
       "Every iteration reuses the same session but sends this step's full prompt.",
+  };
+}
+
+function describeLoopStepTarget(
+  step: WorkflowLoopStep,
+): { label: string; title: string } | undefined {
+  if (!step.provider && !step.model) {
+    return undefined;
+  }
+  const label = [step.provider ?? "run default", step.model]
+    .filter(Boolean)
+    .join(" / ");
+  return {
+    label,
+    title: `Uses ${label} for this loop step`,
   };
 }

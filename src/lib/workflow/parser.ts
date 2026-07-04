@@ -327,6 +327,8 @@ function addLoopNode(
     label,
     phase: state.currentPhase,
     variableName,
+    provider: readObjectString(options, "provider"),
+    model: readObjectString(options, "model"),
     cwd: readObjectString(options, "cwd"),
     ...(session ? { session } : {}),
     loop,

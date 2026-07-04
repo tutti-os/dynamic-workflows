@@ -290,6 +290,67 @@ const delivery = await loop({
     ]);
   });
 
+  it("lets loop steps override loop and run provider settings", async () => {
+    const calls: AgentRunInput[] = [];
+    const nodeStarts: Array<{
+      nodeId: string;
+      provider: string;
+      model?: string;
+    }> = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: input.prompt.startsWith("review") ? "PASS: ok" : "work",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  provider: "claude-code",
+  model: "claude-sonnet-4",
+  maxIterations: 1,
+  steps: [
+    agent({ id: "rd", provider: "codex", model: "gpt-5.1", prompt: "work" }),
+    agent({ id: "review", prompt: "review {{rd}}" }),
+  ],
+  until: { source: "review", includes: "PASS:" },
+})
+`,
+      provider: "mock",
+      model: "mock",
+      cwd: process.cwd(),
+    })) {
+      if (event.type === "node_started") {
+        nodeStarts.push({
+          nodeId: event.nodeId,
+          provider: event.provider,
+          model: event.model,
+        });
+      }
+    }
+
+    expect(nodeStarts).toContainEqual({
+      nodeId: "delivery",
+      provider: "claude-code",
+      model: "claude-sonnet-4",
+    });
+    expect(calls.map((call) => [call.provider, call.model])).toEqual([
+      ["codex", "gpt-5.1"],
+      ["claude-code", "claude-sonnet-4"],
+    ]);
+  });
+
   it("resumes a loop from a persisted step checkpoint", async () => {
     const calls: AgentRunInput[] = [];
     const checkpoints: unknown[] = [];
