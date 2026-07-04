@@ -1122,6 +1122,14 @@ a {
   color: var(--state-danger);
 }
 
+.run-resume-notice {
+  align-items: flex-start;
+  border: 1px solid color-mix(in srgb, var(--state-warning) 34%, var(--border-1));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--state-warning) 8%, var(--background-fronted));
+  padding: 9px 10px;
+}
+
 .edit-panel,
 .runs-panel {
   display: grid;

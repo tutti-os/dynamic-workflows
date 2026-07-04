@@ -51,6 +51,8 @@ export function RunDetailPanel(props: {
         onCopyRunText={props.onCopyRunText}
       />
 
+      {run.status === "interrupted" ? <InterruptedRunNotice /> : null}
+
       <div className="run-facts">
         <RunFact label="Run ID" value={run.id} />
         <RunFact label="Started" value={formatDate(run.startedAt)} />
@@ -131,6 +133,7 @@ function RunDetailHeader(props: {
             variant="outline"
             type="button"
             disabled={props.isRunning}
+            title="Continue from the last saved checkpoint and reconnect existing downstream agent sessions when available."
             onClick={() => props.onResumeRun(run.id)}
           >
             {props.retrying ? (
@@ -158,6 +161,19 @@ function RunDetailHeader(props: {
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function InterruptedRunNotice() {
+  return (
+    <div className="diagnostic warning run-resume-notice">
+      <WarningLinedIcon size={14} />
+      <span>
+        This run stopped before the workflow runner finished. Resume continues from
+        the latest checkpoint and reuses existing downstream agent sessions when
+        available.
+      </span>
     </div>
   );
 }

@@ -107,6 +107,7 @@ export function useWorkflowRunController(input: {
     runContext: PendingRunContext;
     resetScriptAfterRun?: string;
     retryRunId?: string;
+    failureLogPrefix?: string;
   }) {
     if (runInput.retryRunId) {
       setRetryingRunId(runInput.retryRunId);
@@ -179,7 +180,9 @@ export function useWorkflowRunController(input: {
         }
       } else {
         const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
-        appendEventLog(`run failed: ${apiError.message}`);
+        appendEventLog(
+          `${runInput.failureLogPrefix ?? "run failed"}: ${apiError.message}`,
+        );
       }
     } finally {
       setIsRunning(false);
@@ -306,6 +309,7 @@ export function useWorkflowRunController(input: {
         },
       },
       retryRunId: runId,
+      failureLogPrefix: "retry failed",
     });
   }
 
@@ -351,6 +355,7 @@ export function useWorkflowRunController(input: {
         },
       },
       retryRunId: runId,
+      failureLogPrefix: "resume failed",
     });
   }
 
