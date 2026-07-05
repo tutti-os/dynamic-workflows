@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api/errors";
-import { getWorkflowDetail, getWorkflowRun } from "@/lib/db/workflows";
+import {
+  getWorkflowDetail,
+} from "@/lib/db/workflows/workflow-repository";
+import {
+  getWorkflowRun,
+} from "@/lib/db/workflows/runs";
 import {
   EMPTY_LOG_PREVIEW,
   readRunLogPreview,

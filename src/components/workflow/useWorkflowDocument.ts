@@ -5,9 +5,6 @@ import {
   sanitizeFilename,
 } from "@/components/workflow/workflowClientUtils";
 import {
-  readApiJsonError,
-} from "@/components/workflow/workflowApiClient";
-import {
   deleteWorkflow,
   duplicateWorkflow,
   isActiveWorkflowJobStatus,
@@ -19,11 +16,12 @@ import {
   updateWorkflowMetadata,
   watchWorkflowAgentEdit,
   watchWorkflowGeneration,
+  readApiJsonError,
 } from "@/components/workflow/workflowApiService";
 import type {
   WorkflowDetail,
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import type { WorkflowDiagnostic } from "@/lib/workflow/types";
 
 export function useWorkflowDocument(input: {

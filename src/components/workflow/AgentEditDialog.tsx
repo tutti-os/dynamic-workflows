@@ -13,10 +13,10 @@ import {
   Spinner,
   Textarea,
 } from "@tutti-os/ui-system";
-import { readApiJsonError } from "./workflowApiClient";
 import {
   cancelWorkflowAgentEdit,
   listWorkflowAgentEdits,
+  readApiJsonError,
   retryWorkflowAgentEdit,
   startWorkflowAgentEdit,
   watchWorkflowAgentEdit,
@@ -29,7 +29,7 @@ import {
 import type {
   WorkflowEditJobRecord,
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import type { AgentTargetOption } from "@/lib/agents/types";
 
 type AgentEditDialogProps = {

@@ -4,7 +4,7 @@ import type {
   WorkflowDetail,
   WorkflowRunRecord,
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import {
   applyRunEventToDetail,
   applyWorkflowRunEvent,

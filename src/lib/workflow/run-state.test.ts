@@ -4,7 +4,6 @@ import {
   applyWorkflowRunEvent,
   createInitialRunSummary,
   readNodeStatusesFromRunLog,
-  readRunResult,
   serializeRunEvent,
   toWorkflowRunResult,
 } from "./run-state";
@@ -141,61 +140,6 @@ describe("workflow run state", () => {
       status: "completed",
       title: "Scan",
       lastText: "final text",
-    });
-  });
-
-  it("upgrades legacy provider node sessions to agent target ids on read", () => {
-    const result = readRunResult({
-      outputs: { scan: "done" },
-      nodeStatuses: { scan: "completed" },
-      nodeSessions: {
-        scan: {
-          nodeId: "scan",
-          agentSessionId: "session-1",
-          provider: "codex",
-          model: "gpt-5",
-          status: "completed",
-        },
-        review: {
-          nodeId: "review",
-          agentSessionId: "session-2",
-          provider: "mock",
-          status: "completed",
-        },
-      },
-    });
-
-    expect(result.nodeSessions.scan).toEqual({
-      nodeId: "scan",
-      agentSessionId: "session-1",
-      agent: "local:codex",
-      model: "gpt-5",
-      status: "completed",
-    });
-    expect(result.nodeSessions.review.agent).toBe("mock");
-  });
-
-  it("reads legacy session_ref events with provider fields from run logs", () => {
-    let summary = createInitialRunSummary(undefined, {
-      queueExecutableNodes: false,
-    });
-    summary = applyWorkflowRunEvent(summary, {
-      type: "node_event",
-      runId: "run-1",
-      nodeId: "scan",
-      event: {
-        type: "session_ref",
-        session: {
-          agentSessionId: "session-1",
-          provider: "claude-code",
-          status: "running",
-        },
-      },
-    });
-
-    expect(summary.nodeSessions.scan).toMatchObject({
-      agentSessionId: "session-1",
-      agent: "local:claude-code",
     });
   });
 

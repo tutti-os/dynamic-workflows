@@ -3,7 +3,7 @@ import { RunInputsDialog } from "@/components/workflow/RunInputsDialog";
 import { WorkflowDetailsDialog } from "@/components/workflow/WorkflowDetailsDialog";
 import type {
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import type { AgentTargetOption } from "@/lib/agents/types";
 
 export function WorkflowWorkbenchDialogs(props: {

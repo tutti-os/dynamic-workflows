@@ -10,13 +10,11 @@ import {
 } from "./nextopCliAdapter";
 
 describe("nextop cli adapter", () => {
-  it("resolves the Tutti CLI path before the legacy Nextop env var", () => {
+  it("resolves the Tutti CLI path and explicit overrides", () => {
     const previousTuttiCli = process.env.TUTTI_CLI;
-    const previousNextopCliPath = process.env.NEXTOP_CLI_PATH;
 
     try {
       process.env.TUTTI_CLI = "/tmp/tutti-dev";
-      process.env.NEXTOP_CLI_PATH = "/tmp/nextop";
 
       expect(resolveNextopCliPath()).toBe("/tmp/tutti-dev");
       expect(resolveNextopCliPath({ cliPath: "/tmp/custom" })).toBe(
@@ -24,13 +22,9 @@ describe("nextop cli adapter", () => {
       );
 
       process.env.TUTTI_CLI = "";
-      expect(resolveNextopCliPath()).toBe("/tmp/nextop");
-
-      process.env.NEXTOP_CLI_PATH = "";
       expect(resolveNextopCliPath()).toBe("tutti-dev");
     } finally {
       restoreEnv("TUTTI_CLI", previousTuttiCli);
-      restoreEnv("NEXTOP_CLI_PATH", previousNextopCliPath);
     }
   });
 

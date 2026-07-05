@@ -39,9 +39,10 @@ describe("workflow run jobs recovery", () => {
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
     vi.resetModules();
 
-    const { createWorkflowFromScript, createWorkflowRun } = await import(
-      "@/lib/db/workflows"
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
     );
+    const { createWorkflowRun } = await import("@/lib/db/workflows/runs");
     const { appendRunLogEvent, ensureRunLogDirectory } = await import(
       "@/lib/workflow/run-log"
     );
@@ -128,9 +129,10 @@ describe("workflow run jobs recovery", () => {
       });
     });
 
-    const { createWorkflowFromScript, createWorkflowRun } = await import(
-      "@/lib/db/workflows"
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
     );
+    const { createWorkflowRun } = await import("@/lib/db/workflows/runs");
     const { resumeWorkflowRunJob } = await import("@/lib/workflow/run-jobs");
 
     const detail = createWorkflowFromScript(SCRIPT);

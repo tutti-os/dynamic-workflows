@@ -1,7 +1,10 @@
-import type { WorkflowRunRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import type { RunDetail, RunNodeDetail } from "@/lib/workflow/run-detail";
 import { RunDetailPanel } from "@/components/workflow/RunDetailPanel";
 import { RunList } from "@/components/workflow/RunList";
+import { RunDetailSkeleton } from "@/components/workflow/WorkflowStates";
 
 type RunsPanelProps = {
   runs: WorkflowRunRecord[];
@@ -9,6 +12,7 @@ type RunsPanelProps = {
   selectedNodeRun: RunNodeDetail | null;
   versionLabelById: Record<string, string>;
   isRunning: boolean;
+  isLoadingRunDetail: boolean;
   retryingRunId?: string;
   copiedRunField?: string;
   onSelectRun: (runId: string) => void;
@@ -26,13 +30,16 @@ export function RunsPanel(props: RunsPanelProps) {
         selectedRunId={props.selectedRun?.run.id}
         versionLabelById={props.versionLabelById}
         isRunning={props.isRunning}
+        loading={props.isRunning && props.runs.length === 0}
         retryingRunId={props.retryingRunId}
         onSelectRun={props.onSelectRun}
         onRetryRun={props.onRetryRun}
         onResumeRun={props.onResumeRun}
       />
 
-      {props.selectedRun ? (
+      {props.isLoadingRunDetail ? (
+        <RunDetailSkeleton />
+      ) : props.selectedRun ? (
         <RunDetailPanel
           detail={props.selectedRun}
           selectedNodeRun={props.selectedNodeRun}

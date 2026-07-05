@@ -30,6 +30,7 @@ export function HomePage() {
     setQuery,
     statusFilter,
     setStatusFilter,
+    isLoadingWorkflows,
     isCreating,
     createError,
     createDiagnostics,
@@ -124,8 +125,12 @@ export function HomePage() {
         <WorkflowGrid
           workflows={filteredWorkflows}
           hasAnyWorkflow={workflows.length > 0}
+          loading={isLoadingWorkflows}
           duplicatingId={duplicatingId}
           deletingId={deletingId}
+          onCreateWorkflowFocus={() => {
+            document.getElementById("workflow-prompt")?.focus();
+          }}
           onDuplicateWorkflow={duplicateWorkflow}
           onDeleteWorkflow={deleteWorkflow}
         />

@@ -14,6 +14,7 @@ import {
 import {
   ErrorState,
   LoadingState,
+  WorkbenchSkeleton,
 } from "@/components/workflow/WorkflowStates";
 import { WorkflowWorkbenchDialogs } from "@/components/workflow/WorkflowWorkbenchDialogs";
 import { WorkflowWorkbenchWorkspace } from "@/components/workflow/WorkflowWorkbenchWorkspace";
@@ -28,7 +29,9 @@ import {
   type InspectorTab,
   type MainView,
 } from "@/components/workflow/WorkflowWorkbench.types";
-import type { WorkflowVersionRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowVersionRecord,
+} from "@/lib/db/workflows/types";
 
 type WorkflowWorkbenchProps = {
   workflowId: string;
@@ -163,6 +166,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     eventLog,
     isRunning,
     isCancellingRun,
+    isLoadingRunDetail,
     retryingRunId,
     copiedRunField,
     appendEventLog,
@@ -256,7 +260,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
   if (isLoading) {
     return (
       <main className="app-shell">
-        <LoadingState fullPage>
+        <LoadingState fullPage skeleton={<WorkbenchSkeleton />}>
           Loading workflow...
         </LoadingState>
       </main>
@@ -387,6 +391,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         eventLog={eventLog}
         versionLabelById={versionLabelById}
         isRunning={isRunning}
+        isLoadingRunDetail={isLoadingRunDetail}
         retryingRunId={retryingRunId}
         copiedRunField={copiedRunField}
         onMainViewChange={setMainView}

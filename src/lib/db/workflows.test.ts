@@ -39,10 +39,12 @@ describe("workflow version publishing", () => {
 
     const {
       createWorkflowFromScript,
-      createWorkflowVersion,
       getWorkflowDetail,
+    } = await import("./workflows/workflow-repository");
+    const {
+      createWorkflowVersion,
       publishWorkflowVersion,
-    } = await import("./workflows");
+    } = await import("./workflows/versions");
 
     const created = createWorkflowFromScript(INITIAL_SCRIPT);
     const officialVersionId = created.currentVersion?.id;
@@ -78,14 +80,16 @@ describe("workflow version publishing", () => {
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
     vi.resetModules();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
       createWorkflowEditJob,
       createWorkflowEditRetry,
-      createWorkflowFromScript,
       failWorkflowEditJob,
       getWorkflowEditJob,
       updateWorkflowEditJobAgentSession,
-    } = await import("./workflows");
+    } = await import("./workflows/edit-jobs");
 
     const created = createWorkflowFromScript(INITIAL_SCRIPT);
     const firstEdit = createWorkflowEditJob({
@@ -125,11 +129,13 @@ describe("workflow version publishing", () => {
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
     vi.resetModules();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
       createWorkflowEditJob,
-      createWorkflowFromScript,
       markWorkflowEditJobRunning,
-    } = await import("./workflows");
+    } = await import("./workflows/edit-jobs");
     const { ensureWorkflowEditStarted } = await import("@/lib/workflow/edit-jobs");
 
     const created = createWorkflowFromScript(INITIAL_SCRIPT);
@@ -154,12 +160,14 @@ describe("workflow version publishing", () => {
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
     vi.resetModules();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
-      createWorkflowFromScript,
       createWorkflowRun,
       listWorkflowRunCheckpoints,
       upsertWorkflowRunCheckpoint,
-    } = await import("./workflows");
+    } = await import("./workflows/runs");
 
     const created = createWorkflowFromScript(INITIAL_SCRIPT);
     const version = created.currentVersion;
@@ -230,10 +238,12 @@ describe("workflow repositories", () => {
 
     const {
       createWorkflowFromScript,
-      createWorkflowRun,
       listWorkflows,
+    } = await import("./workflows/workflow-repository");
+    const {
+      createWorkflowRun,
       updateWorkflowRun,
-    } = await import("./workflows");
+    } = await import("./workflows/runs");
     const { getDb } = await import("./client");
 
     for (const suffix of ["one", "two", "three"]) {
@@ -277,12 +287,14 @@ const first = await agent({ id: "first", prompt: "first" })
   it("updates workflow runs and returns the persisted record", async () => {
     initTestDataDir();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
-      createWorkflowFromScript,
       createWorkflowRun,
       getWorkflowRun,
       updateWorkflowRun,
-    } = await import("./workflows");
+    } = await import("./workflows/runs");
 
     const detail = createWorkflowFromScript(INITIAL_SCRIPT);
     const version = detail.currentVersion;
@@ -317,12 +329,14 @@ const first = await agent({ id: "first", prompt: "first" })
   it("marks workflow runs running and interrupted", async () => {
     initTestDataDir();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
-      createWorkflowFromScript,
       createWorkflowRun,
       markWorkflowRunInterrupted,
       markWorkflowRunRunning,
-    } = await import("./workflows");
+    } = await import("./workflows/runs");
 
     const detail = createWorkflowFromScript(INITIAL_SCRIPT);
     const version = detail.currentVersion;
@@ -364,12 +378,14 @@ const first = await agent({ id: "first", prompt: "first" })
   it("allows only one resume claim for a workflow run", async () => {
     initTestDataDir();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
-      createWorkflowFromScript,
+      claimWorkflowRunForResume,
       createWorkflowRun,
       markWorkflowRunInterrupted,
-    } = await import("./workflows");
-    const { claimWorkflowRunForResume } = await import("./workflows/runs");
+    } = await import("./workflows/runs");
 
     const detail = createWorkflowFromScript(INITIAL_SCRIPT);
     const version = detail.currentVersion;
@@ -411,7 +427,7 @@ const first = await agent({ id: "first", prompt: "first" })
       failWorkflowGeneration,
       markWorkflowGenerationRunning,
       resetWorkflowGenerationForRetry,
-    } = await import("./workflows");
+    } = await import("./workflows/generations");
 
     const detail = createPendingWorkflowGeneration({
       prompt: "Build a workflow",
@@ -453,12 +469,14 @@ const first = await agent({ id: "first", prompt: "first" })
   it("cancels workflow edit jobs", async () => {
     initTestDataDir();
 
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
     const {
       cancelWorkflowEditJob,
       createWorkflowEditJob,
-      createWorkflowFromScript,
       markWorkflowEditJobRunning,
-    } = await import("./workflows");
+    } = await import("./workflows/edit-jobs");
 
     const detail = createWorkflowFromScript(INITIAL_SCRIPT);
     const edit = createWorkflowEditJob({
@@ -485,14 +503,16 @@ const first = await agent({ id: "first", prompt: "first" })
     initTestDataDir();
 
     const {
-      createWorkflowEditJob,
       createWorkflowFromScript,
-      createWorkflowRun,
-      createWorkflowVersion,
       deleteWorkflow,
       getWorkflowDetail,
+    } = await import("./workflows/workflow-repository");
+    const { createWorkflowEditJob } = await import("./workflows/edit-jobs");
+    const { createWorkflowVersion } = await import("./workflows/versions");
+    const {
+      createWorkflowRun,
       upsertWorkflowRunCheckpoint,
-    } = await import("./workflows");
+    } = await import("./workflows/runs");
     const { getDb } = await import("./client");
 
     const detail = createWorkflowFromScript(INITIAL_SCRIPT);

@@ -3,8 +3,10 @@ import { apiError } from "@/lib/api/errors";
 import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 import {
   getWorkflowDetail,
+} from "@/lib/db/workflows/workflow-repository";
+import {
   publishWorkflowVersion,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/versions";
 
 export async function POST(
   _request: Request,

@@ -17,6 +17,22 @@ a {
   text-decoration: none;
 }
 
+[data-slot="button"],
+.control-select,
+.run-row-main {
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+
+[data-slot="button"]:active:not(:disabled),
+.run-row-main:active {
+  transform: translateY(1px);
+}
+
 .app-shell {
   display: flex;
   min-height: 100vh;
@@ -42,6 +58,153 @@ a {
   gap: 8px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.skeleton {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  width: 100%;
+  min-width: 16px;
+  height: 14px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--border-1) 62%, var(--background-fronted));
+}
+
+.skeleton::after {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--white-stationary) 38%, transparent),
+      transparent
+    );
+  content: "";
+  transform: translateX(-100%);
+  animation: skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+.skeleton-stack {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.skeleton-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+}
+
+.skeleton-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.workbench-skeleton {
+  display: grid;
+  width: 100%;
+  min-height: 100vh;
+  grid-template-rows: auto 1fr;
+  background: var(--background);
+}
+
+.workbench-skeleton-header {
+  display: grid;
+  min-height: 82px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid var(--border-1);
+  background: color-mix(in srgb, var(--background-fronted) 90%, transparent);
+  padding: 14px 18px;
+}
+
+.workbench-skeleton-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.workbench-skeleton-body {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 32vw, 430px);
+}
+
+.skeleton-pane {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  border-right: 1px solid var(--border-1);
+  padding: 18px;
+}
+
+.skeleton-pane-side {
+  border-right: 0;
+}
+
+.skeleton-graph {
+  position: relative;
+  min-height: calc(100vh - 150px);
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background:
+    radial-gradient(var(--border-1) 0.8px, transparent 0.8px),
+    linear-gradient(180deg, var(--background-fronted), var(--background));
+  background-size:
+    18px 18px,
+    100% 100%;
+}
+
+.skeleton-node {
+  position: absolute;
+  width: 180px;
+  height: 92px;
+  border-radius: 8px;
+}
+
+.skeleton-node:nth-child(1) {
+  top: 60px;
+  left: 72px;
+}
+
+.skeleton-node:nth-child(2) {
+  top: 60px;
+  left: 340px;
+}
+
+.skeleton-node:nth-child(3) {
+  top: 238px;
+  left: 206px;
+}
+
+.skeleton-node:nth-child(4) {
+  top: 416px;
+  left: 72px;
+}
+
+.skeleton-node:nth-child(5) {
+  top: 416px;
+  left: 340px;
+}
+
+.skeleton-node:nth-child(6) {
+  top: 594px;
+  left: 206px;
+}
+
+.workflow-card-skeleton {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.run-detail-skeleton {
+  display: grid;
+  gap: 12px;
 }
 
 .error-state {
@@ -506,15 +669,19 @@ a {
   border-color: var(--border-1);
   background: color-mix(in srgb, var(--background-fronted) 92%, transparent);
   transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
 .workflow-card-shell:hover .workflow-card {
-  border-color: color-mix(in srgb, var(--state-success) 28%, var(--border-1));
-  box-shadow: 0 16px 38px rgb(0 0 0 / 8%);
-  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--state-success) 38%, var(--border-1));
+  background: color-mix(in srgb, var(--background-fronted) 98%, var(--state-success) 2%);
+  box-shadow:
+    0 18px 42px rgb(0 0 0 / 9%),
+    0 0 0 1px color-mix(in srgb, var(--state-success) 7%, transparent);
+  transform: translateY(-2px);
 }
 
 .workflow-card-header {
@@ -554,13 +721,29 @@ a {
   -webkit-line-clamp: 2;
 }
 
+.workflow-card-submeta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.workflow-card-submeta span + span::before {
+  margin-right: 8px;
+  color: var(--text-placeholder);
+  content: "·";
+}
+
 .workflow-card-footer {
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px 12px;
   border-top: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .workflow-card-actions {
@@ -833,10 +1016,18 @@ a {
   border-radius: 8px;
   background: color-mix(in srgb, var(--background-fronted) 96%, transparent);
   box-shadow: 0 12px 32px rgb(0 0 0 / 8%);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
 }
 
 .workflow-node.running {
   border-color: color-mix(in srgb, var(--status-running) 42%, var(--border-1));
+  box-shadow:
+    0 14px 34px rgb(0 0 0 / 9%),
+    0 0 0 4px color-mix(in srgb, var(--status-running) 10%, transparent);
+  animation: running-node-pulse 1.8s ease-in-out infinite;
 }
 
 .workflow-node.completed {
@@ -887,6 +1078,7 @@ a {
 
 .node-status.running {
   color: var(--status-running);
+  animation: status-pulse 1.4s ease-in-out infinite;
 }
 
 .node-status.completed {
@@ -1177,6 +1369,7 @@ a {
 .runs-panel {
   display: grid;
   gap: 12px;
+  animation: panel-fade-in 150ms ease-out;
 }
 
 .run-node-detail {
@@ -1203,6 +1396,14 @@ a {
   width: min(660px, calc(100vw - 32px));
   max-width: min(660px, calc(100vw - 32px));
   max-height: min(760px, calc(100vh - 40px));
+}
+
+.workflow-input-dialog,
+.workflow-details-dialog,
+.agent-edit-dialog,
+.import-dialog {
+  animation: dialog-enter 150ms ease-out;
+  transform-origin: center top;
 }
 
 .workflow-details-dialog-body {
@@ -1396,6 +1597,7 @@ a {
   border: 0;
   border-bottom: 1px solid var(--border-1);
   background: transparent;
+  transition: background-color 150ms ease;
 }
 
 .run-row-main {
@@ -1452,6 +1654,11 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background:
+    color-mix(in srgb, var(--background-fronted) 94%, transparent);
+  padding: 10px;
 }
 
 .run-detail-meta {
@@ -1486,11 +1693,19 @@ a {
 .run-fact {
   display: grid;
   min-width: 0;
-  gap: 4px;
+  gap: 6px;
   border: 1px solid var(--border-1);
   border-radius: 7px;
   background: var(--background-fronted);
-  padding: 8px 10px;
+  padding: 9px 10px;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+
+.run-fact:hover {
+  border-color: color-mix(in srgb, var(--status-running) 18%, var(--border-1));
+  background: color-mix(in srgb, var(--background-fronted) 96%, var(--status-running) 2%);
 }
 
 .run-fact span {
@@ -1513,27 +1728,118 @@ a {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-content: center;
-  min-height: 154px;
+  min-height: 184px;
   place-items: center;
-  gap: 10px;
+  gap: 12px;
   border: 1px dashed var(--border-1);
   border-radius: 8px;
   color: var(--text-secondary);
   text-align: center;
-  padding: 18px;
+  padding: 24px 18px;
+}
+
+.empty-state-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--state-success) 22%, var(--border-1));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--state-success) 9%, var(--background-fronted));
+  color: var(--state-success);
+}
+
+.empty-state-copy {
+  display: grid;
+  max-width: 420px;
+  gap: 6px;
+}
+
+.empty-state h3 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .empty-state p {
   margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .spin {
   animation: spin 1s linear infinite;
 }
 
+.status-pulse {
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-running) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-running) 16%, transparent);
+  }
+}
+
+@keyframes running-node-pulse {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1px);
+  }
+}
+
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes panel-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

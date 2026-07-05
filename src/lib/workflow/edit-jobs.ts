@@ -3,12 +3,16 @@ import {
   completeWorkflowEditJob,
   failWorkflowEditJob,
   getWorkflowEditJob,
-  getWorkflowVersion,
   markWorkflowEditJobRunning,
   markWorkflowEditJobStale,
   updateWorkflowEditJobAgentSession,
-  type WorkflowEditJobRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/edit-jobs";
+import {
+  getWorkflowVersion,
+} from "@/lib/db/workflows/versions";
+import type {
+  WorkflowEditJobRecord,
+} from "@/lib/db/workflows/types";
 import { workflowVersionNotFoundError } from "@/lib/api/app-error";
 import { cancelAgentRun } from "@/lib/agents/runtime";
 import type { ApiErrorCode } from "@/lib/api/errors";

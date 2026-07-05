@@ -3,8 +3,10 @@ import { apiError } from "@/lib/api/errors";
 import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 import {
   createPendingWorkflowGeneration,
+} from "@/lib/db/workflows/generations";
+import {
   listWorkflows,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/workflow-repository";
 import { ensureWorkflowGenerationStarted } from "@/lib/workflow/generation-jobs";
 
 export async function GET() {

@@ -2,9 +2,13 @@ import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api/errors";
 import {
   getWorkflowDetail,
+} from "@/lib/db/workflows/workflow-repository";
+import {
   getWorkflowEditJob,
+} from "@/lib/db/workflows/edit-jobs";
+import {
   getWorkflowVersion,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/versions";
 import { ensureWorkflowEditStarted } from "@/lib/workflow/edit-jobs";
 
 export async function GET(

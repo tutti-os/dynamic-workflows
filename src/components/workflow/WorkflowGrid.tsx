@@ -13,22 +13,31 @@ import {
   LoadingIcon,
   NewWorkspaceIcon,
 } from "@tutti-os/ui-system";
-import { EmptyState } from "@/components/workflow/WorkflowStates";
+import {
+  EmptyState,
+  WorkflowGridSkeleton,
+} from "@/components/workflow/WorkflowStates";
 import type {
   WorkflowListItem,
   WorkflowRunStatus,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 
 type WorkflowGridProps = {
   workflows: WorkflowListItem[];
   hasAnyWorkflow: boolean;
+  loading: boolean;
   duplicatingId?: string;
   deletingId?: string;
+  onCreateWorkflowFocus: () => void;
   onDuplicateWorkflow: (workflowId: string) => Promise<void>;
   onDeleteWorkflow: (workflowId: string, workflowName: string) => Promise<void>;
 };
 
 export function WorkflowGrid(props: WorkflowGridProps) {
+  if (props.loading) {
+    return <WorkflowGridSkeleton />;
+  }
+
   return (
     <div className="workflow-grid">
       {props.workflows.length > 0 ? (
@@ -43,8 +52,21 @@ export function WorkflowGrid(props: WorkflowGridProps) {
           />
         ))
       ) : (
-        <EmptyState icon={<NewWorkspaceIcon size={24} />}>
-          {props.hasAnyWorkflow ? "No workflows match." : "No workflows yet."}
+        <EmptyState
+          icon={<NewWorkspaceIcon size={26} />}
+          title={props.hasAnyWorkflow ? "No workflows match" : "No workflows yet"}
+          action={
+            props.hasAnyWorkflow
+              ? undefined
+              : {
+                  label: "Write a prompt",
+                  onClick: props.onCreateWorkflowFocus,
+                }
+          }
+        >
+          {props.hasAnyWorkflow
+            ? "Try a different search or status filter."
+            : "Create your first local workflow from a prompt, or import an existing script."}
         </EmptyState>
       )}
     </div>
@@ -73,6 +95,10 @@ function WorkflowCard(props: {
             <div>
               <CardTitle>{item.workflow.name}</CardTitle>
               <p>{item.workflow.description}</p>
+              <div className="workflow-card-submeta">
+                <span>{item.currentVersion ? `v${item.currentVersion.version}` : "Draft"}</span>
+                <span>Updated {formatShortDate(item.workflow.updatedAt)}</span>
+              </div>
             </div>
           </CardHeader>
         </Link>
@@ -81,6 +107,7 @@ function WorkflowCard(props: {
             <Badge variant="success">v{item.currentVersion.version}</Badge>
           ) : (
             <Badge
+              className={generationStatus === "running" ? "status-pulse" : undefined}
               variant={generationStatus === "failed" ? "destructive" : "pending"}
             >
               {generationStatus === "failed"
@@ -93,9 +120,13 @@ function WorkflowCard(props: {
           {item.latestRun ? (
             <>
               <span className="workflow-card-dot">·</span>
-              <Badge variant={runStatusBadge(item.latestRun.status)}>
+              <Badge
+                className={item.latestRun.status === "running" ? "status-pulse" : undefined}
+                variant={runStatusBadge(item.latestRun.status)}
+              >
                 {item.latestRun.status}
               </Badge>
+              <span>{formatShortDate(item.latestRun.startedAt)}</span>
             </>
           ) : null}
           <div className="workflow-card-actions">
@@ -146,6 +177,13 @@ function WorkflowCard(props: {
       </Card>
     </article>
   );
+}
+
+function formatShortDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(value));
 }
 
 function runStatusBadge(status: WorkflowRunStatus) {

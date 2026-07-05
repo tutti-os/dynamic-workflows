@@ -5,8 +5,10 @@ import {
   getWorkflowGeneration,
   markWorkflowGenerationRunning,
   resetWorkflowGenerationForRetry,
-  type WorkflowGenerationRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/generations";
+import type {
+  WorkflowGenerationRecord,
+} from "@/lib/db/workflows/types";
 import type { ApiErrorCode } from "@/lib/api/errors";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
 import { generateWorkflowScriptWithRepair } from "@/lib/workflow/generator";

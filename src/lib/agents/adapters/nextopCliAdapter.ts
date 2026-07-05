@@ -87,7 +87,7 @@ type NextopTurnLifecycle = {
 };
 
 const DEFAULT_CLI_PATH = "tutti-dev";
-const CLI_PATH_ENV_NAMES = ["TUTTI_CLI", "NEXTOP_CLI_PATH"] as const;
+const CLI_PATH_ENV_NAMES = ["TUTTI_CLI"] as const;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 360_000;
 const DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS = 3_000;

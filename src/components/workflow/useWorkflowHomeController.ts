@@ -1,19 +1,17 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  readApiJsonError,
-} from "@/components/workflow/workflowApiClient";
-import {
   createWorkflowFromPrompt,
   deleteWorkflow as deleteWorkflowRequest,
   duplicateWorkflow as duplicateWorkflowRequest,
   importWorkflowScriptFile,
   listWorkflowSummaries,
+  readApiJsonError,
 } from "@/components/workflow/workflowApiService";
 import type {
   WorkflowListItem,
   WorkflowRunStatus,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import type { WorkflowDiagnostic } from "@/lib/workflow/types";
 
 const DEFAULT_WORKFLOW_PROMPT =
@@ -36,6 +34,7 @@ type WorkflowHomeController = {
   setQuery: (value: string) => void;
   statusFilter: WorkflowRunStatus | "all";
   setStatusFilter: (value: WorkflowRunStatus | "all") => void;
+  isLoadingWorkflows: boolean;
   isCreating: boolean;
   createError: string | undefined;
   createDiagnostics: WorkflowDiagnostic[];
@@ -64,6 +63,7 @@ export function useWorkflowHomeController(
     "all",
   );
   const [isCreating, setIsCreating] = useState(false);
+  const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(true);
   const [importFile, setImportFile] = useState<File | undefined>();
   const [isImporting, setIsImporting] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | undefined>();
@@ -79,11 +79,14 @@ export function useWorkflowHomeController(
   const [actionError, setActionError] = useState<string | undefined>();
 
   const loadWorkflows = useCallback(async () => {
+    setIsLoadingWorkflows(true);
     try {
       setWorkflows(await listWorkflowSummaries());
       setActionError(undefined);
     } catch (caught) {
       setActionError(readApiJsonError(caught, "UNKNOWN_ERROR").message);
+    } finally {
+      setIsLoadingWorkflows(false);
     }
   }, []);
 
@@ -204,6 +207,7 @@ export function useWorkflowHomeController(
     setQuery,
     statusFilter,
     setStatusFilter,
+    isLoadingWorkflows,
     isCreating,
     createError,
     createDiagnostics,

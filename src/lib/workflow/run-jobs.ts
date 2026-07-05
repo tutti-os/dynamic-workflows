@@ -1,23 +1,25 @@
 import {
+  claimWorkflowRunForResume,
   createWorkflowRun,
   getWorkflowRun,
-  getWorkflowVersion,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
+  releaseWorkflowRunResumeClaim,
   upsertWorkflowRunCheckpoint,
   updateWorkflowRun,
-  type WorkflowRunCheckpointRecord,
-  type WorkflowRunRecord,
-  type WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/runs";
+import {
+  getWorkflowVersion,
+} from "@/lib/db/workflows/versions";
+import type {
+  WorkflowRunCheckpointRecord,
+  WorkflowRunRecord,
+  WorkflowVersionRecord,
+} from "@/lib/db/workflows/types";
 import {
   workflowRunNotFoundError,
   workflowVersionNotFoundError,
 } from "@/lib/api/app-error";
-import {
-  claimWorkflowRunForResume,
-  releaseWorkflowRunResumeClaim,
-} from "@/lib/db/workflows/runs";
 import { resolveWorkflowCwdFrom } from "@/lib/workflow/cwd";
 import { createWorkflowExecutionPlan } from "@/lib/workflow/execution-plan";
 import { runWorkflow } from "@/lib/workflow/executor";

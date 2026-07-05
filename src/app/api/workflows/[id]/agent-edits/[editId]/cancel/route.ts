@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api/errors";
-import { getWorkflowDetail, getWorkflowEditJob } from "@/lib/db/workflows";
+import {
+  getWorkflowDetail,
+} from "@/lib/db/workflows/workflow-repository";
+import {
+  getWorkflowEditJob,
+} from "@/lib/db/workflows/edit-jobs";
 import { cancelWorkflowEdit } from "@/lib/workflow/edit-jobs";
 
 export async function POST(

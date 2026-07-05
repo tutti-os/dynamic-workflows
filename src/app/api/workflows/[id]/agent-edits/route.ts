@@ -3,9 +3,11 @@ import { apiError } from "@/lib/api/errors";
 import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 import {
   createWorkflowEditJob,
-  getWorkflowDetail,
   listWorkflowEditJobs,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/edit-jobs";
+import {
+  getWorkflowDetail,
+} from "@/lib/db/workflows/workflow-repository";
 import { ensureWorkflowEditStarted } from "@/lib/workflow/edit-jobs";
 
 export async function GET(

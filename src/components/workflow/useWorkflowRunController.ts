@@ -1,18 +1,16 @@
 import { useState } from "react";
 import {
-  readApiJsonError,
-} from "@/components/workflow/workflowApiClient";
-import {
   cancelWorkflowRun,
   loadWorkflowRun,
   openWorkflowAgentSession,
+  readApiJsonError,
   startWorkflowRun,
   streamWorkflowRunEvents,
 } from "@/components/workflow/workflowApiService";
 import type {
   WorkflowDetail,
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import type { RunDetail } from "@/lib/workflow/run-detail";
 import type {
   ParsedWorkflow,
@@ -57,6 +55,7 @@ export function useWorkflowRunController(input: {
   eventLog: string[];
   isRunning: boolean;
   isCancellingRun: boolean;
+  isLoadingRunDetail: boolean;
   retryingRunId: string | undefined;
   copiedRunField: string | undefined;
   appendEventLog: (message: string) => void;
@@ -72,6 +71,7 @@ export function useWorkflowRunController(input: {
 } {
   const [isRunning, setIsRunning] = useState(false);
   const [isCancellingRun, setIsCancellingRun] = useState(false);
+  const [isLoadingRunDetail, setIsLoadingRunDetail] = useState(false);
   const [retryingRunId, setRetryingRunId] = useState<string | undefined>();
   const [copiedRunField, setCopiedRunField] = useState<string | undefined>();
   const {
@@ -352,6 +352,7 @@ export function useWorkflowRunController(input: {
   }
 
   async function loadRun(runId: string) {
+    setIsLoadingRunDetail(true);
     try {
       const data = await loadWorkflowRun({
         workflowId: input.workflowId,
@@ -363,11 +364,14 @@ export function useWorkflowRunController(input: {
       appendEventLog(
         `run detail failed: ${apiError.message}`,
       );
+    } finally {
+      setIsLoadingRunDetail(false);
     }
   }
 
   function selectRun(runId: string) {
     if (selectLiveRun(runId)) {
+      setIsLoadingRunDetail(false);
       return;
     }
     void loadRun(runId);
@@ -408,6 +412,7 @@ export function useWorkflowRunController(input: {
     eventLog,
     isRunning,
     isCancellingRun,
+    isLoadingRunDetail,
     retryingRunId,
     copiedRunField,
     appendEventLog,

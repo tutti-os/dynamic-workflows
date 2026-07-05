@@ -9,7 +9,9 @@ import type {
 } from "@xyflow/react";
 import { WorkflowInspectorPane } from "@/components/workflow/WorkflowInspectorPane";
 import { WorkflowPreviewPane } from "@/components/workflow/WorkflowPreviewPane";
-import type { WorkflowRunRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
@@ -58,6 +60,7 @@ export function WorkflowWorkbenchWorkspace(props: {
   eventLog: string[];
   versionLabelById: Record<string, string>;
   isRunning: boolean;
+  isLoadingRunDetail: boolean;
   retryingRunId?: string;
   copiedRunField?: string;
   onMainViewChange: (view: MainView) => void;
@@ -135,6 +138,7 @@ export function WorkflowWorkbenchWorkspace(props: {
         eventLog={props.eventLog}
         versionLabelById={props.versionLabelById}
         isRunning={props.isRunning}
+        isLoadingRunDetail={props.isLoadingRunDetail}
         retryingRunId={props.retryingRunId}
         copiedRunField={props.copiedRunField}
         onTabChange={props.onTabChange}

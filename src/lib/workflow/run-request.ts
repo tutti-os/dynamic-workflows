@@ -1,9 +1,13 @@
 import {
   createWorkflowVersion,
-  getWorkflowDetail,
-  getWorkflowRun,
   getWorkflowVersion,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/versions";
+import {
+  getWorkflowDetail,
+} from "@/lib/db/workflows/workflow-repository";
+import {
+  getWorkflowRun,
+} from "@/lib/db/workflows/runs";
 import {
   workflowNotFoundError,
   workflowRunNotFoundError,

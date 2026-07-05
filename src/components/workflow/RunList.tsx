@@ -8,8 +8,13 @@ import {
   Spinner,
   StatusDot,
 } from "@tutti-os/ui-system";
-import { EmptyState } from "@/components/workflow/WorkflowStates";
-import type { WorkflowRunRecord } from "@/lib/db/workflows";
+import {
+  EmptyState,
+  RunListSkeleton,
+} from "@/components/workflow/WorkflowStates";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import {
   canRetryRun,
   canResumeRun,
@@ -24,11 +29,16 @@ export function RunList(props: {
   selectedRunId?: string;
   versionLabelById: Record<string, string>;
   isRunning: boolean;
+  loading?: boolean;
   retryingRunId?: string;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onResumeRun: (runId: string) => void;
 }) {
+  if (props.loading) {
+    return <RunListSkeleton />;
+  }
+
   return (
     <div className="run-list">
       {props.runs.length > 0 ? (
@@ -46,7 +56,12 @@ export function RunList(props: {
           />
         ))
       ) : (
-        <EmptyState icon={<DirectoryIcon size={22} />}>No runs yet.</EmptyState>
+        <EmptyState
+          icon={<DirectoryIcon size={24} />}
+          title="No runs yet"
+        >
+          Run this workflow to inspect node output, checkpoints, and logs.
+        </EmptyState>
       )}
     </div>
   );
@@ -83,7 +98,12 @@ function RunListItem(props: {
             {run.model ? ` · ${run.model}` : ""} · {props.versionLabel}
           </span>
         </div>
-        <Badge variant={runStatusBadge(run.status)}>{run.status}</Badge>
+        <Badge
+          className={run.status === "running" ? "status-pulse" : undefined}
+          variant={runStatusBadge(run.status)}
+        >
+          {run.status}
+        </Badge>
         <time>{formatDate(run.startedAt)}</time>
       </button>
       {canResumeRun(run.status) ? (

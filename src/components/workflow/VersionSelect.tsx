@@ -5,7 +5,9 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@tutti-os/ui-system";
-import type { WorkflowVersionRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowVersionRecord,
+} from "@/lib/db/workflows/types";
 
 type VersionSelectProps = {
   versions: WorkflowVersionRecord[];

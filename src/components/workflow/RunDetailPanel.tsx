@@ -9,7 +9,9 @@ import {
   Spinner,
   WarningLinedIcon,
 } from "@tutti-os/ui-system";
-import type { WorkflowRunRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import type { RunDetail, RunNodeDetail } from "@/lib/workflow/run-detail";
 import {
   canRetryRun,
@@ -114,7 +116,12 @@ function RunDetailHeader(props: {
   return (
     <div className="run-detail-header">
       <div className="run-detail-meta">
-        <Badge variant={runStatusBadge(run.status)}>{run.status}</Badge>
+        <Badge
+          className={run.status === "running" ? "status-pulse" : undefined}
+          variant={runStatusBadge(run.status)}
+        >
+          {run.status}
+        </Badge>
         <Badge variant="default">{props.versionLabel}</Badge>
         <span>
           {run.agent ?? run.executorKind}
@@ -209,7 +216,10 @@ function RunNodeDetailSection(props: {
       </div>
       {session ? (
         <div className="agent-session-actions">
-          <Badge variant={nodeStatusBadge(sessionStatusToNodeStatus(session.status))}>
+          <Badge
+            className={session.status === "running" ? "status-pulse" : undefined}
+            variant={nodeStatusBadge(sessionStatusToNodeStatus(session.status))}
+          >
             {session.status}
           </Badge>
           <Button

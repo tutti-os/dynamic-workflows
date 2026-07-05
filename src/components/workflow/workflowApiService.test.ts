@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiJson, ApiJsonError } from "./workflowApiClient";
+import { apiJson, ApiJsonError } from "./workflowApiService";
 
 const originalFetch = globalThis.fetch;
 
@@ -44,23 +44,6 @@ describe("apiJson", () => {
     );
   });
 
-  it("normalizes legacy string error payloads", async () => {
-    mockFetch(
-      new Response(JSON.stringify({ error: "legacy failure" }), {
-        status: 500,
-      }),
-    );
-
-    const error = await apiJson("/legacy", undefined, "WORKFLOW_RUN_FAILED").catch(
-      (caught: unknown) => caught,
-    );
-
-    expect(error).toBeInstanceOf(ApiJsonError);
-    expect((error as ApiJsonError).apiError).toEqual({
-      code: "WORKFLOW_RUN_FAILED",
-      message: "legacy failure",
-    });
-  });
 });
 
 function mockFetch(response: Response): void {

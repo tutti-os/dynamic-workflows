@@ -5,7 +5,9 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@tutti-os/ui-system";
-import type { WorkflowRunStatus } from "@/lib/db/workflows";
+import type {
+  WorkflowRunStatus,
+} from "@/lib/db/workflows/types";
 
 type WorkflowIndexToolbarProps = {
   query: string;

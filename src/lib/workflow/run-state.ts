@@ -2,7 +2,7 @@ import type { ApiErrorCode } from "@/lib/api/errors";
 import type {
   WorkflowRunRecord,
   WorkflowRunStatus,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import { createWorkflowExecutionPlan } from "./execution-plan";
 import { RUN_TEXT_PREVIEW_CHARS } from "./run-constants";
 import type {
@@ -379,10 +379,7 @@ function readNodeSessionRecord(
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
-  const entries = Object.entries(value).map(
-    ([nodeId, session]) =>
-      [nodeId, normalizeLegacyNodeSession(session)] as const,
-  );
+  const entries = Object.entries(value);
   if (
     !entries.every(
       ([nodeId, session]) =>
@@ -392,39 +389,6 @@ function readNodeSessionRecord(
     return {};
   }
   return Object.fromEntries(entries) as Record<string, WorkflowNodeSessionRef>;
-}
-
-// Runs persisted before the provider -> agent migration stored node sessions
-// keyed by provider id; upgrade them on read so old run details and resume
-// paths keep working.
-const LEGACY_PROVIDER_AGENT_IDS: Record<string, string> = {
-  codex: "local:codex",
-  claude: "local:claude-code",
-  "claude-code": "local:claude-code",
-};
-
-function legacyAgentFromProvider(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const provider = value.trim();
-  return LEGACY_PROVIDER_AGENT_IDS[provider] ?? provider;
-}
-
-function normalizeLegacyNodeSession(value: unknown): unknown {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return value;
-  }
-  const raw = value as Record<string, unknown>;
-  if (typeof raw.agent === "string" && raw.agent.trim()) {
-    return value;
-  }
-  const agent = legacyAgentFromProvider(raw.provider);
-  if (!agent) {
-    return value;
-  }
-  const { provider: _legacyProvider, ...rest } = raw;
-  return { ...rest, agent };
 }
 
 function isWorkflowNodeSessionRef(
@@ -475,7 +439,7 @@ function readNodeSessionRef(
   const agent =
     typeof raw.agent === "string" && raw.agent.trim()
       ? raw.agent.trim()
-      : (legacyAgentFromProvider(raw.provider) ?? "");
+      : "";
   if (!agentSessionId || !agent) {
     return undefined;
   }

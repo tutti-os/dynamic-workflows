@@ -9,7 +9,7 @@ import {
 import type {
   WorkflowDetail,
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 import { VersionSelect } from "@/components/workflow/VersionSelect";
 import { WorkflowActionBar } from "@/components/workflow/WorkflowActionBar";
 

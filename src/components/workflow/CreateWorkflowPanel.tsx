@@ -48,6 +48,7 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
       <div className="prompt-composer">
         <CreateChatIcon className="prompt-composer-icon" size={20} />
         <Textarea
+          id="workflow-prompt"
           value={props.prompt}
           rows={7}
           maxLength={2000}

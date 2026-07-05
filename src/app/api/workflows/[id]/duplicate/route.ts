@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
-import { duplicateWorkflow } from "@/lib/db/workflows";
+import {
+  duplicateWorkflow,
+} from "@/lib/db/workflows/workflow-repository";
 
 export async function POST(
   request: Request,

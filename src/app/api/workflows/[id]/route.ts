@@ -5,7 +5,7 @@ import {
   deleteWorkflow,
   getWorkflowDetail,
   updateWorkflowMetadata,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/workflow-repository";
 
 export async function GET(
   _request: Request,

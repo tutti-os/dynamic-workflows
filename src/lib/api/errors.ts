@@ -100,16 +100,6 @@ export function readApiError(
     return value.error;
   }
 
-  if (value && typeof value === "object" && "error" in value) {
-    const legacy = (value as { error?: unknown }).error;
-    if (typeof legacy === "string" && legacy.trim()) {
-      return {
-        code: fallbackCode,
-        message: legacy,
-      };
-    }
-  }
-
   if (typeof value === "string" && value.trim()) {
     return {
       code: fallbackCode,

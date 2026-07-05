@@ -2,7 +2,9 @@ import {
   ScrollArea,
   UnderlineTabs,
 } from "@tutti-os/ui-system";
-import type { WorkflowRunRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
@@ -42,6 +44,7 @@ type WorkflowInspectorPaneProps = {
   eventLog: string[];
   versionLabelById: Record<string, string>;
   isRunning: boolean;
+  isLoadingRunDetail: boolean;
   retryingRunId?: string;
   copiedRunField?: string;
   onTabChange: (tab: InspectorTab) => void;
@@ -128,6 +131,7 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
             selectedNodeRun={props.selectedNodeRun}
             versionLabelById={props.versionLabelById}
             isRunning={props.isRunning}
+            isLoadingRunDetail={props.isLoadingRunDetail}
             retryingRunId={props.retryingRunId}
             copiedRunField={props.copiedRunField}
             onSelectRun={props.onSelectRun}

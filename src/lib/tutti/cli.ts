@@ -4,10 +4,14 @@ import type { AgentTargetOption } from "@/lib/agents/types";
 import {
   createWorkflowFromScript,
   getWorkflowDetail,
-  getWorkflowVersion,
   listWorkflows,
-  type WorkflowRunRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/workflow-repository";
+import {
+  getWorkflowVersion,
+} from "@/lib/db/workflows/versions";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import { getWorkflowCwdRoot, resolveWorkflowCwd } from "@/lib/workflow/cwd";
 import { generateWorkflowScriptWithRepair } from "@/lib/workflow/generator";
 import {

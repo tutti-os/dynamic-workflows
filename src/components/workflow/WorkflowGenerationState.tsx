@@ -10,7 +10,7 @@ import {
 import type {
   WorkflowDetail,
   WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+} from "@/lib/db/workflows/types";
 
 export function hasCurrentVersion(
   detail: WorkflowDetail,

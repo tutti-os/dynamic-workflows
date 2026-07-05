@@ -1,4 +1,6 @@
-import type { WorkflowRunRecord } from "@/lib/db/workflows";
+import type {
+  WorkflowRunRecord,
+} from "@/lib/db/workflows/types";
 import {
   limitRunText,
   RUN_TEXT_PREVIEW_CHARS,
