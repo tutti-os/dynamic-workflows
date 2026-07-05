@@ -4,6 +4,7 @@ import {
   type ApiErrorCode,
   type ApiErrorResponse,
 } from "@/lib/api/errors";
+import { isAppError } from "@/lib/api/app-error";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
 import { WorkflowScriptSyntaxError } from "@/lib/workflow/parser";
 
@@ -25,22 +26,14 @@ export function getWorkflowApiErrorCode(
   error: unknown,
   fallbackCode: ApiErrorCode,
 ): ApiErrorCode {
+  if (isAppError(error)) {
+    return error.code;
+  }
   if (error instanceof WorkflowScriptSyntaxError) {
     return "WORKFLOW_SCRIPT_INVALID";
   }
   if (error instanceof WorkflowCwdError) {
     return "WORKFLOW_CWD_INVALID";
-  }
-  if (error instanceof Error) {
-    if (error.message === "Workflow not found") {
-      return "WORKFLOW_NOT_FOUND";
-    }
-    if (error.message === "Run not found") {
-      return "RUN_NOT_FOUND";
-    }
-    if (error.message === "Workflow version not found") {
-      return "WORKFLOW_VERSION_NOT_FOUND";
-    }
   }
   return fallbackCode;
 }
@@ -56,8 +49,11 @@ export function toWorkflowApiErrorResponse(
   return NextResponse.json(
     apiError(code, {
       message: error instanceof Error ? error.message : undefined,
+      details: isAppError(error) ? error.details : undefined,
       diagnostics:
-        error instanceof WorkflowScriptSyntaxError
+        isAppError(error)
+          ? error.diagnostics
+          : error instanceof WorkflowScriptSyntaxError
           ? error.diagnostics
           : undefined,
     }),

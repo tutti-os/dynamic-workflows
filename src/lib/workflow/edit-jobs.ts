@@ -9,6 +9,7 @@ import {
   updateWorkflowEditJobAgentSession,
   type WorkflowEditJobRecord,
 } from "@/lib/db/workflows";
+import { workflowVersionNotFoundError } from "@/lib/api/app-error";
 import { cancelAgentRun } from "@/lib/agents/runtime";
 import type { ApiErrorCode } from "@/lib/api/errors";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
@@ -62,7 +63,7 @@ async function runEditJob(editId: string) {
   try {
     const baseVersion = getWorkflowVersion(edit.baseVersionId);
     if (!baseVersion || baseVersion.workflowId !== edit.workflowId) {
-      throw new Error("Workflow version not found");
+      throw workflowVersionNotFoundError();
     }
 
     const edited = await editWorkflowScriptWithRepair({

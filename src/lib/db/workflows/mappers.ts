@@ -78,7 +78,14 @@ export type RunCheckpointRow = {
   updated_at: string;
 };
 
-import type { WorkflowLoopRecoveryState } from "@/lib/workflow/types";
+import {
+  parseJsonObjectColumn,
+  parseJsonValueColumn,
+  parseWorkflowEditJobErrorColumn,
+  parseWorkflowGenerationErrorColumn,
+  parseWorkflowLoopRecoveryStateColumn,
+  parseWorkflowMetaColumn,
+} from "./json-schemas";
 import type {
   WorkflowEditJobError,
   WorkflowEditJobRecord,
@@ -110,7 +117,11 @@ export function mapVersion(row: VersionRow): WorkflowVersionRecord {
     workflowId: row.workflow_id,
     version: row.version,
     script: row.script,
-    meta: parseJson(row.meta_json, { name: "workflow", description: "" }),
+    meta: parseWorkflowMetaColumn(row.meta_json, {
+      table: "workflow_versions",
+      column: "meta_json",
+      id: row.id,
+    }),
     source: row.source,
     baseVersionId: row.base_version_id,
     note: row.note,
@@ -129,8 +140,18 @@ export function mapRun(row: RunRow): WorkflowRunRecord {
     agent: row.agent,
     model: row.model,
     cwd: row.cwd,
-    input: parseJson(row.input_json, {}),
-    result: row.result_json ? parseJson(row.result_json, null) : null,
+    input: parseJsonObjectColumn(row.input_json, {
+      table: "workflow_runs",
+      column: "input_json",
+      id: row.id,
+    }),
+    result: row.result_json
+      ? parseJsonObjectColumn(row.result_json, {
+          table: "workflow_runs",
+          column: "result_json",
+          id: row.id,
+        })
+      : null,
     logPath: row.log_path,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
@@ -147,10 +168,18 @@ export function mapGeneration(row: GenerationRow): WorkflowGenerationRecord {
     cwd: row.cwd,
     status: row.status,
     generation: row.generation_json
-      ? parseJson<unknown>(row.generation_json, null)
+      ? parseJsonValueColumn(row.generation_json, {
+          table: "workflow_generations",
+          column: "generation_json",
+          id: row.id,
+        })
       : null,
     error: row.error_json
-      ? parseJson<WorkflowGenerationError | null>(row.error_json, null)
+      ? parseWorkflowGenerationErrorColumn(row.error_json, {
+          table: "workflow_generations",
+          column: "error_json",
+          id: row.id,
+        })
       : null,
     createdAt: row.created_at,
     startedAt: row.started_at,
@@ -162,10 +191,10 @@ export function mapRunCheckpoint(row: RunCheckpointRow): WorkflowRunCheckpointRe
   return {
     runId: row.run_id,
     nodeId: row.node_id,
-    checkpoint: parseJson<WorkflowLoopRecoveryState>(row.checkpoint_json, {
-      nextIteration: 1,
-      previousStepOutputs: {},
-      iterations: [],
+    checkpoint: parseWorkflowLoopRecoveryStateColumn(row.checkpoint_json, {
+      table: "workflow_run_checkpoints",
+      column: "checkpoint_json",
+      id: `${row.run_id}:${row.node_id}`,
     }),
     updatedAt: row.updated_at,
   };
@@ -183,20 +212,22 @@ export function mapEditJob(row: EditJobRow): WorkflowEditJobRecord {
     cwd: row.cwd,
     agentSessionId: row.agent_session_id,
     status: row.status,
-    result: row.result_json ? parseJson<unknown>(row.result_json, null) : null,
+    result: row.result_json
+      ? parseJsonValueColumn(row.result_json, {
+          table: "workflow_edit_jobs",
+          column: "result_json",
+          id: row.id,
+        })
+      : null,
     error: row.error_json
-      ? parseJson<WorkflowEditJobError | null>(row.error_json, null)
+      ? parseWorkflowEditJobErrorColumn(row.error_json, {
+          table: "workflow_edit_jobs",
+          column: "error_json",
+          id: row.id,
+        })
       : null,
     createdAt: row.created_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
   };
-}
-
-export function parseJson<T>(value: string, fallback: T): T {
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return fallback;
-  }
 }

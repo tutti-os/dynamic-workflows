@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import {
+  workflowNotFoundError,
+  workflowVersionNotFoundError,
+} from "@/lib/api/app-error";
 import { assertWorkflowScriptValid, parseWorkflowScript } from "@/lib/workflow/parser";
 import type { ParsedWorkflow } from "@/lib/workflow/types";
 import { getDb } from "../client";
+import { stringifyWorkflowMetaColumn } from "./json-schemas";
 import { getWorkflow, getWorkflowDetail } from "./workflow-repository";
 import { mapVersion, type VersionRow } from "./mappers";
 import type { WorkflowDetail, WorkflowVersionRecord } from "./types";
@@ -46,7 +51,11 @@ export function createWorkflowVersion(input: {
           input.workflowId,
           version.next_version,
           input.script,
-          JSON.stringify(parsed.meta),
+          stringifyWorkflowMetaColumn(parsed.meta, {
+            table: "workflow_versions",
+            column: "meta_json",
+            id: versionId,
+          }),
           input.source ?? null,
           input.baseVersionId ?? null,
           input.note ?? null,
@@ -95,7 +104,7 @@ export function publishWorkflowVersion(input: {
 }): WorkflowDetail {
   const version = getWorkflowVersion(input.versionId);
   if (!version || version.workflowId !== input.workflowId) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const now = new Date().toISOString();
@@ -116,12 +125,12 @@ export function publishWorkflowVersion(input: {
     );
 
   if (result.changes === 0) {
-    throw new Error("Workflow not found");
+    throw workflowNotFoundError();
   }
 
   const detail = getWorkflowDetail(input.workflowId);
   if (!detail) {
-    throw new Error("Workflow not found");
+    throw workflowNotFoundError();
   }
   return detail;
 }

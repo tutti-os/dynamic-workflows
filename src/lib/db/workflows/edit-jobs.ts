@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { workflowVersionNotFoundError } from "@/lib/api/app-error";
 import { getDb } from "../client";
+import {
+  stringifyJsonValueColumn,
+  stringifyWorkflowEditJobErrorColumn,
+} from "./json-schemas";
 import { createWorkflowVersion, getWorkflowVersion } from "./versions";
 import { getWorkflowDetail } from "./workflow-repository";
 import { mapEditJob, type EditJobRow } from "./mappers";
@@ -18,13 +23,13 @@ export function createWorkflowEditJob(input: {
 }): WorkflowEditJobRecord {
   const detail = getWorkflowDetail(input.workflowId);
   if (!detail?.currentVersion) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const baseVersionId = input.baseVersionId ?? detail.currentVersion.id;
   const baseVersion = getWorkflowVersion(baseVersionId);
   if (!baseVersion || baseVersion.workflowId !== input.workflowId) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const instruction = input.instruction.trim();
@@ -182,7 +187,11 @@ export function completeWorkflowEditJob(input: {
       )
       .run(
         version.id,
-        JSON.stringify(input.result),
+        stringifyJsonValueColumn(input.result, {
+          table: "workflow_edit_jobs",
+          column: "result_json",
+          id: input.editId,
+        }),
         now,
         input.editId,
       );
@@ -216,7 +225,15 @@ export function failWorkflowEditJob(input: {
           AND status NOT IN ('completed', 'canceled')
       `,
       )
-      .run(JSON.stringify(input.error), now, input.editId);
+      .run(
+        stringifyWorkflowEditJobErrorColumn(input.error, {
+          table: "workflow_edit_jobs",
+          column: "error_json",
+          id: input.editId,
+        }),
+        now,
+        input.editId,
+      );
 
     return getWorkflowEditJob(input.editId);
   })();
@@ -242,8 +259,19 @@ export function cancelWorkflowEditJob(input: {
       )
       .run(
         input.error
-          ? JSON.stringify(input.error)
-          : JSON.stringify({ message: "Workflow edit canceled." }),
+          ? stringifyWorkflowEditJobErrorColumn(input.error, {
+              table: "workflow_edit_jobs",
+              column: "error_json",
+              id: input.editId,
+            })
+          : stringifyWorkflowEditJobErrorColumn(
+              { message: "Workflow edit canceled." },
+              {
+                table: "workflow_edit_jobs",
+                column: "error_json",
+                id: input.editId,
+              },
+            ),
         now,
         input.editId,
       );

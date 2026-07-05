@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { workflowNotFoundError } from "@/lib/api/app-error";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
 import { getDb } from "../client";
 import { getWorkflowDetail } from "./workflow-repository";
+import {
+  stringifyJsonValueColumn,
+  stringifyWorkflowGenerationErrorColumn,
+  stringifyWorkflowMetaColumn,
+} from "./json-schemas";
 import { mapGeneration, type GenerationRow } from "./mappers";
 import type {
   WorkflowDetail,
@@ -198,7 +204,11 @@ export function completeWorkflowGeneration(input: {
           generation.workflowId,
           version.next_version,
           input.script,
-          JSON.stringify(parsed.meta),
+          stringifyWorkflowMetaColumn(parsed.meta, {
+            table: "workflow_versions",
+            column: "meta_json",
+            id: versionId,
+          }),
           "generation",
           null,
           null,
@@ -233,7 +243,11 @@ export function completeWorkflowGeneration(input: {
         `,
         )
         .run(
-          JSON.stringify(input.generation),
+          stringifyJsonValueColumn(input.generation, {
+            table: "workflow_generations",
+            column: "generation_json",
+            id: input.generationId,
+          }),
           now,
           input.generationId,
         );
@@ -241,7 +255,7 @@ export function completeWorkflowGeneration(input: {
 
   const detail = getWorkflowDetail(generation.workflowId);
   if (!detail) {
-    throw new Error("Workflow not found");
+    throw workflowNotFoundError();
   }
   return detail;
 }
@@ -264,7 +278,15 @@ export function failWorkflowGeneration(input: {
           AND status != 'completed'
       `,
       )
-      .run(JSON.stringify(input.error), now, input.generationId);
+      .run(
+        stringifyWorkflowGenerationErrorColumn(input.error, {
+          table: "workflow_generations",
+          column: "error_json",
+          id: input.generationId,
+        }),
+        now,
+        input.generationId,
+      );
 
     return getWorkflowGeneration(input.generationId);
   })();

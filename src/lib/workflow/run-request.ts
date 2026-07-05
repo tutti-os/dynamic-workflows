@@ -4,6 +4,11 @@ import {
   getWorkflowRun,
   getWorkflowVersion,
 } from "@/lib/db/workflows";
+import {
+  workflowNotFoundError,
+  workflowRunNotFoundError,
+  workflowVersionNotFoundError,
+} from "@/lib/api/app-error";
 import { resolveWorkflowCwd } from "@/lib/workflow/cwd";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
 import type { WorkflowRunJobOptions } from "@/lib/workflow/run-jobs";
@@ -25,10 +30,10 @@ export async function prepareCurrentWorkflowRun(input: {
 }): Promise<PreparedWorkflowRun> {
   const detail = getWorkflowDetail(input.workflowId);
   if (!detail) {
-    throw new Error("Workflow not found");
+    throw workflowNotFoundError();
   }
   if (!detail.currentVersion) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const body = (await input.request.json()) as WorkflowRunRequestBody;
@@ -39,7 +44,7 @@ export async function prepareCurrentWorkflowRun(input: {
     !requestedVersion ||
     requestedVersion.workflowId !== input.workflowId
   ) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const script = body.script ?? requestedVersion.script;
@@ -70,11 +75,11 @@ export async function prepareCurrentWorkflowRun(input: {
     inputs,
     input: {
       inputs,
-      agent: body.agent,
-      model: body.model,
       cwd,
       autoSavedVersion: script !== requestedVersion.script,
       requestedVersionId: requestedVersion.id,
+      ...(body.agent === undefined ? {} : { agent: body.agent }),
+      ...(body.model === undefined ? {} : { model: body.model }),
     },
   };
 }
@@ -85,17 +90,17 @@ export function prepareRetryWorkflowRun(input: {
 }): PreparedWorkflowRun {
   const detail = getWorkflowDetail(input.workflowId);
   if (!detail) {
-    throw new Error("Workflow not found");
+    throw workflowNotFoundError();
   }
 
   const sourceRun = getWorkflowRun(input.runId);
   if (!sourceRun || sourceRun.workflowId !== input.workflowId) {
-    throw new Error("Run not found");
+    throw workflowRunNotFoundError();
   }
 
   const version = getWorkflowVersion(sourceRun.workflowVersionId);
   if (!version || version.workflowId !== input.workflowId) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const cwd = resolveWorkflowCwd(sourceRun.cwd ?? undefined);

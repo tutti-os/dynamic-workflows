@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { getDb, getRunLogPath } from "../client";
 import type { WorkflowLoopRecoveryState } from "@/lib/workflow/types";
 import {
+  stringifyJsonObjectColumn,
+  stringifyWorkflowLoopRecoveryStateColumn,
+} from "./json-schemas";
+import {
   mapRun,
   mapRunCheckpoint,
   type RunCheckpointRow,
@@ -49,7 +53,11 @@ export function createWorkflowRun(input: {
         input.agent ?? null,
         input.model ?? null,
         input.cwd ?? null,
-        JSON.stringify(input.request),
+        stringifyJsonObjectColumn(input.request, {
+          table: "workflow_runs",
+          column: "input_json",
+          id: runId,
+        }),
         null,
         logPath,
         now,
@@ -86,7 +94,13 @@ export function updateWorkflowRun(input: {
       )
       .run(
         input.status,
-        input.result === undefined ? null : JSON.stringify(input.result),
+        input.result === undefined
+          ? null
+          : stringifyJsonObjectColumn(input.result, {
+              table: "workflow_runs",
+              column: "result_json",
+              id: input.runId,
+            }),
         input.finishedAt ?? new Date().toISOString(),
         input.runId,
       );
@@ -114,7 +128,13 @@ export function markWorkflowRunRunning(input: {
       `,
       )
       .run(
-        input.result === undefined ? null : JSON.stringify(input.result),
+        input.result === undefined
+          ? null
+          : stringifyJsonObjectColumn(input.result, {
+              table: "workflow_runs",
+              column: "result_json",
+              id: input.runId,
+            }),
         input.runId,
       );
 
@@ -143,7 +163,13 @@ export function markWorkflowRunInterrupted(input: {
       `,
       )
       .run(
-        input.result === undefined ? null : JSON.stringify(input.result),
+        input.result === undefined
+          ? null
+          : stringifyJsonObjectColumn(input.result, {
+              table: "workflow_runs",
+              column: "result_json",
+              id: input.runId,
+            }),
         now,
         input.runId,
       );
@@ -178,7 +204,13 @@ export function claimWorkflowRunForResume(input: {
       `,
       )
       .run(
-        input.result === undefined ? null : JSON.stringify(input.result),
+        input.result === undefined
+          ? null
+          : stringifyJsonObjectColumn(input.result, {
+              table: "workflow_runs",
+              column: "result_json",
+              id: input.runId,
+            }),
         token,
         now,
         input.runId,
@@ -248,7 +280,11 @@ export function upsertWorkflowRunCheckpoint(input: {
       .run(
         input.runId,
         input.nodeId,
-        JSON.stringify(input.checkpoint),
+        stringifyWorkflowLoopRecoveryStateColumn(input.checkpoint, {
+          table: "workflow_run_checkpoints",
+          column: "checkpoint_json",
+          id: `${input.runId}:${input.nodeId}`,
+        }),
         now,
       );
 

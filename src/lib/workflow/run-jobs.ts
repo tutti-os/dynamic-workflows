@@ -11,6 +11,10 @@ import {
   type WorkflowVersionRecord,
 } from "@/lib/db/workflows";
 import {
+  workflowRunNotFoundError,
+  workflowVersionNotFoundError,
+} from "@/lib/api/app-error";
+import {
   claimWorkflowRunForResume,
   releaseWorkflowRunResumeClaim,
 } from "@/lib/db/workflows/runs";
@@ -103,7 +107,7 @@ export async function resumeWorkflowRunJob(input: {
 }): Promise<WorkflowRunRecord> {
   const activeRun = getWorkflowRun(input.runId);
   if (!activeRun || activeRun.workflowId !== input.workflowId) {
-    throw new Error("Run not found");
+    throw workflowRunNotFoundError();
   }
   if (jobs.has(activeRun.id)) {
     return activeRun;
@@ -117,7 +121,7 @@ export async function resumeWorkflowRunJob(input: {
 
   const version = getWorkflowVersion(activeRun.workflowVersionId);
   if (!version || version.workflowId !== input.workflowId) {
-    throw new Error("Workflow version not found");
+    throw workflowVersionNotFoundError();
   }
 
   const job: ActiveRunJob = {
