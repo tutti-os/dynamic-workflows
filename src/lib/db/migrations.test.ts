@@ -138,6 +138,9 @@ describe("migrateDb", () => {
       );
       const runColumns = readColumnNames(database, "workflow_runs");
       expect(runColumns).toContain("agent");
+      expect(runColumns).toEqual(
+        expect.arrayContaining(["resume_token", "resume_claimed_at"]),
+      );
       expect(runColumns).not.toContain("provider");
       expect(
         database

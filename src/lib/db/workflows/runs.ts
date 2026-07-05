@@ -1,0 +1,326 @@
+import { randomUUID } from "node:crypto";
+import { getDb, getRunLogPath } from "../client";
+import type { WorkflowLoopRecoveryState } from "@/lib/workflow/types";
+import {
+  mapRun,
+  mapRunCheckpoint,
+  type RunCheckpointRow,
+  type RunRow,
+} from "./mappers";
+import type {
+  WorkflowRunCheckpointRecord,
+  WorkflowRunRecord,
+  WorkflowRunResumeClaim,
+  WorkflowRunStatus,
+} from "./types";
+
+export function createWorkflowRun(input: {
+  workflowId: string;
+  workflowVersionId: string;
+  executorKind: string;
+  agent?: string;
+  model?: string;
+  cwd?: string;
+  request: unknown;
+}): WorkflowRunRecord {
+  const now = new Date().toISOString();
+  const runId = randomUUID();
+  const logPath = getRunLogPath(runId);
+  const database = getDb();
+
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        INSERT INTO workflow_runs (
+          id, workflow_id, workflow_version_id, executor_kind, external_run_id,
+          status, agent, model, cwd, input_json, result_json, log_path,
+          started_at, finished_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      )
+      .run(
+        runId,
+        input.workflowId,
+        input.workflowVersionId,
+        input.executorKind,
+        null,
+        "running",
+        input.agent ?? null,
+        input.model ?? null,
+        input.cwd ?? null,
+        JSON.stringify(input.request),
+        null,
+        logPath,
+        now,
+        null,
+      );
+
+    const run = getWorkflowRun(runId);
+    if (!run) {
+      throw new Error("Failed to create workflow run");
+    }
+    return run;
+  })();
+}
+
+export function updateWorkflowRun(input: {
+  runId: string;
+  status: WorkflowRunStatus;
+  result?: unknown;
+  finishedAt?: string;
+}): WorkflowRunRecord | null {
+  const database = getDb();
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        UPDATE workflow_runs
+        SET status = ?,
+          result_json = ?,
+          finished_at = ?,
+          resume_token = NULL,
+          resume_claimed_at = NULL
+        WHERE id = ?
+      `,
+      )
+      .run(
+        input.status,
+        input.result === undefined ? null : JSON.stringify(input.result),
+        input.finishedAt ?? new Date().toISOString(),
+        input.runId,
+      );
+
+    return getWorkflowRun(input.runId);
+  })();
+}
+
+export function markWorkflowRunRunning(input: {
+  runId: string;
+  result?: unknown;
+}): WorkflowRunRecord | null {
+  const database = getDb();
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        UPDATE workflow_runs
+        SET status = 'running',
+          result_json = COALESCE(?, result_json),
+          finished_at = NULL,
+          resume_token = NULL,
+          resume_claimed_at = NULL
+        WHERE id = ?
+      `,
+      )
+      .run(
+        input.result === undefined ? null : JSON.stringify(input.result),
+        input.runId,
+      );
+
+    return getWorkflowRun(input.runId);
+  })();
+}
+
+export function markWorkflowRunInterrupted(input: {
+  runId: string;
+  result?: unknown;
+}): WorkflowRunRecord | null {
+  const now = new Date().toISOString();
+  const database = getDb();
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        UPDATE workflow_runs
+        SET status = 'interrupted',
+          result_json = COALESCE(?, result_json),
+          finished_at = ?,
+          resume_token = NULL,
+          resume_claimed_at = NULL
+        WHERE id = ?
+          AND status = 'running'
+      `,
+      )
+      .run(
+        input.result === undefined ? null : JSON.stringify(input.result),
+        now,
+        input.runId,
+      );
+
+    return getWorkflowRun(input.runId);
+  })();
+}
+
+export function claimWorkflowRunForResume(input: {
+  workflowId: string;
+  runId: string;
+  result?: unknown;
+}): WorkflowRunResumeClaim | null {
+  const database = getDb();
+  const token = randomUUID();
+  const now = new Date().toISOString();
+
+  return database.transaction(() => {
+    const result = database
+      .prepare(
+        `
+        UPDATE workflow_runs
+        SET status = 'running',
+          result_json = COALESCE(?, result_json),
+          finished_at = NULL,
+          resume_token = ?,
+          resume_claimed_at = ?
+        WHERE id = ?
+          AND workflow_id = ?
+          AND status IN ('running', 'interrupted')
+          AND resume_token IS NULL
+      `,
+      )
+      .run(
+        input.result === undefined ? null : JSON.stringify(input.result),
+        token,
+        now,
+        input.runId,
+        input.workflowId,
+      );
+
+    if (result.changes === 0) {
+      return null;
+    }
+
+    const run = getWorkflowRun(input.runId);
+    if (!run) {
+      throw new Error("Workflow run not found after resume claim");
+    }
+    return { run, token };
+  })();
+}
+
+export function releaseWorkflowRunResumeClaim(input: {
+  runId: string;
+  token: string;
+}): WorkflowRunRecord | null {
+  const database = getDb();
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        UPDATE workflow_runs
+        SET resume_token = NULL,
+          resume_claimed_at = NULL
+        WHERE id = ?
+          AND resume_token = ?
+      `,
+      )
+      .run(input.runId, input.token);
+
+    return getWorkflowRun(input.runId);
+  })();
+}
+
+export function getWorkflowRun(runId: string): WorkflowRunRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM workflow_runs WHERE id = ?")
+    .get(runId) as RunRow | undefined;
+  return row ? mapRun(row) : null;
+}
+
+export function upsertWorkflowRunCheckpoint(input: {
+  runId: string;
+  nodeId: string;
+  checkpoint: WorkflowLoopRecoveryState;
+}): WorkflowRunCheckpointRecord {
+  const now = new Date().toISOString();
+  const database = getDb();
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        INSERT INTO workflow_run_checkpoints (
+          run_id, node_id, checkpoint_json, updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT(run_id, node_id) DO UPDATE SET
+          checkpoint_json = excluded.checkpoint_json,
+          updated_at = excluded.updated_at
+      `,
+      )
+      .run(
+        input.runId,
+        input.nodeId,
+        JSON.stringify(input.checkpoint),
+        now,
+      );
+
+    const checkpoint = getWorkflowRunCheckpoint(input.runId, input.nodeId);
+    if (!checkpoint) {
+      throw new Error("Failed to save workflow run checkpoint");
+    }
+    return checkpoint;
+  })();
+}
+
+export function getWorkflowRunCheckpoint(
+  runId: string,
+  nodeId: string,
+): WorkflowRunCheckpointRecord | null {
+  const row = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_run_checkpoints
+      WHERE run_id = ? AND node_id = ?
+    `,
+    )
+    .get(runId, nodeId) as RunCheckpointRow | undefined;
+  return row ? mapRunCheckpoint(row) : null;
+}
+
+export function listWorkflowRunCheckpoints(
+  runId: string,
+): WorkflowRunCheckpointRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_run_checkpoints
+      WHERE run_id = ?
+      ORDER BY updated_at ASC
+    `,
+    )
+    .all(runId) as RunCheckpointRow[];
+  return rows.map(mapRunCheckpoint);
+}
+
+export function listWorkflowRuns(workflowId: string): WorkflowRunRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_runs
+      WHERE workflow_id = ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 50
+    `,
+    )
+    .all(workflowId) as RunRow[];
+  return rows.map(mapRun);
+}
+
+export function countWorkflowRuns(workflowId: string): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS count FROM workflow_runs WHERE workflow_id = ?")
+    .get(workflowId) as { count: number };
+  return row.count;
+}
+
+export function getLatestWorkflowRun(workflowId: string): WorkflowRunRecord | null {
+  const row = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_runs
+      WHERE workflow_id = ?
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1
+    `,
+    )
+    .get(workflowId) as RunRow | undefined;
+  return row ? mapRun(row) : null;
+}

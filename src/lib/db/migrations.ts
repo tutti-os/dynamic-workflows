@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -40,6 +40,10 @@ export function migrateDb(database: Database.Database): void {
       if (currentVersion < 6) {
         applySchemaV6(database);
         recordSchemaMigration(database, 6);
+      }
+      if (currentVersion < 7) {
+        applySchemaV7(database);
+        recordSchemaMigration(database, 7);
       }
     })();
 }
@@ -210,4 +214,15 @@ function applySchemaV6(database: Database.Database): void {
         WHERE agent IN ('claude-code', 'claude');
     `);
   }
+}
+
+function applySchemaV7(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_runs ADD COLUMN resume_token TEXT;
+    ALTER TABLE workflow_runs ADD COLUMN resume_claimed_at TEXT;
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_resume_token
+      ON workflow_runs(resume_token)
+      WHERE resume_token IS NOT NULL;
+  `);
 }

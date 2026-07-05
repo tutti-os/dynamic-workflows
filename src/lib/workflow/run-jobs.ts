@@ -1,10 +1,11 @@
 import {
+  claimWorkflowRunForResume,
   createWorkflowRun,
   getWorkflowRun,
   getWorkflowVersion,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
-  markWorkflowRunRunning,
+  releaseWorkflowRunResumeClaim,
   upsertWorkflowRunCheckpoint,
   updateWorkflowRun,
   type WorkflowRunCheckpointRecord,
@@ -121,26 +122,29 @@ export async function resumeWorkflowRunJob(input: {
     abortController: new AbortController(),
     subscribers: new Set(),
   };
+  const claim = claimWorkflowRunForResume({
+    workflowId: input.workflowId,
+    runId: activeRun.id,
+  });
+  if (!claim) {
+    return getWorkflowRun(activeRun.id) ?? activeRun;
+  }
   jobs.set(activeRun.id, job);
+  const run = claim.run;
 
   try {
-    const log = await readRunLog(activeRun.logPath);
+    const log = await readRunLog(run.logPath);
     const snapshot = createRunRecoveryState({
-      run: activeRun,
+      run,
       version,
       log,
-      checkpoints: listWorkflowRunCheckpoints(activeRun.id),
+      checkpoints: listWorkflowRunCheckpoints(run.id),
     });
     if (snapshot.terminalSummary) {
-      jobs.delete(activeRun.id);
-      return reconcileWorkflowRunFromTerminalLog(activeRun, snapshot.terminalSummary);
+      jobs.delete(run.id);
+      return reconcileWorkflowRunFromTerminalLog(run, snapshot.terminalSummary);
     }
 
-    const run =
-      markWorkflowRunRunning({
-        runId: activeRun.id,
-        result: toWorkflowRunResult(snapshot.summary),
-      }) ?? activeRun;
     ensureRunLogDirectory(run.logPath);
 
     void executeWorkflowRunJob(
@@ -161,7 +165,11 @@ export async function resumeWorkflowRunJob(input: {
     );
     return run;
   } catch (error) {
-    jobs.delete(activeRun.id);
+    releaseWorkflowRunResumeClaim({
+      runId: run.id,
+      token: claim.token,
+    });
+    jobs.delete(run.id);
     throw error;
   }
 }
@@ -259,11 +267,18 @@ async function executeWorkflowRunJob(
         if (checkpoint.kind !== "loop") {
           return;
         }
-        upsertWorkflowRunCheckpoint({
-          runId: run.id,
-          nodeId: checkpoint.nodeId,
-          checkpoint: checkpoint.state,
-        });
+        try {
+          upsertWorkflowRunCheckpoint({
+            runId: run.id,
+            nodeId: checkpoint.nodeId,
+            checkpoint: checkpoint.state,
+          });
+        } catch (error) {
+          throw new Error(
+            `Failed to save workflow run checkpoint for run ${run.id}, node ${checkpoint.nodeId}.`,
+            { cause: error },
+          );
+        }
       },
       signal: job.abortController.signal,
     })) {
