@@ -350,6 +350,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
     nodeCount: parsed.nodes.length,
     phaseCount: parsed.phases.length,
     externalInputs: parsed.externalInputs,
+    optionalExternalInputs: parsed.optionalExternalInputs,
     nodes: parsed.nodes.map((node) => ({
       id: node.id,
       kind: node.kind,

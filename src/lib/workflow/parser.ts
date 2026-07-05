@@ -1,5 +1,6 @@
 import { parse } from "@babel/parser";
 import type {
+  EditableRange,
   ParsedWorkflow,
   WorkflowDiagnostic,
   WorkflowEdge,
@@ -11,7 +12,10 @@ import type {
   WorkflowPhase,
   WorkflowSessionSpec,
 } from "./types";
-import { extractTemplateRefs } from "./templates";
+import {
+  extractTemplateRefs,
+  validateRuntimeOptionTemplate,
+} from "./templates";
 
 type AnyNode = {
   type: string;
@@ -96,6 +100,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
       edges: [],
       phases: [],
       externalInputs: [],
+      optionalExternalInputs: [],
       diagnostics: [
         parseErrorToDiagnostic(error),
       ],
@@ -113,6 +118,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   }
 
   addDuplicateNodeIdDiagnostics(state);
+  addRuntimeOptionDiagnostics(state);
   connectTemplateRefs(state);
   const externalInputs = collectExternalInputs(state);
 
@@ -121,7 +127,8 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
     nodes: state.nodes,
     edges: state.edges,
     phases: state.phases,
-    externalInputs,
+    externalInputs: externalInputs.required,
+    optionalExternalInputs: externalInputs.optional,
     diagnostics: state.diagnostics,
     variableToNodeId: state.variableToNodeId,
   };
@@ -601,8 +608,99 @@ function addDuplicateNodeIdDiagnostics(state: ParserState): void {
   }
 }
 
-function collectExternalInputs(state: ParserState): string[] {
-  const refs = new Set<string>();
+function addRuntimeOptionDiagnostics(state: ParserState): void {
+  const workflowNames = new Set<string>();
+  for (const node of state.nodes) {
+    workflowNames.add(node.id);
+    if (node.variableName) {
+      workflowNames.add(node.variableName);
+    }
+  }
+  for (const name of Object.keys(state.variableToNodeId)) {
+    workflowNames.add(name);
+  }
+
+  for (const node of state.nodes) {
+    validateRuntimeOptionField({
+      value: node.agent,
+      fieldName: "agent",
+      ownerLabel: `node "${node.id}"`,
+      range: node.sourceRange,
+      disallowedInputNames: workflowNames,
+      state,
+    });
+    validateRuntimeOptionField({
+      value: node.model,
+      fieldName: "model",
+      ownerLabel: `node "${node.id}"`,
+      range: node.sourceRange,
+      disallowedInputNames: workflowNames,
+      state,
+    });
+
+    if (!node.loop) {
+      continue;
+    }
+    const loopStepNames = new Set(node.loop.steps.map((step) => step.id));
+    for (const step of node.loop.steps) {
+      const disallowedInputNames = new Set([
+        ...workflowNames,
+        ...loopStepNames,
+      ]);
+      validateRuntimeOptionField({
+        value: step.agent,
+        fieldName: "agent",
+        ownerLabel: `loop step "${node.id}.${step.id}"`,
+        range: step.sourceRange,
+        disallowedInputNames,
+        state,
+      });
+      validateRuntimeOptionField({
+        value: step.model,
+        fieldName: "model",
+        ownerLabel: `loop step "${node.id}.${step.id}"`,
+        range: step.sourceRange,
+        disallowedInputNames,
+        state,
+      });
+    }
+  }
+}
+
+function validateRuntimeOptionField(input: {
+  value: string | undefined;
+  fieldName: "agent" | "model";
+  ownerLabel: string;
+  range?: EditableRange;
+  disallowedInputNames: Set<string>;
+  state: ParserState;
+}): void {
+  const validation = validateRuntimeOptionTemplate(input.value);
+  for (const message of validation.diagnostics) {
+    input.state.diagnostics.push({
+      severity: "error",
+      message: `${input.ownerLabel} ${input.fieldName}: ${message}`,
+      range: input.range,
+    });
+  }
+  for (const ref of validation.refs) {
+    if (!input.disallowedInputNames.has(ref.name)) {
+      continue;
+    }
+    input.state.diagnostics.push({
+      severity: "error",
+      message: `${input.ownerLabel} ${input.fieldName} runtime input "${ref.name}" conflicts with a workflow node, variable, or loop step id. Runtime option templates resolve run inputs only; choose a distinct input name.`,
+      range: input.range,
+    });
+  }
+}
+
+function collectExternalInputs(state: ParserState): {
+  required: string[];
+  optional: string[];
+} {
+  const requiredRefs = new Set<string>();
+  const optionalRefs = new Set<string>();
 
   for (const node of state.nodes) {
     for (const ref of node.templateRefs) {
@@ -613,11 +711,66 @@ function collectExternalInputs(state: ParserState): string[] {
       if (boundInput?.sourceNodeId) {
         continue;
       }
-      refs.add(ref);
+      requiredRefs.add(ref);
+    }
+    const runtimeOptionRefs = collectRuntimeOptionRefs(node);
+    for (const ref of runtimeOptionRefs.required) {
+      if (!isReservedTemplateRef(ref)) {
+        requiredRefs.add(ref);
+        optionalRefs.delete(ref);
+      }
+    }
+    for (const ref of runtimeOptionRefs.optional) {
+      if (!isReservedTemplateRef(ref) && !requiredRefs.has(ref)) {
+        optionalRefs.add(ref);
+      }
     }
   }
 
-  return [...refs];
+  return {
+    required: [...requiredRefs],
+    optional: [...optionalRefs],
+  };
+}
+
+function collectRuntimeOptionRefs(node: WorkflowNode): {
+  required: string[];
+  optional: string[];
+} {
+  const refs = [
+    ...collectRuntimeOptionFieldRefs(node.agent),
+    ...collectRuntimeOptionFieldRefs(node.model),
+    ...(node.loop?.steps.flatMap((step) => [
+      ...collectRuntimeOptionFieldRefs(step.agent),
+      ...collectRuntimeOptionFieldRefs(step.model),
+    ]) ?? []),
+  ];
+  return {
+    required: [
+      ...new Set(
+        refs
+          .filter((ref) => ref.required)
+          .map((ref) => ref.name),
+      ),
+    ],
+    optional: [
+      ...new Set(
+        refs
+          .filter((ref) => !ref.required)
+          .map((ref) => ref.name),
+      ),
+    ],
+  };
+}
+
+function collectRuntimeOptionFieldRefs(value: string | undefined): Array<{
+  name: string;
+  required: boolean;
+}> {
+  return validateRuntimeOptionTemplate(value).refs.map((ref) => ({
+    name: ref.name,
+    required: ref.defaultValue === undefined,
+  }));
 }
 
 function isReservedTemplateRef(ref: string): boolean {

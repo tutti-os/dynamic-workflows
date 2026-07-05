@@ -89,6 +89,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     hasParseErrors,
     isDirty,
     workflowInputNames,
+    optionalWorkflowInputNames,
     acceptSavedScript,
     setScriptFromEditor,
     resetScriptChanges: resetScriptEditingChanges,
@@ -149,11 +150,12 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
   });
 
   const {
+    workflowInputNames: runWorkflowInputNames,
     runInputValues,
     missingRunInputNames,
     workflowInputPayload,
     setRunInputValue,
-  } = useWorkflowRunInputs(workflowInputNames);
+  } = useWorkflowRunInputs(workflowInputNames, optionalWorkflowInputNames);
   const requiresCwd = Boolean(parsed.meta.requiresCwd);
   const missingCwd = requiresCwd && !cwd.trim();
 
@@ -333,7 +335,8 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         modelOptions={modelOptions}
         cwd={cwd}
         requiresCwd={requiresCwd}
-        workflowInputNames={workflowInputNames}
+        workflowInputNames={runWorkflowInputNames}
+        optionalWorkflowInputNames={optionalWorkflowInputNames}
         runInputValues={runInputValues}
         missingRunInputNames={missingRunInputNames}
         missingCwd={missingCwd}

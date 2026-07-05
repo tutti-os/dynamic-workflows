@@ -1,16 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-export function useWorkflowRunInputs(workflowInputNames: string[]): {
+export function useWorkflowRunInputs(
+  requiredWorkflowInputNames: string[],
+  optionalWorkflowInputNames: string[] = [],
+): {
+  workflowInputNames: string[];
   runInputValues: Record<string, string>;
   missingRunInputNames: string[];
   workflowInputPayload: Record<string, string>;
   setRunInputValue: (name: string, value: string) => void;
 } {
   const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
+  const workflowInputNames = useMemo(
+    () => [
+      ...requiredWorkflowInputNames,
+      ...optionalWorkflowInputNames.filter(
+        (name) => !requiredWorkflowInputNames.includes(name),
+      ),
+    ],
+    [optionalWorkflowInputNames, requiredWorkflowInputNames],
+  );
 
   const missingRunInputNames = useMemo(
-    () => workflowInputNames.filter((name) => !runInputValues[name]?.trim()),
-    [runInputValues, workflowInputNames],
+    () =>
+      requiredWorkflowInputNames.filter((name) => !runInputValues[name]?.trim()),
+    [requiredWorkflowInputNames, runInputValues],
   );
 
   const workflowInputPayload = useMemo(
@@ -38,6 +52,7 @@ export function useWorkflowRunInputs(workflowInputNames: string[]): {
   }, []);
 
   return {
+    workflowInputNames,
     runInputValues,
     missingRunInputNames,
     workflowInputPayload,

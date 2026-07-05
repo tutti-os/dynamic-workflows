@@ -51,6 +51,9 @@ Rules:
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
+- agent and model may be runtime option templates, but only as the entire field value: "{{input_name}}" or "{{input_name:default_value}}". They resolve run inputs only, not upstream node outputs.
+- Use distinct runtime option input names; do not reuse workflow node ids, variable names, loop step ids, iteration, or workflow.* names for agent/model templates.
+- Do not partially template agent/model values; use model: "{{coder_model:gpt-5}}", not model: "gpt-{{coder_model}}".
 - Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
 - A loop can include agent and model as defaults for its steps.
@@ -259,6 +262,9 @@ Rules:
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
+- agent and model may be runtime option templates, but only as the entire field value: "{{input_name}}" or "{{input_name:default_value}}". They resolve run inputs only, not upstream node outputs.
+- Use distinct runtime option input names; do not reuse workflow node ids, variable names, loop step ids, iteration, or workflow.* names for agent/model templates.
+- Do not partially template agent/model values; use model: "{{coder_model:gpt-5}}", not model: "gpt-{{coder_model}}".
 - Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows such as implementation/acceptance or multi-agent debate.
 - A loop can include agent and model as defaults for its steps.
@@ -305,6 +311,9 @@ Rules:
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
+- agent and model may be runtime option templates, but only as the entire field value: "{{input_name}}" or "{{input_name:default_value}}". They resolve run inputs only, not upstream node outputs.
+- Use distinct runtime option input names; do not reuse workflow node ids, variable names, loop step ids, iteration, or workflow.* names for agent/model templates.
+- Do not partially template agent/model values; use model: "{{coder_model:gpt-5}}", not model: "gpt-{{coder_model}}".
 - Use cwd: "relative/path" on agent({...}) when that agent must run in a specific directory relative to the current run cwd.
 - Use loop({ id, label, maxIterations, steps, until }) for bounded iterative workflows.
 - A loop can include agent and model as defaults for its steps.
@@ -357,6 +366,8 @@ Rules:
 - Preserve the requested edit and unrelated existing behavior.
 - Use only supported workflow primitives: meta, phase, agent, loop.
 - Preserve or add agent and model on agent or loop step objects when the user asks for role-specific agent targets.
+- agent/model runtime option templates must be the whole field value, either "{{input_name}}" or "{{input_name:default_value}}"; they resolve run inputs only.
+- Runtime option input names must not reuse workflow node ids, variable names, loop step ids, iteration, or workflow.* names.
 - Do not use Node APIs, imports, require, fs, network APIs, Date, or Math.random.
 - Do not modify files in the working directory; only return the updated workflow script.`;
 }

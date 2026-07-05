@@ -18,6 +18,7 @@ export function WorkflowWorkbenchDialogs(props: {
   cwd: string;
   requiresCwd: boolean;
   workflowInputNames: string[];
+  optionalWorkflowInputNames: string[];
   runInputValues: Record<string, string>;
   missingRunInputNames: string[];
   missingCwd: boolean;
@@ -53,6 +54,7 @@ export function WorkflowWorkbenchDialogs(props: {
         cwd={props.cwd}
         requiresCwd={props.requiresCwd}
         workflowInputNames={props.workflowInputNames}
+        optionalWorkflowInputNames={props.optionalWorkflowInputNames}
         runInputValues={props.runInputValues}
         missingRunInputNames={props.missingRunInputNames}
         missingCwd={props.missingCwd}

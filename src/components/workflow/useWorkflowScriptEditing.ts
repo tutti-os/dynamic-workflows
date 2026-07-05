@@ -16,6 +16,7 @@ const EMPTY_PARSED: ParsedWorkflow = {
   edges: [],
   phases: [],
   externalInputs: [],
+  optionalExternalInputs: [],
   diagnostics: [],
   variableToNodeId: {},
 };
@@ -39,6 +40,7 @@ export function useWorkflowScriptEditing(input: {
   hasParseErrors: boolean;
   isDirty: boolean;
   workflowInputNames: string[];
+  optionalWorkflowInputNames: string[];
   acceptSavedScript: (nextScript: string) => void;
   setScriptFromEditor: (nextScript: string) => void;
   resetScriptChanges: () => void;
@@ -276,6 +278,7 @@ export function useWorkflowScriptEditing(input: {
     hasParseErrors,
     isDirty,
     workflowInputNames: parsed.externalInputs,
+    optionalWorkflowInputNames: parsed.optionalExternalInputs,
     acceptSavedScript,
     setScriptFromEditor,
     resetScriptChanges,

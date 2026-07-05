@@ -129,7 +129,7 @@ export function cliManifest(options = {}) {
             inputs: {
               type: "string",
               description:
-                "JSON object string containing external workflow inputs.",
+                "JSON object string containing external workflow inputs, including runtime option inputs used by agent/model templates.",
             },
             agent: {
               type: "string",
@@ -210,6 +210,14 @@ export function commandsMarkdown(options = {}) {
     "- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.",
     "",
     "`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe.",
+    "",
+    "Workflow scripts can make `agent` and `model` runtime-configurable by setting the whole field to `{{input_name}}` or `{{input_name:default_value}}`, for example `model: \"{{coder_model:gpt-5}}\"`. Runtime option inputs with defaults are optional but still surfaced by validation and run UIs for overrides. These templates resolve only run inputs, not upstream node outputs. Do not partially template these fields, and do not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names as runtime option input names.",
+    "",
+    "Example runtime model override:",
+    "",
+    "```bash",
+    `tutti --json ${scope} run --workflow-id <id> --agent local:codex --inputs '{"requirement":"fix login","coder_model":"gpt-5.5","reviewer_model":"gpt-5-mini"}'`,
+    "```",
     "",
   ].join("\n");
 }

@@ -30,6 +30,7 @@ type RunInputsDialogProps = {
   cwd: string;
   requiresCwd: boolean;
   workflowInputNames: string[];
+  optionalWorkflowInputNames: string[];
   runInputValues: Record<string, string>;
   missingRunInputNames: string[];
   missingCwd: boolean;
@@ -43,9 +44,16 @@ type RunInputsDialogProps = {
 };
 
 export function RunInputsDialog(props: RunInputsDialogProps) {
-  const filledRunInputCount = props.workflowInputNames.filter((name) =>
+  const requiredWorkflowInputNames = props.workflowInputNames.filter(
+    (name) => !props.optionalWorkflowInputNames.includes(name),
+  );
+  const filledRunInputCount = requiredWorkflowInputNames.filter((name) =>
     props.runInputValues[name]?.trim(),
   ).length;
+  const inputStatusLabel =
+    requiredWorkflowInputNames.length > 0
+      ? `${filledRunInputCount}/${requiredWorkflowInputNames.length}`
+      : "optional";
   const hasMissingInputs = props.missingRunInputNames.length > 0;
   const isBlocked = hasMissingInputs || props.missingCwd;
 
@@ -135,7 +143,7 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
                 <div className="field-heading">
                   <label>Inputs</label>
                   <Badge variant={hasMissingInputs ? "warning" : "success"}>
-                    {filledRunInputCount}/{props.workflowInputNames.length}
+                    {inputStatusLabel}
                   </Badge>
                 </div>
                 <span>
@@ -147,9 +155,13 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
               {props.workflowInputNames.map((name) => {
                 const fieldId = `run-dialog-input-${name}`;
                 const isMissing = props.missingRunInputNames.includes(name);
+                const isOptional = props.optionalWorkflowInputNames.includes(name);
                 return (
                   <div className="field" key={name}>
-                    <label htmlFor={fieldId}>{name}</label>
+                    <label htmlFor={fieldId}>
+                      {name}
+                      {isOptional ? <Badge variant="default">optional</Badge> : null}
+                    </label>
                     <Textarea
                       id={fieldId}
                       rows={name === "bug" ? 4 : 2}

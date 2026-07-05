@@ -179,6 +179,138 @@ Previous acceptance: {{acceptance}}\`,
     expect(parsed.externalInputs).toEqual(["task"]);
   });
 
+  it("collects required agent and model template inputs without requiring defaults", () => {
+    const parsed = parseWorkflowScript(`
+const plan = await agent({
+  id: "plan",
+  agent: "{{planner_agent}}",
+  model: "{{planner_model:gpt-5}}",
+  prompt: "Plan {{task}}",
+})
+
+const delivery = await loop({
+  id: "delivery",
+  agent: "{{loop_agent:local:codex}}",
+  model: "{{loop_model}}",
+  maxIterations: 1,
+  steps: [
+    agent({
+      id: "coder",
+      model: "{{coder_model:gpt-5.1}}",
+      prompt: "Code {{task}}",
+    }),
+    agent({
+      id: "reviewer",
+      agent: "{{reviewer_agent}}",
+      model: "{{reviewer_model}}",
+      prompt: "Review {{coder}}",
+    }),
+  ],
+  until: { source: "reviewer", includes: "PASS:" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.externalInputs.sort()).toEqual([
+      "loop_model",
+      "planner_agent",
+      "reviewer_agent",
+      "reviewer_model",
+      "task",
+    ]);
+    expect(parsed.optionalExternalInputs.sort()).toEqual([
+      "coder_model",
+      "loop_agent",
+      "planner_model",
+    ]);
+  });
+
+  it("reports invalid agent and model runtime option templates", () => {
+    const parsed = parseWorkflowScript(`
+const setup = await agent({ id: "setup", prompt: "setup" })
+const invalid = await agent({
+  id: "invalid",
+  agent: "local:{{agent_name}}",
+  model: "{{workflow.cwd}}",
+  prompt: "Invalid",
+})
+const conflict = await loop({
+  id: "conflict",
+  model: "{{setup}}",
+  maxIterations: 1,
+  steps: [
+    agent({ id: "coder", model: "{{coder:}}", prompt: "Code" }),
+    agent({ id: "reviewer", model: "{{coder}}", prompt: "Review {{coder}}" }),
+  ],
+  until: { source: "reviewer", includes: "PASS:" },
+})
+`);
+
+    expect(parsed.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining(
+            "must be exactly one placeholder with no surrounding text",
+          ),
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining(
+            'runtime template "{{workflow.cwd}}" is invalid',
+          ),
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining(
+            'runtime input "setup" conflicts with a workflow node',
+          ),
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining(
+            "runtime template defaults must be non-empty",
+          ),
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: expect.stringContaining(
+            'runtime input "coder" conflicts with a workflow node',
+          ),
+        }),
+      ]),
+    );
+    expect(() =>
+      assertWorkflowScriptValid(`
+const invalid = await agent({ id: "invalid", model: "gpt-{{model}}", prompt: "x" })
+`),
+    ).toThrow(WorkflowScriptSyntaxError);
+  });
+
+  it("prevents runtime option inputs from conflicting with parallel aliases", () => {
+    const parsed = parseWorkflowScript(`
+const work = parallel([
+  () => agent({ id: "first", prompt: "one" }),
+  () => agent({ id: "second", prompt: "two" }),
+])
+const summary = await agent({
+  id: "summary",
+  model: "{{work_0}}",
+  prompt: "Summarize {{work_0}}",
+})
+`);
+
+    expect(parsed.variableToNodeId.work_0).toBe("first");
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining(
+          'runtime input "work_0" conflicts with a workflow node',
+        ),
+      }),
+    );
+  });
+
   it("parses workflow nodes inside phase callback blocks", () => {
     const parsed = parseWorkflowScript(`
 phase("RD delivery and acceptance", () => {

@@ -351,6 +351,74 @@ const delivery = await loop({
     ]);
   });
 
+  it("resolves agent and model templates from workflow inputs with defaults", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: input.prompt.startsWith("review") ? "PASS: ok" : "work",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+const first = await agent({
+  id: "first",
+  agent: "{{first_agent:local:codex}}",
+  model: "{{first_model:gpt-5}}",
+  prompt: "first",
+})
+
+const delivery = await loop({
+  id: "delivery",
+  inputs: { first },
+  agent: "{{loop_agent:local:claude-code}}",
+  model: "{{loop_model:claude-sonnet-4}}",
+  maxIterations: 1,
+  steps: [
+    agent({
+      id: "coder",
+      agent: "{{coder_agent}}",
+      model: "{{coder_model:gpt-5.1}}",
+      prompt: "code {{first}}",
+    }),
+    agent({
+      id: "reviewer",
+      model: "{{reviewer_model}}",
+      prompt: "review {{coder}}",
+    }),
+  ],
+  until: { source: "reviewer", includes: "PASS:" },
+})
+`,
+      agent: "mock",
+      model: "mock",
+      cwd: process.cwd(),
+      inputs: {
+        first_model: "gpt-5.5",
+        coder_agent: "local:codex",
+        reviewer_model: "gpt-5-mini",
+      },
+    })) {
+      // drain
+    }
+
+    expect(calls.map((call) => [call.agent, call.model])).toEqual([
+      ["local:codex", "gpt-5.5"],
+      ["local:codex", "gpt-5.1"],
+      ["local:claude-code", "gpt-5-mini"],
+    ]);
+  });
+
   it("resumes a loop from a persisted step checkpoint", async () => {
     const calls: AgentRunInput[] = [];
     const checkpoints: unknown[] = [];

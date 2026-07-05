@@ -8,7 +8,7 @@ import {
   createLoopStepSessionNodeId,
   resolveSessionKey,
 } from "./session";
-import { renderPrompt, renderTemplate } from "./templates";
+import { renderPrompt, renderTemplate, renderValueTemplate } from "./templates";
 import type {
   ParsedWorkflow,
   WorkflowLoopRecoveryState,
@@ -263,8 +263,17 @@ async function* runAgentNode(input: {
   loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const nodeRunId = `${input.runId}:${input.node.id}`;
-  const agent = input.node.agent ?? input.request.agent ?? "mock";
-  const model = input.node.model ?? input.request.model;
+  const agent =
+    resolveRuntimeOption(
+      input.node.agent,
+      input.request.agent,
+      input.request.inputs,
+    ) ?? "mock";
+  const model = resolveRuntimeOption(
+    input.node.model,
+    input.request.model,
+    input.request.inputs,
+  );
   const cwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
   const prompt = renderPrompt(input.node, input.outputs, input.request.inputs, {
     cwd,
@@ -372,8 +381,17 @@ async function* runLoopNode(input: {
   loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   const loop = input.node.loop;
-  const agent = input.node.agent ?? input.request.agent ?? "mock";
-  const model = input.node.model ?? input.request.model;
+  const agent =
+    resolveRuntimeOption(
+      input.node.agent,
+      input.request.agent,
+      input.request.inputs,
+    ) ?? "mock";
+  const model = resolveRuntimeOption(
+    input.node.model,
+    input.request.model,
+    input.request.inputs,
+  );
   const loopCwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
 
   yield {
@@ -504,6 +522,7 @@ async function* runLoopNode(input: {
           defaultModel: model,
           defaultSession: loop.session,
           cwd: stepCwd,
+          workflowInputs: input.request.inputs,
           signal: input.request.signal,
           sessionIdsByKey: input.sessionIdsByKey,
           sessionCwdsByKey: input.sessionCwdsByKey,
@@ -608,13 +627,20 @@ async function* runLoopAgentStep(input: {
   defaultModel?: string;
   defaultSession?: WorkflowSessionSpec;
   cwd: string;
+  workflowInputs?: Record<string, string>;
   signal?: AbortSignal;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
 }): AsyncGenerator<WorkflowRunEvent, string> {
-  const agent = input.step.agent ?? input.defaultAgent;
-  const model = input.step.model ?? input.defaultModel;
+  const agent =
+    resolveRuntimeOption(input.step.agent, input.defaultAgent, input.workflowInputs) ??
+    input.defaultAgent;
+  const model = resolveRuntimeOption(
+    input.step.model,
+    input.defaultModel,
+    input.workflowInputs,
+  );
   const runContext = resolveLoopStepRunContext({
     stepId: input.step.id,
     stepSession: input.step.session,
@@ -732,6 +758,21 @@ function resolveEffectiveNodeCwd(
     return resolveWorkflowCwdFrom(defaultCwd, overrideCwd);
   }
   return defaultCwd ?? process.cwd();
+}
+
+function resolveRuntimeOption(
+  template: string | undefined,
+  fallback: string | undefined,
+  workflowInputs: Record<string, string> = {},
+): string | undefined {
+  if (template === undefined) {
+    return fallback;
+  }
+  const rendered = renderValueTemplate(
+    template,
+    (name) => workflowInputs[name],
+  ).trim();
+  return rendered || fallback;
 }
 
 function assertRequiredWorkflowCwd(

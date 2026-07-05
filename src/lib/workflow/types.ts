@@ -113,6 +113,7 @@ export type ParsedWorkflow = {
   edges: WorkflowEdge[];
   phases: WorkflowPhase[];
   externalInputs: string[];
+  optionalExternalInputs: string[];
   diagnostics: WorkflowDiagnostic[];
   variableToNodeId: Record<string, string>;
 };
