@@ -10,7 +10,6 @@ export type {
   WorkflowRecord,
   WorkflowRunCheckpointRecord,
   WorkflowRunRecord,
-  WorkflowRunResumeClaim,
   WorkflowRunStatus,
   WorkflowVersionRecord,
 } from "./workflows/types";
@@ -55,14 +54,12 @@ export {
 } from "./workflows/versions";
 
 export {
-  claimWorkflowRunForResume,
   createWorkflowRun,
   getWorkflowRun,
   getWorkflowRunCheckpoint,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
   markWorkflowRunRunning,
-  releaseWorkflowRunResumeClaim,
   updateWorkflowRun,
   upsertWorkflowRunCheckpoint,
 } from "./workflows/runs";

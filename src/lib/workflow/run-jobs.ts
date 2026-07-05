@@ -1,17 +1,19 @@
 import {
-  claimWorkflowRunForResume,
   createWorkflowRun,
   getWorkflowRun,
   getWorkflowVersion,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
-  releaseWorkflowRunResumeClaim,
   upsertWorkflowRunCheckpoint,
   updateWorkflowRun,
   type WorkflowRunCheckpointRecord,
   type WorkflowRunRecord,
   type WorkflowVersionRecord,
 } from "@/lib/db/workflows";
+import {
+  claimWorkflowRunForResume,
+  releaseWorkflowRunResumeClaim,
+} from "@/lib/db/workflows/runs";
 import { resolveWorkflowCwdFrom } from "@/lib/workflow/cwd";
 import { createWorkflowExecutionPlan } from "@/lib/workflow/execution-plan";
 import { runWorkflow } from "@/lib/workflow/executor";

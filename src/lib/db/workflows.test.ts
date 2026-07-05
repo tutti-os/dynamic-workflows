@@ -365,11 +365,11 @@ const first = await agent({ id: "first", prompt: "first" })
     initTestDataDir();
 
     const {
-      claimWorkflowRunForResume,
       createWorkflowFromScript,
       createWorkflowRun,
       markWorkflowRunInterrupted,
     } = await import("./workflows");
+    const { claimWorkflowRunForResume } = await import("./workflows/runs");
 
     const detail = createWorkflowFromScript(INITIAL_SCRIPT);
     const version = detail.currentVersion;
