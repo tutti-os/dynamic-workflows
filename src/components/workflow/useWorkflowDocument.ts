@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  delay,
   downloadTextFile,
   sanitizeFilename,
 } from "@/components/workflow/workflowClientUtils";
 import {
-  apiJson,
   readApiJsonError,
 } from "@/components/workflow/workflowApiClient";
+import {
+  deleteWorkflow,
+  duplicateWorkflow,
+  isActiveWorkflowJobStatus,
+  loadWorkflowDetail,
+  publishWorkflowVersion,
+  requestWorkflowGeneration,
+  saveWorkflowVersion,
+  startWorkflowAgentEdit,
+  updateWorkflowMetadata,
+  watchWorkflowAgentEdit,
+  watchWorkflowGeneration,
+} from "@/components/workflow/workflowApiService";
 import type {
-  WorkflowEditJobRecord,
   WorkflowDetail,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows";
@@ -155,33 +165,18 @@ export function useWorkflowDocument(input: {
 
   const loadWorkflow = useCallback(
     async (options?: { resetScript?: boolean }) => {
-      const nextDetail = await apiJson<WorkflowDetail>(
-        `/api/workflows/${workflowId}`,
-        undefined,
-        "WORKFLOW_NOT_FOUND",
-      );
+      const nextDetail = await loadWorkflowDetail(workflowId);
       applyLoadedDetail(nextDetail, options);
       return nextDetail;
     },
     [applyLoadedDetail, workflowId],
   );
 
-  const requestWorkflowGeneration = useCallback(
+  const startGeneration = useCallback(
     async (retry: boolean) => {
-      const data = await apiJson<{ detail?: WorkflowDetail }>(
-        `/api/workflows/${workflowId}/generation`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ retry }),
-        },
-        "WORKFLOW_GENERATION_FAILED",
-      );
-      if (!data.detail) {
-        throw new Error("Workflow generation did not return detail");
-      }
-      applyLoadedDetail(data.detail, { resetScript: true });
-      return data.detail;
+      const nextDetail = await requestWorkflowGeneration(workflowId, retry);
+      applyLoadedDetail(nextDetail, { resetScript: true });
+      return nextDetail;
     },
     [applyLoadedDetail, workflowId],
   );
@@ -209,7 +204,7 @@ export function useWorkflowDocument(input: {
       !detail ||
       detail.currentVersion ||
       !generation ||
-      !isActiveGenerationStatus(generation.status)
+      !isActiveWorkflowJobStatus(generation.status)
     ) {
       return;
     }
@@ -223,28 +218,11 @@ export function useWorkflowDocument(input: {
     async function watchGeneration() {
       try {
         setGenerationError(undefined);
-        const startedDetail = await requestWorkflowGeneration(false);
-        if (
-          !mountedRef.current ||
-          startedDetail.currentVersion ||
-          !isActiveGenerationStatus(startedDetail.generation?.status)
-        ) {
-          return;
-        }
-
-        while (mountedRef.current) {
-          await delay(1000);
-          if (!mountedRef.current) {
-            return;
-          }
-          const nextDetail = await loadWorkflow({ resetScript: true });
-          if (
-            nextDetail.currentVersion ||
-            !isActiveGenerationStatus(nextDetail.generation?.status)
-          ) {
-            return;
-          }
-        }
+        await watchWorkflowGeneration({
+          workflowId,
+          isMounted: () => mountedRef.current,
+          onDetail: applyLoadedDetail,
+        });
       } catch (error) {
         const apiError = readApiJsonError(error, "WORKFLOW_GENERATION_FAILED");
         if (mountedRef.current) {
@@ -265,9 +243,9 @@ export function useWorkflowDocument(input: {
     detail?.currentVersion?.id,
     detail?.generation?.id,
     detail?.generation?.status,
-    loadWorkflow,
     onLogEvent,
-    requestWorkflowGeneration,
+    applyLoadedDetail,
+    workflowId,
   ]);
 
   const applyVersion = useCallback(
@@ -301,21 +279,10 @@ export function useWorkflowDocument(input: {
     setIsSaving(true);
     clearScriptSaveFeedback();
     try {
-      const data = await apiJson<{ detail?: WorkflowDetail }>(
-        `/api/workflows/${workflowId}/versions`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ script }),
-        },
-        "WORKFLOW_SAVE_FAILED",
-      );
-      if (!data.detail?.currentVersion) {
-        throw new Error("Workflow save failed");
-      }
-      applyLoadedDetail(data.detail, { resetScript: true });
+      const nextDetail = await saveWorkflowVersion({ workflowId, script });
+      applyLoadedDetail(nextDetail, { resetScript: true });
       onLogEvent(
-        `saved: v${data.detail.currentVersion.version}`,
+        `saved: v${nextDetail.currentVersion?.version}`,
       );
       clearScriptSaveFeedback();
     } catch (error) {
@@ -337,21 +304,11 @@ export function useWorkflowDocument(input: {
 
     setIsSavingMetadata(true);
     try {
-      const data = await apiJson<WorkflowDetail>(
-        `/api/workflows/${workflowId}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: metadataName,
-            description: metadataDescription,
-          }),
-        },
-        "WORKFLOW_UPDATE_FAILED",
-      );
-      if (!data.workflow) {
-        throw new Error("Workflow update failed");
-      }
+      const data = await updateWorkflowMetadata({
+        workflowId,
+        name: metadataName,
+        description: metadataDescription,
+      });
       setDetail(data);
       setMetadataName(data.workflow.name);
       setMetadataDescription(data.workflow.description);
@@ -394,20 +351,10 @@ export function useWorkflowDocument(input: {
   async function duplicateCurrentWorkflow() {
     setIsDuplicatingWorkflow(true);
     try {
-      const data = await apiJson<WorkflowDetail>(
-        `/api/workflows/${workflowId}/duplicate`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            versionId: selectedVersion?.id,
-          }),
-        },
-        "WORKFLOW_DUPLICATE_FAILED",
-      );
-      if (!data.workflow) {
-        throw new Error("Workflow duplication failed");
-      }
+      const data = await duplicateWorkflow({
+        workflowId,
+        versionId: selectedVersion?.id,
+      });
       router.push(`/workflows/${data.workflow.id}`);
     } catch (error) {
       const apiError = readApiJsonError(error, "WORKFLOW_DUPLICATE_FAILED");
@@ -433,13 +380,7 @@ export function useWorkflowDocument(input: {
 
     setIsDeletingWorkflow(true);
     try {
-      await apiJson<{ ok: boolean }>(
-        `/api/workflows/${workflowId}`,
-        {
-          method: "DELETE",
-        },
-        "WORKFLOW_DELETE_FAILED",
-      );
+      await deleteWorkflow(workflowId);
       router.push("/");
     } catch (error) {
       const apiError = readApiJsonError(error, "WORKFLOW_DELETE_FAILED");
@@ -458,21 +399,13 @@ export function useWorkflowDocument(input: {
     setIsSaving(true);
     clearScriptSaveFeedback();
     try {
-      const data = await apiJson<{ detail?: WorkflowDetail }>(
-        `/api/workflows/${workflowId}/versions`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ script: selectedVersion.script }),
-        },
-        "WORKFLOW_SAVE_FAILED",
-      );
-      if (!data.detail?.currentVersion) {
-        throw new Error("Workflow restore failed");
-      }
-      applyLoadedDetail(data.detail, { resetScript: true });
+      const nextDetail = await saveWorkflowVersion({
+        workflowId,
+        script: selectedVersion.script,
+      });
+      applyLoadedDetail(nextDetail, { resetScript: true });
       onLogEvent(
-        `restored: v${selectedVersion.version} -> v${data.detail.currentVersion.version}`,
+        `restored: v${selectedVersion.version} -> v${nextDetail.currentVersion?.version}`,
       );
       clearScriptSaveFeedback();
     } catch (error) {
@@ -505,7 +438,7 @@ export function useWorkflowDocument(input: {
     setGenerationError(undefined);
     generationWatchIdRef.current = undefined;
     try {
-      const nextDetail = await requestWorkflowGeneration(true);
+      const nextDetail = await startGeneration(true);
       if (!nextDetail.currentVersion) {
         onLogEvent("generation: retry started");
       }
@@ -534,45 +467,26 @@ export function useWorkflowDocument(input: {
     setIsAgentEditingWorkflow(true);
     setAgentEditError(undefined);
     try {
-      const started = await apiJson<{ edit?: WorkflowEditJobRecord }>(
-        `/api/workflows/${workflowId}/agent-edits`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            instruction,
-            baseVersionId: input.baseVersionId,
-            agent: input.agent,
-            model: input.model,
-            cwd: input.cwd,
-          }),
-        },
-        "WORKFLOW_EDIT_FAILED",
-      );
-      if (!started.edit) {
-        throw new Error("Workflow edit did not return a job");
-      }
-
+      const started = await startWorkflowAgentEdit({
+        workflowId,
+        instruction,
+        baseVersionId: input.baseVersionId,
+        agent: input.agent,
+        model: input.model,
+        cwd: input.cwd,
+      });
       onLogEvent(`agent edit: started from ${input.baseVersionId?.slice(0, 8) ?? "current"}`);
-      let edit = started.edit;
-      let createdVersion: WorkflowVersionRecord | null = null;
-      while (mountedRef.current && isActiveGenerationStatus(edit.status)) {
-        await delay(1000);
-        const next = await apiJson<{
-          edit?: WorkflowEditJobRecord;
-          version?: WorkflowVersionRecord | null;
-        }>(
-          `/api/workflows/${workflowId}/agent-edits/${edit.id}`,
-          undefined,
-          "WORKFLOW_EDIT_FAILED",
-        );
-        if (!next.edit) {
-          throw new Error("Workflow edit status did not return a job");
-        }
-        edit = next.edit;
-        createdVersion = next.version ?? null;
-      }
 
+      const result = await watchWorkflowAgentEdit({
+        workflowId,
+        editId: started.id,
+        isMounted: () => mountedRef.current,
+      });
+      if (!result || !mountedRef.current) {
+        return;
+      }
+      const { edit, version } = result;
+      let createdVersion = version;
       if (edit.status === "failed") {
         throw new Error(edit.error?.message ?? "Workflow edit failed");
       }
@@ -593,11 +507,16 @@ export function useWorkflowDocument(input: {
       onVersionApplied();
       onLogEvent(`agent edit: created v${createdVersion.version}`);
     } catch (error) {
+      if (!mountedRef.current) {
+        return;
+      }
       const apiError = readApiJsonError(error, "WORKFLOW_EDIT_FAILED");
       setAgentEditError(apiError.message);
       onLogEvent(`agent edit failed: ${apiError.message}`);
     } finally {
-      setIsAgentEditingWorkflow(false);
+      if (mountedRef.current) {
+        setIsAgentEditingWorkflow(false);
+      }
     }
   }
 
@@ -609,18 +528,12 @@ export function useWorkflowDocument(input: {
     setIsPublishingVersion(true);
     setAgentEditError(undefined);
     try {
-      const data = await apiJson<{ detail?: WorkflowDetail }>(
-        `/api/workflows/${workflowId}/versions/${selectedVersion.id}/publish`,
-        {
-          method: "POST",
-        },
-        "WORKFLOW_SAVE_FAILED",
-      );
-      if (!data.detail?.currentVersion) {
-        throw new Error("Workflow publish failed");
-      }
-      applyLoadedDetail(data.detail, { resetScript: true });
-      onLogEvent(`published: v${data.detail.currentVersion.version}`);
+      const nextDetail = await publishWorkflowVersion({
+        workflowId,
+        versionId: selectedVersion.id,
+      });
+      applyLoadedDetail(nextDetail, { resetScript: true });
+      onLogEvent(`published: v${nextDetail.currentVersion?.version}`);
     } catch (error) {
       const apiError = readApiJsonError(error, "WORKFLOW_SAVE_FAILED");
       setAgentEditError(apiError.message);
@@ -668,8 +581,4 @@ export function useWorkflowDocument(input: {
     publishSelectedVersion,
     exportSelectedVersion,
   };
-}
-
-function isActiveGenerationStatus(status: string | undefined): boolean {
-  return status === "pending" || status === "running";
 }

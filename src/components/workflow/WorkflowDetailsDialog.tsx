@@ -12,6 +12,7 @@ import {
   Spinner,
   Textarea,
 } from "@tutti-os/ui-system";
+import { useEffect } from "react";
 
 type WorkflowDetailsDialogProps = {
   open: boolean;
@@ -26,6 +27,16 @@ type WorkflowDetailsDialogProps = {
 };
 
 export function WorkflowDetailsDialog(props: WorkflowDetailsDialogProps) {
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("workflow-details-name")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [props.open]);
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="workflow-details-dialog">

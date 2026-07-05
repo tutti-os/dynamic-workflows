@@ -13,6 +13,7 @@ import {
   LoadingIcon,
   NewWorkspaceIcon,
 } from "@tutti-os/ui-system";
+import { EmptyState } from "@/components/workflow/WorkflowStates";
 import type {
   WorkflowListItem,
   WorkflowRunStatus,
@@ -42,10 +43,9 @@ export function WorkflowGrid(props: WorkflowGridProps) {
           />
         ))
       ) : (
-        <div className="empty-state">
-          <NewWorkspaceIcon size={24} />
-          <p>{props.hasAnyWorkflow ? "No workflows match." : "No workflows yet."}</p>
-        </div>
+        <EmptyState icon={<NewWorkspaceIcon size={24} />}>
+          {props.hasAnyWorkflow ? "No workflows match." : "No workflows yet."}
+        </EmptyState>
       )}
     </div>
   );

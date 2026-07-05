@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiJson } from "@/components/workflow/workflowApiClient";
+import { listAgentTargets } from "@/components/workflow/workflowApiService";
 import type { AgentTargetOption } from "@/lib/agents/types";
 
 export const DEFAULT_MODEL_VALUE = "__default__";
@@ -30,15 +30,11 @@ export function useWorkflowRunSettings(): {
   const [cwd, setCwd] = useState("");
 
   useEffect(() => {
-    apiJson<{ targets?: AgentTargetOption[] }>(
-      "/api/agents/targets",
-      undefined,
-      "AGENT_TARGET_DETECTION_FAILED",
-    )
-      .then((data: { targets?: AgentTargetOption[] }) => {
+    listAgentTargets()
+      .then((targets) => {
         const nextAgents =
-          data.targets && data.targets.length > 0
-            ? data.targets
+          targets.length > 0
+            ? targets
             : FALLBACK_AGENTS;
         setAgents(nextAgents);
         const preferredAgent =

@@ -108,7 +108,6 @@ export function WorkflowProjectSelect(props: WorkflowProjectSelectProps) {
         sideOffset={4}
         collisionPadding={16}
         className="workflow-project-select-content"
-        style={{ zIndex: "var(--z-dialog-popover)" }}
       >
         {projects.map((project) => (
           <SelectItem

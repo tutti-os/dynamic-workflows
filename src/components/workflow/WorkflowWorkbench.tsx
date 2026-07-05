@@ -1,31 +1,22 @@
 "use client";
 
 import {
-  type Edge,
-  type Node,
-  type ReactFlowInstance,
-} from "@xyflow/react";
-import {
-  Badge,
-  Button,
-  DashboardIcon,
-  FailedLinedIcon,
-  LoadingIcon,
-  Spinner,
-} from "@tutti-os/ui-system";
-import Link from "next/link";
-import {
   useCallback,
-  useEffect,
   useRef,
   useState,
 } from "react";
-import { AgentEditDialog } from "@/components/workflow/AgentEditDialog";
-import { RunInputsDialog } from "@/components/workflow/RunInputsDialog";
+import { WorkflowErrorBoundary } from "@/components/workflow/WorkflowErrorBoundary";
 import { WorkflowHeader } from "@/components/workflow/WorkflowHeader";
-import { WorkflowDetailsDialog } from "@/components/workflow/WorkflowDetailsDialog";
-import { WorkflowInspectorPane } from "@/components/workflow/WorkflowInspectorPane";
-import { WorkflowPreviewPane } from "@/components/workflow/WorkflowPreviewPane";
+import {
+  hasCurrentVersion,
+  WorkflowGenerationState,
+} from "@/components/workflow/WorkflowGenerationState";
+import {
+  ErrorState,
+  LoadingState,
+} from "@/components/workflow/WorkflowStates";
+import { WorkflowWorkbenchDialogs } from "@/components/workflow/WorkflowWorkbenchDialogs";
+import { WorkflowWorkbenchWorkspace } from "@/components/workflow/WorkflowWorkbenchWorkspace";
 import { useWorkflowDocument } from "@/components/workflow/useWorkflowDocument";
 import { useWorkflowFlowLayout } from "@/components/workflow/useWorkflowFlowLayout";
 import { useWorkflowRunController } from "@/components/workflow/useWorkflowRunController";
@@ -34,20 +25,24 @@ import { useWorkflowRunPreview } from "@/components/workflow/useWorkflowRunPrevi
 import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
 import { useWorkflowScriptEditing } from "@/components/workflow/useWorkflowScriptEditing";
 import {
-  type FlowNodeData,
   type InspectorTab,
   type MainView,
 } from "@/components/workflow/WorkflowWorkbench.types";
-import type {
-  WorkflowDetail,
-  WorkflowVersionRecord,
-} from "@/lib/db/workflows";
+import type { WorkflowVersionRecord } from "@/lib/db/workflows";
 
 type WorkflowWorkbenchProps = {
   workflowId: string;
 };
 
 export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
+  return (
+    <WorkflowErrorBoundary>
+      <WorkflowWorkbenchContent workflowId={workflowId} />
+    </WorkflowErrorBoundary>
+  );
+}
+
+function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | undefined>();
   const [selectedLoopStepId, setSelectedLoopStepId] = useState<
     string | undefined
@@ -76,9 +71,6 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     setModel,
     setCwd,
   } = useWorkflowRunSettings();
-  const reactFlowInstanceRef = useRef<
-    ReactFlowInstance<Node<FlowNodeData>, Edge> | null
-  >(null);
   const {
     script,
     parsed,
@@ -236,18 +228,6 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
     selectedNodeId,
   });
 
-  useEffect(() => {
-    if (!reactFlowInstanceRef.current || flowNodes.length === 0) {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      void reactFlowInstanceRef.current?.fitView({ padding: 0.22, duration: 180 });
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, [flowLayoutKey, flowNodes.length]);
-
   function resetScriptChanges() {
     resetScriptEditingChanges();
     appendEventLog("changes reset");
@@ -276,10 +256,9 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
   if (isLoading) {
     return (
       <main className="app-shell">
-        <div className="loading-state">
-          <Spinner />
+        <LoadingState fullPage>
           Loading workflow...
-        </div>
+        </LoadingState>
       </main>
     );
   }
@@ -287,7 +266,11 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
   if (!detail) {
     return (
       <main className="app-shell">
-        <div className="loading-state">Workflow not found.</div>
+        <ErrorState
+          fullPage
+          title="Workflow not found"
+          message="The workflow could not be loaded."
+        />
       </main>
     );
   }
@@ -335,8 +318,11 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         onRun={requestCurrentWorkflowRun}
       />
 
-      <RunInputsDialog
-        open={isRunInputDialogOpen}
+      <WorkflowWorkbenchDialogs
+        runInputsOpen={isRunInputDialogOpen}
+        detailsOpen={detailsDialogOpen}
+        agentEditOpen={isAgentEditDialogOpen}
+        workflowId={workflowId}
         agents={agents}
         agent={effectiveAgent}
         model={model}
@@ -348,202 +334,88 @@ export function WorkflowWorkbench({ workflowId }: WorkflowWorkbenchProps) {
         missingRunInputNames={missingRunInputNames}
         missingCwd={missingCwd}
         isRunning={isRunning}
-        onOpenChange={setIsRunInputDialogOpen}
+        metadataName={metadataName}
+        metadataDescription={metadataDescription}
+        metadataDirty={metadataDirty}
+        isSavingMetadata={isSavingMetadata}
+        selectedVersion={selectedVersion}
+        onRunInputsOpenChange={setIsRunInputDialogOpen}
+        onDetailsOpenChange={handleDetailsDialogOpenChange}
+        onAgentEditOpenChange={setIsAgentEditDialogOpen}
         onAgentChange={setAgent}
         onModelChange={setModel}
         onCwdChange={setCwd}
         onRunInputChange={setRunInputValue}
         onRun={submitRunInputDialog}
-      />
-
-      <WorkflowDetailsDialog
-        open={detailsDialogOpen}
-        name={metadataName}
-        description={metadataDescription}
-        dirty={metadataDirty}
-        saving={isSavingMetadata}
-        onOpenChange={handleDetailsDialogOpenChange}
-        onNameChange={setMetadataName}
-        onDescriptionChange={setMetadataDescription}
-        onSave={() => void saveDetailsDialog()}
-      />
-
-      <AgentEditDialog
-        open={isAgentEditDialogOpen}
-        workflowId={workflowId}
-        baseVersion={selectedVersion}
-        agents={agents}
-        agent={effectiveAgent}
-        model={model}
-        modelOptions={modelOptions}
-        cwd={cwd}
-        onOpenChange={setIsAgentEditDialogOpen}
-        onAgentChange={setAgent}
-        onModelChange={setModel}
-        onCwdChange={setCwd}
-        onVersionCreated={handleAgentEditVersionCreated}
+        onMetadataNameChange={setMetadataName}
+        onMetadataDescriptionChange={setMetadataDescription}
+        onSaveDetails={() => void saveDetailsDialog()}
+        onAgentVersionCreated={handleAgentEditVersionCreated}
         onOpenAgentSession={openAgentSession}
         onLogEvent={appendEventLog}
       />
 
-      <section className="workspace">
-        <WorkflowPreviewPane
-          mainView={mainView}
-          isRunPreview={isRunPreview}
-          selectedRun={selectedRun}
-          graphParsed={graphParsed}
-          flowNodes={flowNodes}
-          flowEdges={flowEdges}
-          script={script}
-          hasParseErrors={hasParseErrors}
-          diagnosticErrorCount={diagnosticErrorCount}
-          diagnosticWarningCount={diagnosticWarningCount}
-          requiresCwd={Boolean(graphParsed.meta.requiresCwd)}
-          onMainViewChange={setMainView}
-          onScriptChange={setScriptFromEditor}
-          onFlowInit={(instance) => {
-            reactFlowInstanceRef.current = instance;
-          }}
-          onNodeSelect={(nodeId) => {
-            setSelectedNodeId(nodeId);
-            setSelectedLoopStepId(undefined);
-            if (!isRunPreview) {
-              setActiveTab("edit");
-            }
-          }}
-        />
-
-        <WorkflowInspectorPane
-          activeTab={activeTab}
-          visibleRuns={visibleRuns}
-          selectedRun={selectedRun}
-          selectedNodeRun={selectedRunNodeDetail}
-          selectedNode={selectedNode}
-          selectedLoopStepId={selectedLoopStepId}
-          graphParsed={graphParsed}
-          parsedDiagnostics={parsed.diagnostics}
-          parseError={parseError}
-          scriptSaveError={scriptSaveError ?? agentEditError}
-          scriptSaveDiagnostics={scriptSaveDiagnostics}
-          runningCount={runningCount}
-          completedCount={completedCount}
-          failedCount={failedCount}
-          labelDraft={labelDraft}
-          promptDraft={promptDraft}
-          appendPromptDraft={appendPromptDraft}
-          nodeOutputs={nodeOutputs}
-          latestOutput={latestOutput}
-          eventLog={eventLog}
-          versionLabelById={versionLabelById}
-          isRunning={isRunning}
-          retryingRunId={retryingRunId}
-          copiedRunField={copiedRunField}
-          onTabChange={(value) => {
-            setActiveTab(value);
-            if (value === "runs" && !selectedRun && visibleRuns[0]) {
-              selectRun(visibleRuns[0].id);
-            }
-          }}
-          onLabelChange={updateLabelDraft}
-          onPromptChange={updatePromptDraft}
-          onAppendPromptChange={updateAppendPromptDraft}
-          onSelectLoopStep={setSelectedLoopStepId}
-          onSelectRun={selectRun}
-          onRetryRun={(runId) => void retryRun(runId)}
-          onResumeRun={(runId) => void resumeRun(runId)}
-          onCopyRunText={(key, text) => void copyRunText(key, text)}
-          onOpenAgentSession={(agentSessionId) =>
-            void openAgentSession(agentSessionId)
+      <WorkflowWorkbenchWorkspace
+        mainView={mainView}
+        activeTab={activeTab}
+        isRunPreview={isRunPreview}
+        selectedRun={selectedRun}
+        visibleRuns={visibleRuns}
+        selectedNodeRun={selectedRunNodeDetail}
+        selectedNode={selectedNode}
+        selectedLoopStepId={selectedLoopStepId}
+        graphParsed={graphParsed}
+        parsedDiagnostics={parsed.diagnostics}
+        parseError={parseError}
+        scriptSaveError={scriptSaveError ?? agentEditError}
+        scriptSaveDiagnostics={scriptSaveDiagnostics}
+        flowNodes={flowNodes}
+        flowEdges={flowEdges}
+        flowLayoutKey={flowLayoutKey}
+        script={script}
+        hasParseErrors={hasParseErrors}
+        diagnosticErrorCount={diagnosticErrorCount}
+        diagnosticWarningCount={diagnosticWarningCount}
+        runningCount={runningCount}
+        completedCount={completedCount}
+        failedCount={failedCount}
+        labelDraft={labelDraft}
+        promptDraft={promptDraft}
+        appendPromptDraft={appendPromptDraft}
+        nodeOutputs={nodeOutputs}
+        latestOutput={latestOutput}
+        eventLog={eventLog}
+        versionLabelById={versionLabelById}
+        isRunning={isRunning}
+        retryingRunId={retryingRunId}
+        copiedRunField={copiedRunField}
+        onMainViewChange={setMainView}
+        onScriptChange={setScriptFromEditor}
+        onNodeSelect={(nodeId) => {
+          setSelectedNodeId(nodeId);
+          setSelectedLoopStepId(undefined);
+          if (!isRunPreview) {
+            setActiveTab("edit");
           }
-        />
-      </section>
-    </main>
-  );
-}
-
-function hasCurrentVersion(
-  detail: WorkflowDetail,
-): detail is WorkflowDetail & { currentVersion: WorkflowVersionRecord } {
-  return Boolean(detail.currentVersion);
-}
-
-function WorkflowGenerationState(props: {
-  detail: WorkflowDetail;
-  isGenerating: boolean;
-  retrying: boolean;
-  generationError?: string;
-  onRetry: () => void;
-}) {
-  const generation = props.detail.generation;
-  const failed = generation?.status === "failed";
-  const errorMessage =
-    props.generationError ?? generation?.error?.message ?? "Generation failed.";
-
-  return (
-    <main className="app-shell">
-      <header className="detail-topbar generation-topbar">
-        <div className="detail-titlebar">
-          <Button asChild variant="outline" size="icon-lg" aria-label="Home">
-            <Link href="/">
-              <DashboardIcon />
-            </Link>
-          </Button>
-          <div className="detail-heading">
-            <div className="detail-heading-title">
-              <h1>{props.detail.workflow.name}</h1>
-            </div>
-            <div className="detail-meta">
-              <Badge variant={failed ? "destructive" : "pending"}>
-                {failed ? "generation failed" : "generating"}
-              </Badge>
-              <span className="detail-description">
-                {props.detail.workflow.description}
-              </span>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <section className="workflow-generation-state">
-        <div className="workflow-generation-status">
-          {failed ? (
-            <span className="generation-status-icon failed">
-              <FailedLinedIcon size={24} />
-            </span>
-          ) : (
-            <span className="generation-status-icon">
-              {props.isGenerating ? (
-                <LoadingIcon className="spin" size={24} />
-              ) : (
-                <Spinner />
-              )}
-            </span>
-          )}
-          <div className="generation-status-copy">
-            <h2>
-              {failed ? "Workflow generation failed" : "Generating workflow"}
-            </h2>
-            <p>
-              {failed
-                ? errorMessage
-                : "The workflow detail is ready. The script is being generated and will open here when it finishes."}
-            </p>
-          </div>
-          {failed ? (
-            <Button
-              className="generation-retry-button"
-              type="button"
-              disabled={props.retrying}
-              onClick={props.onRetry}
-            >
-              {props.retrying ? (
-                <LoadingIcon className="spin" data-icon="inline-start" />
-              ) : null}
-              Retry generation
-            </Button>
-          ) : null}
-        </div>
-      </section>
+        }}
+        onTabChange={(value) => {
+          setActiveTab(value);
+          if (value === "runs" && !selectedRun && visibleRuns[0]) {
+            selectRun(visibleRuns[0].id);
+          }
+        }}
+        onLabelChange={updateLabelDraft}
+        onPromptChange={updatePromptDraft}
+        onAppendPromptChange={updateAppendPromptDraft}
+        onSelectLoopStep={setSelectedLoopStepId}
+        onSelectRun={selectRun}
+        onRetryRun={(runId) => void retryRun(runId)}
+        onResumeRun={(runId) => void resumeRun(runId)}
+        onCopyRunText={(key, text) => void copyRunText(key, text)}
+        onOpenAgentSession={(agentSessionId) =>
+          void openAgentSession(agentSessionId)
+        }
+      />
     </main>
   );
 }

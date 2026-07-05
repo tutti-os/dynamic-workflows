@@ -3,7 +3,7 @@ import {
   patchNodeFieldInScript,
   type EditableNodeRanges,
 } from "@/lib/workflow/script-patch";
-import { apiJson } from "@/components/workflow/workflowApiClient";
+import { parseWorkflowScript } from "@/components/workflow/workflowApiService";
 import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
@@ -143,14 +143,7 @@ export function useWorkflowScriptEditing(input: {
     parseRequestIdRef.current = requestId;
 
     try {
-      const nextParsed = await apiJson<ParsedWorkflow>(
-        "/api/workflows/parse",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ script: nextScript }),
-        },
-      );
+      const nextParsed = await parseWorkflowScript(nextScript);
       if (requestId !== parseRequestIdRef.current) {
         return;
       }

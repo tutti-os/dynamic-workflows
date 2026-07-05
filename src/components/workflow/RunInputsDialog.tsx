@@ -9,16 +9,15 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
-  PlatformIcon,
   PlayIcon,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
   Spinner,
   Textarea,
 } from "@tutti-os/ui-system";
-import { DEFAULT_MODEL_VALUE } from "@/components/workflow/useWorkflowRunSettings";
+import { useEffect } from "react";
+import {
+  WorkflowAgentSelect,
+  WorkflowModelSelect,
+} from "@/components/workflow/WorkflowRunSelectors";
 import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
 import type { AgentTargetOption } from "@/lib/agents/types";
 
@@ -50,6 +49,26 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
   const hasMissingInputs = props.missingRunInputNames.length > 0;
   const isBlocked = hasMissingInputs || props.missingCwd;
 
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const firstInputName = props.workflowInputNames[0];
+      const firstInput = firstInputName
+        ? document.getElementById(`run-dialog-input-${firstInputName}`)
+        : null;
+      const fallback = document.querySelector<HTMLElement>(
+        ".workflow-input-dialog input, .workflow-input-dialog textarea, .workflow-input-dialog button",
+      );
+      (firstInput as HTMLElement | null)?.focus();
+      if (!firstInput) {
+        fallback?.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [props.open, props.workflowInputNames]);
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="workflow-input-dialog">
@@ -66,7 +85,7 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
             </div>
             <label className="run-dialog-control-field">
               <span>Agent</span>
-              <AgentSelect
+              <WorkflowAgentSelect
                 agents={props.agents}
                 value={props.agent}
                 onValueChange={props.onAgentChange}
@@ -75,7 +94,7 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
             <label className="run-dialog-control-field">
               <span>Model</span>
               {props.modelOptions.length > 0 ? (
-                <ModelSelect
+                <WorkflowModelSelect
                   models={props.modelOptions}
                   value={props.model}
                   onValueChange={props.onModelChange}
@@ -168,66 +187,5 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function AgentSelect(props: {
-  agents: AgentTargetOption[];
-  value: string;
-  onValueChange: (value: string) => void;
-}) {
-  const selectedValue = props.value || props.agents[0]?.id || "";
-  const selected = props.agents.find((item) => item.id === selectedValue);
-
-  return (
-    <Select
-      value={selectedValue}
-      onValueChange={(value) => {
-        if (value) {
-          props.onValueChange(value);
-        }
-      }}
-    >
-      <SelectTrigger className="control-select">
-        <PlatformIcon size={16} />
-        <span className="select-display">{selected?.name ?? "Agent"}</span>
-      </SelectTrigger>
-      <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
-        {props.agents.map((item) => (
-          <SelectItem key={item.id} value={item.id} disabled={!item.supported}>
-            {item.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function ModelSelect(props: {
-  models: string[];
-  value: string;
-  onValueChange: (value: string) => void;
-}) {
-  return (
-    <Select
-      value={props.value || DEFAULT_MODEL_VALUE}
-      onValueChange={(value) =>
-        props.onValueChange(value === DEFAULT_MODEL_VALUE ? "" : value)
-      }
-    >
-      <SelectTrigger className="control-select">
-        <span className="select-display">
-          {props.value || "Default model"}
-        </span>
-      </SelectTrigger>
-      <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
-        <SelectItem value={DEFAULT_MODEL_VALUE}>Default model</SelectItem>
-        {props.models.map((item) => (
-          <SelectItem key={item} value={item}>
-            {item}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }

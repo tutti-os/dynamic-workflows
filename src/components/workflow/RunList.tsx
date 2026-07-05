@@ -8,6 +8,7 @@ import {
   Spinner,
   StatusDot,
 } from "@tutti-os/ui-system";
+import { EmptyState } from "@/components/workflow/WorkflowStates";
 import type { WorkflowRunRecord } from "@/lib/db/workflows";
 import {
   canRetryRun,
@@ -45,10 +46,7 @@ export function RunList(props: {
           />
         ))
       ) : (
-        <div className="empty-state">
-          <DirectoryIcon size={22} />
-          <p>No runs yet.</p>
-        </div>
+        <EmptyState icon={<DirectoryIcon size={22} />}>No runs yet.</EmptyState>
       )}
     </div>
   );
@@ -71,6 +69,7 @@ function RunListItem(props: {
       <button
         className="run-row-main"
         type="button"
+        aria-label={`Select run ${run.id}`}
         onClick={() => props.onSelectRun(run.id)}
       >
         <StatusDot
@@ -93,6 +92,7 @@ function RunListItem(props: {
           size="sm"
           variant="outline"
           type="button"
+          aria-label={`Resume run ${run.id}`}
           disabled={props.isRunning}
           onClick={() => props.onResumeRun(run.id)}
         >
@@ -109,6 +109,7 @@ function RunListItem(props: {
           size="sm"
           variant="outline"
           type="button"
+          aria-label={`Retry run ${run.id}`}
           disabled={props.isRunning}
           onClick={() => props.onRetryRun(run.id)}
         >

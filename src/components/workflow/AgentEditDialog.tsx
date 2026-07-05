@@ -10,17 +10,22 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
-  PlatformIcon,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
   Spinner,
   Textarea,
 } from "@tutti-os/ui-system";
-import { apiJson, readApiJsonError } from "./workflowApiClient";
-import { DEFAULT_MODEL_VALUE } from "./useWorkflowRunSettings";
+import { readApiJsonError } from "./workflowApiClient";
+import {
+  cancelWorkflowAgentEdit,
+  listWorkflowAgentEdits,
+  retryWorkflowAgentEdit,
+  startWorkflowAgentEdit,
+  watchWorkflowAgentEdit,
+} from "./workflowApiService";
 import { WorkflowProjectSelect } from "./WorkflowProjectSelect";
+import {
+  WorkflowAgentSelect,
+  WorkflowModelSelect,
+} from "./WorkflowRunSelectors";
 import type {
   WorkflowEditJobRecord,
   WorkflowVersionRecord,
@@ -45,15 +50,6 @@ type AgentEditDialogProps = {
   onLogEvent: (message: string) => void;
 };
 
-type EditListResponse = {
-  edits?: WorkflowEditJobRecord[];
-};
-
-type EditStatusResponse = {
-  edit?: WorkflowEditJobRecord;
-  version?: WorkflowVersionRecord | null;
-};
-
 export function AgentEditDialog(props: AgentEditDialogProps) {
   const [instruction, setInstruction] = useState("");
   const [activeEdit, setActiveEdit] = useState<WorkflowEditJobRecord | null>(null);
@@ -67,6 +63,16 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
   const mountedRef = useRef(true);
   const isActive = activeEdit?.status === "pending" || activeEdit?.status === "running";
   const status = activeEdit?.status ?? (createdVersion ? "completed" : "idle");
+
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("agent-edit-instruction")?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [props.open]);
 
   useEffect(() => {
     return () => {
@@ -83,12 +89,8 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
 
   async function recoverActiveEdit() {
     try {
-      const data = await apiJson<EditListResponse>(
-        `/api/workflows/${props.workflowId}/agent-edits`,
-        undefined,
-        "WORKFLOW_EDIT_FAILED",
-      );
-      const active = (data.edits ?? []).find(
+      const edits = await listWorkflowAgentEdits(props.workflowId);
+      const active = edits.find(
         (edit) => edit.status === "pending" || edit.status === "running",
       );
       if (!active || !mountedRef.current) {
@@ -115,27 +117,17 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
     setError(undefined);
     setCreatedVersion(null);
     try {
-      const data = await apiJson<{ edit?: WorkflowEditJobRecord }>(
-        `/api/workflows/${props.workflowId}/agent-edits`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            instruction: trimmed,
-            baseVersionId: props.baseVersion.id,
-            agent: props.agent,
-            model: props.model || undefined,
-            cwd: props.cwd || undefined,
-          }),
-        },
-        "WORKFLOW_EDIT_FAILED",
-      );
-      if (!data.edit) {
-        throw new Error("Workflow edit did not return a job");
-      }
-      setActiveEdit(data.edit);
+      const edit = await startWorkflowAgentEdit({
+        workflowId: props.workflowId,
+        instruction: trimmed,
+        baseVersionId: props.baseVersion.id,
+        agent: props.agent,
+        model: props.model || undefined,
+        cwd: props.cwd || undefined,
+      });
+      setActiveEdit(edit);
       props.onLogEvent(`agent edit: started from v${props.baseVersion.version}`);
-      void pollEdit(data.edit.id);
+      void pollEdit(edit.id);
     } catch (caught) {
       const apiError = readApiJsonError(caught, "WORKFLOW_EDIT_FAILED");
       setError(apiError.message);
@@ -152,41 +144,41 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
     pollingEditIdRef.current = editId;
 
     try {
-      while (mountedRef.current) {
-        const data = await apiJson<EditStatusResponse>(
-          `/api/workflows/${props.workflowId}/agent-edits/${editId}`,
-          undefined,
-          "WORKFLOW_EDIT_FAILED",
-        );
-        if (!data.edit) {
-          throw new Error("Workflow edit status did not return a job");
-        }
-
-        setActiveEdit(data.edit);
-        if (data.edit.status === "failed" || data.edit.status === "canceled") {
-          const message = data.edit.error?.message ?? "Workflow edit failed";
-          setError(message);
-          props.onLogEvent(
-            data.edit.status === "canceled"
-              ? "agent edit: canceled"
-              : `agent edit failed: ${message}`,
-          );
-          return;
-        }
-        if (data.edit.status === "completed") {
-          if (!data.version) {
-            throw new Error("Workflow edit completed without a version");
+      const result = await watchWorkflowAgentEdit({
+        workflowId: props.workflowId,
+        editId,
+        isMounted: () => mountedRef.current,
+        onStatus: (data) => {
+          if (!mountedRef.current) {
+            return;
           }
-          setCreatedVersion(data.version);
-          setError(undefined);
-          props.onLogEvent(`agent edit: created v${data.version.version}`);
-          await props.onVersionCreated(data.version);
-          return;
-        }
+          if (data.edit) {
+            setActiveEdit(data.edit);
+          }
+        },
+      });
 
-        await delay(1000);
+      if (!result || !mountedRef.current) {
+        return;
       }
+      setActiveEdit(result.edit);
+      if (result.edit.status === "canceled") {
+        const message = result.edit.error?.message ?? "Workflow edit canceled";
+        setError(message);
+        props.onLogEvent("agent edit: canceled");
+        return;
+      }
+      if (!result.version) {
+        throw new Error("Workflow edit completed without a version");
+      }
+      setCreatedVersion(result.version);
+      setError(undefined);
+      props.onLogEvent(`agent edit: created v${result.version.version}`);
+      await props.onVersionCreated(result.version);
     } catch (caught) {
+      if (!mountedRef.current) {
+        return;
+      }
       const apiError = readApiJsonError(caught, "WORKFLOW_EDIT_FAILED");
       setError(apiError.message);
       props.onLogEvent(`agent edit failed: ${apiError.message}`);
@@ -208,11 +200,10 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
     setIsCancelling(true);
     setError(undefined);
     try {
-      const data = await apiJson<EditStatusResponse>(
-        `/api/workflows/${props.workflowId}/agent-edits/${activeEdit.id}/cancel`,
-        { method: "POST" },
-        "WORKFLOW_EDIT_FAILED",
-      );
+      const data = await cancelWorkflowAgentEdit({
+        workflowId: props.workflowId,
+        editId: activeEdit.id,
+      });
       if (data.edit) {
         setActiveEdit(data.edit);
       }
@@ -234,18 +225,14 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
     setError(undefined);
     setCreatedVersion(null);
     try {
-      const data = await apiJson<{ edit?: WorkflowEditJobRecord }>(
-        `/api/workflows/${props.workflowId}/agent-edits/${activeEdit.id}/retry`,
-        { method: "POST" },
-        "WORKFLOW_EDIT_FAILED",
-      );
-      if (!data.edit) {
-        throw new Error("Workflow edit retry did not return a job");
-      }
-      setActiveEdit(data.edit);
-      setInstruction(data.edit.instruction);
+      const edit = await retryWorkflowAgentEdit({
+        workflowId: props.workflowId,
+        editId: activeEdit.id,
+      });
+      setActiveEdit(edit);
+      setInstruction(edit.instruction);
       props.onLogEvent("agent edit: retry started");
-      void pollEdit(data.edit.id);
+      void pollEdit(edit.id);
     } catch (caught) {
       const apiError = readApiJsonError(caught, "WORKFLOW_EDIT_FAILED");
       setError(apiError.message);
@@ -308,7 +295,7 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
           <section className="agent-edit-settings">
             <label className="run-dialog-control-field">
               <span>Agent</span>
-              <AgentSelect
+              <WorkflowAgentSelect
                 agents={props.agents}
                 value={props.agent}
                 disabled={isActive}
@@ -318,7 +305,7 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
             <label className="run-dialog-control-field">
               <span>Model</span>
               {props.modelOptions.length > 0 ? (
-                <ModelSelect
+                <WorkflowModelSelect
                   models={props.modelOptions}
                   value={props.model}
                   disabled={isActive}
@@ -343,7 +330,11 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
             </label>
           </section>
 
-          {error ? <div className="form-error">{error}</div> : null}
+          {error ? (
+            <div className="form-error" role="alert">
+              {error}
+            </div>
+          ) : null}
         </div>
 
         <DialogFooter>
@@ -398,78 +389,9 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
   );
 }
 
-function AgentSelect(props: {
-  agents: AgentTargetOption[];
-  value: string;
-  disabled: boolean;
-  onValueChange: (value: string) => void;
-}) {
-  const selectedValue = props.value || props.agents[0]?.id || "";
-  const selected = props.agents.find((item) => item.id === selectedValue);
-
-  return (
-    <Select
-      value={selectedValue}
-      onValueChange={(value) => {
-        if (value) {
-          props.onValueChange(value);
-        }
-      }}
-      disabled={props.disabled}
-    >
-      <SelectTrigger className="control-select">
-        <PlatformIcon size={16} />
-        <span className="select-display">{selected?.name ?? "Agent"}</span>
-      </SelectTrigger>
-      <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
-        {props.agents.map((item) => (
-          <SelectItem key={item.id} value={item.id} disabled={!item.supported}>
-            {item.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-function ModelSelect(props: {
-  models: string[];
-  value: string;
-  disabled: boolean;
-  onValueChange: (value: string) => void;
-}) {
-  return (
-    <Select
-      value={props.value || DEFAULT_MODEL_VALUE}
-      disabled={props.disabled}
-      onValueChange={(value) =>
-        props.onValueChange(value === DEFAULT_MODEL_VALUE ? "" : value)
-      }
-    >
-      <SelectTrigger className="control-select">
-        <span className="select-display">
-          {props.value || "Default model"}
-        </span>
-      </SelectTrigger>
-      <SelectContent align="start" style={{ zIndex: "var(--z-dialog-popover)" }}>
-        <SelectItem value={DEFAULT_MODEL_VALUE}>Default model</SelectItem>
-        {props.models.map((item) => (
-          <SelectItem key={item} value={item}>
-            {item}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 function formatStatus(status: string): string {
   if (status === "idle") {
     return "ready";
   }
   return status;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

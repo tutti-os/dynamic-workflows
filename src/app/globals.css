@@ -34,6 +34,48 @@ a {
   font-size: 13px;
 }
 
+.panel-state {
+  display: flex;
+  min-height: 154px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.error-state {
+  display: grid;
+  min-height: 154px;
+  place-items: center;
+  gap: 10px;
+  border: 1px dashed color-mix(in srgb, var(--state-danger) 36%, var(--border-1));
+  border-radius: 8px;
+  color: var(--state-danger);
+  text-align: center;
+  padding: 18px;
+}
+
+.error-state-full {
+  min-height: 100vh;
+  align-content: center;
+}
+
+.error-state h2 {
+  margin: 0 0 6px;
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.error-state p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .generation-topbar {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -192,7 +234,7 @@ a {
   position: absolute;
   top: 34px;
   left: 24px;
-  z-index: 1;
+  z-index: var(--z-workbench-chrome);
   color: var(--state-success);
 }
 
@@ -263,6 +305,7 @@ a {
   background: var(--background-fronted);
 }
 
+.workflow-select-content,
 .workflow-project-select-content {
   z-index: var(--z-dialog-popover) !important;
 }

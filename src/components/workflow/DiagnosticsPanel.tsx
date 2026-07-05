@@ -20,7 +20,7 @@ export function DiagnosticsPanel(props: {
   }
 
   return (
-    <div className="diagnostics">
+    <div className="diagnostics" role="alert">
       {props.title ? (
         <strong className="diagnostics-title">{props.title}</strong>
       ) : null}

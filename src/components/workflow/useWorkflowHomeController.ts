@@ -1,11 +1,16 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  apiJson,
   readApiJsonError,
 } from "@/components/workflow/workflowApiClient";
+import {
+  createWorkflowFromPrompt,
+  deleteWorkflow as deleteWorkflowRequest,
+  duplicateWorkflow as duplicateWorkflowRequest,
+  importWorkflowScriptFile,
+  listWorkflowSummaries,
+} from "@/components/workflow/workflowApiService";
 import type {
-  WorkflowDetail,
   WorkflowListItem,
   WorkflowRunStatus,
 } from "@/lib/db/workflows";
@@ -75,10 +80,7 @@ export function useWorkflowHomeController(
 
   const loadWorkflows = useCallback(async () => {
     try {
-      const data = await apiJson<{ workflows?: WorkflowListItem[] }>(
-        "/api/workflows",
-      );
-      setWorkflows(data.workflows ?? []);
+      setWorkflows(await listWorkflowSummaries());
       setActionError(undefined);
     } catch (caught) {
       setActionError(readApiJsonError(caught, "UNKNOWN_ERROR").message);
@@ -118,23 +120,12 @@ export function useWorkflowHomeController(
     setCreateError(undefined);
     setCreateDiagnostics([]);
     try {
-      const data = await apiJson<WorkflowDetail>(
-        "/api/workflows",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt: trimmed,
-            agent: input.effectiveAgent,
-            model: input.model || undefined,
-            cwd: input.cwd || undefined,
-          }),
-        },
-        "WORKFLOW_GENERATION_FAILED",
-      );
-      if (!data.workflow) {
-        throw new Error("Workflow creation failed");
-      }
+      const data = await createWorkflowFromPrompt({
+        prompt: trimmed,
+        agent: input.effectiveAgent,
+        model: input.model || undefined,
+        cwd: input.cwd || undefined,
+      });
       router.push(`/workflows/${data.workflow.id}`);
     } catch (caught) {
       const apiError = readApiJsonError(caught, "WORKFLOW_GENERATION_FAILED");
@@ -159,17 +150,7 @@ export function useWorkflowHomeController(
     setImportError(undefined);
     setImportDiagnostics([]);
     try {
-      const data = await apiJson<WorkflowDetail>(
-        "/api/workflows/import",
-        {
-          method: "POST",
-          body: formData,
-        },
-        "WORKFLOW_IMPORT_FAILED",
-      );
-      if (!data.workflow) {
-        throw new Error("Workflow import failed");
-      }
+      const data = await importWorkflowScriptFile(formData);
       router.push(`/workflows/${data.workflow.id}`);
     } catch (caught) {
       const apiError = readApiJsonError(caught, "WORKFLOW_IMPORT_FAILED");
@@ -184,16 +165,7 @@ export function useWorkflowHomeController(
     setDuplicatingId(workflowId);
     setActionError(undefined);
     try {
-      const data = await apiJson<WorkflowDetail>(
-        `/api/workflows/${workflowId}/duplicate`,
-        {
-          method: "POST",
-        },
-        "WORKFLOW_DUPLICATE_FAILED",
-      );
-      if (!data.workflow) {
-        throw new Error("Workflow duplication failed");
-      }
+      const data = await duplicateWorkflowRequest({ workflowId });
       router.push(`/workflows/${data.workflow.id}`);
     } catch (caught) {
       setActionError(
@@ -212,13 +184,7 @@ export function useWorkflowHomeController(
     setDeletingId(workflowId);
     setActionError(undefined);
     try {
-      await apiJson<{ ok: boolean }>(
-        `/api/workflows/${workflowId}`,
-        {
-          method: "DELETE",
-        },
-        "WORKFLOW_DELETE_FAILED",
-      );
+      await deleteWorkflowRequest(workflowId);
       await loadWorkflows();
     } catch (caught) {
       setActionError(readApiJsonError(caught, "WORKFLOW_DELETE_FAILED").message);

@@ -1,12 +1,16 @@
 import { useState } from "react";
 import {
-  apiJson,
   readApiJsonError,
 } from "@/components/workflow/workflowApiClient";
-import { readApiError } from "@/lib/api/errors";
+import {
+  cancelWorkflowRun,
+  loadWorkflowRun,
+  openWorkflowAgentSession,
+  startWorkflowRun,
+  streamWorkflowRunEvents,
+} from "@/components/workflow/workflowApiService";
 import type {
   WorkflowDetail,
-  WorkflowRunRecord,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows";
 import type { RunDetail } from "@/lib/workflow/run-detail";
@@ -21,13 +25,8 @@ import {
 } from "@/components/workflow/useWorkflowRunEvents";
 import {
   isAbortError,
-  readEventStream,
   writeClipboardText,
 } from "@/components/workflow/workflowClientUtils";
-
-type WorkflowRunStartResponse = {
-  run: WorkflowRunRecord;
-};
 
 export function useWorkflowRunController(input: {
   workflowId: string;
@@ -117,17 +116,10 @@ export function useWorkflowRunController(input: {
     input.setActiveTab(runInput.activeTab);
 
     try {
-      const startResponse = await apiJson<WorkflowRunStartResponse>(
-        runInput.endpoint,
-        {
-          method: "POST",
-          headers: runInput.body
-            ? { "Content-Type": "application/json" }
-            : undefined,
-          body: runInput.body ? JSON.stringify(runInput.body) : undefined,
-        },
-        "WORKFLOW_RUN_FAILED",
-      );
+      const startResponse = await startWorkflowRun({
+        endpoint: runInput.endpoint,
+        body: runInput.body,
+      });
 
       startRunEvents({
         initialLog: runInput.initialLog,
@@ -145,23 +137,12 @@ export function useWorkflowRunController(input: {
       });
 
       const abortController = new AbortController();
-      const response = await fetch(
-        `/api/workflows/${input.workflowId}/runs/${startResponse.run.id}/events`,
-        {
-          signal: abortController.signal,
-        },
-      );
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => undefined);
-        const apiError = readApiError(data, "WORKFLOW_RUN_FAILED");
-        throw new Error(apiError.message);
-      }
-      if (!response.body) {
-        throw new Error("Run event stream did not start");
-      }
-
-      await readEventStream(response.body, handleRunEvent);
+      await streamWorkflowRunEvents({
+        workflowId: input.workflowId,
+        runId: startResponse.run.id,
+        signal: abortController.signal,
+        onEvent: handleRunEvent,
+      });
       await input.loadWorkflow({
         resetScript: Boolean(
           runInput.resetScriptAfterRun &&
@@ -193,13 +174,10 @@ export function useWorkflowRunController(input: {
   }
 
   async function requestRunCancel(runId: string) {
-    await apiJson<{ ok: boolean; canceled: boolean }>(
-      `/api/workflows/${input.workflowId}/runs/${runId}/cancel`,
-      {
-        method: "POST",
-      },
-      "WORKFLOW_RUN_FAILED",
-    );
+    await cancelWorkflowRun({
+      workflowId: input.workflowId,
+      runId,
+    });
   }
 
   async function runCurrentWorkflow() {
@@ -375,11 +353,10 @@ export function useWorkflowRunController(input: {
 
   async function loadRun(runId: string) {
     try {
-      const data = await apiJson<RunDetail>(
-        `/api/workflows/${input.workflowId}/runs/${runId}`,
-        undefined,
-        "RUN_NOT_FOUND",
-      );
+      const data = await loadWorkflowRun({
+        workflowId: input.workflowId,
+        runId,
+      });
       selectRunDetail(data);
     } catch (error) {
       const apiError = readApiJsonError(error, "RUN_NOT_FOUND");
@@ -414,15 +391,7 @@ export function useWorkflowRunController(input: {
 
   async function openAgentSession(agentSessionId: string) {
     try {
-      await apiJson<{ ok: boolean }>(
-        "/api/agent-sessions/open",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agentSessionId }),
-        },
-        "WORKFLOW_RUN_FAILED",
-      );
+      await openWorkflowAgentSession(agentSessionId);
       appendEventLog(`agent session opened: ${agentSessionId}`);
     } catch (error) {
       const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");

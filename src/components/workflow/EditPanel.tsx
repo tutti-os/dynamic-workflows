@@ -5,6 +5,7 @@ import {
   TaskIcon,
   Textarea,
 } from "@tutti-os/ui-system";
+import { EmptyState } from "@/components/workflow/WorkflowStates";
 import type { WorkflowLoopStep, WorkflowNode } from "@/lib/workflow/types";
 
 type EditPanelProps = {
@@ -57,6 +58,7 @@ export function EditPanel(props: EditPanelProps) {
                     variant={
                       step.id === selectedLoopStep?.id ? "default" : "outline"
                     }
+                    aria-label={`Select loop step ${step.label}`}
                     onClick={() => props.onSelectLoopStep(step.id)}
                   >
                     {step.label}
@@ -123,10 +125,9 @@ export function EditPanel(props: EditPanelProps) {
         </>
       ) : (
         <>
-          <div className="empty-state">
-            <TaskIcon size={22} />
-            <p>Select a node to edit label, prompt, and inspect output.</p>
-          </div>
+          <EmptyState icon={<TaskIcon size={22} />}>
+            Select a node to edit label, prompt, and inspect output.
+          </EmptyState>
           {props.latestOutput ? (
             <div className="field">
               <label>Latest Output: {props.latestOutput[0]}</label>
