@@ -15,6 +15,7 @@ import {
 } from "@/lib/api/app-error";
 import { resolveWorkflowCwd } from "@/lib/workflow/cwd";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
+import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
 import type { WorkflowRunJobOptions } from "@/lib/workflow/run-jobs";
 
 type PreparedWorkflowRun = WorkflowRunJobOptions;
@@ -77,14 +78,14 @@ export async function prepareCurrentWorkflowRun(input: {
     model: body.model,
     cwd,
     inputs,
-    input: {
+    input: compactWorkflowRunInput({
       inputs,
       cwd,
       autoSavedVersion: script !== requestedVersion.script,
       requestedVersionId: requestedVersion.id,
-      ...(body.agent === undefined ? {} : { agent: body.agent }),
-      ...(body.model === undefined ? {} : { model: body.model }),
-    },
+      agent: body.agent,
+      model: body.model,
+    }),
   };
 }
 
@@ -121,13 +122,13 @@ export function prepareRetryWorkflowRun(input: {
     model: sourceRun.model ?? undefined,
     cwd,
     inputs,
-    input: {
+    input: compactWorkflowRunInput({
       inputs,
       retryOfRunId: sourceRun.id,
-      agent: sourceRun.agent,
-      model: sourceRun.model,
+      agent: sourceRun.agent ?? undefined,
+      model: sourceRun.model ?? undefined,
       cwd,
-    },
+    }),
   };
 }
 

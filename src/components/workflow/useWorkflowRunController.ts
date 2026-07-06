@@ -25,6 +25,7 @@ import {
   isAbortError,
   writeClipboardText,
 } from "@/components/workflow/workflowClientUtils";
+import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
 
 export function useWorkflowRunController(input: {
   workflowId: string;
@@ -221,14 +222,14 @@ export function useWorkflowRunController(input: {
         agent: input.effectiveAgent,
         model: input.model || undefined,
         cwd: input.cwd || undefined,
-        input: {
+        input: compactWorkflowRunInput({
           inputs: input.workflowInputPayload,
           agent: input.effectiveAgent,
           model: input.model || undefined,
           cwd: input.cwd || undefined,
           autoSavedVersion: input.isScriptDirty,
           requestedVersionId: selectedVersionId,
-        },
+        }),
       },
       resetScriptAfterRun: runScript,
     });
@@ -279,12 +280,12 @@ export function useWorkflowRunController(input: {
         agent: sourceRun.agent ?? undefined,
         model: sourceRun.model ?? undefined,
         cwd: sourceRun.cwd ?? undefined,
-        input: {
+        input: compactWorkflowRunInput({
           retryOfRunId: runId,
-          agent: sourceRun.agent,
-          model: sourceRun.model,
-          cwd: sourceRun.cwd,
-        },
+          agent: sourceRun.agent ?? undefined,
+          model: sourceRun.model ?? undefined,
+          cwd: sourceRun.cwd ?? undefined,
+        }),
       },
       retryRunId: runId,
       failureLogPrefix: "retry failed",
@@ -325,12 +326,12 @@ export function useWorkflowRunController(input: {
         agent: sourceRun.agent ?? undefined,
         model: sourceRun.model ?? undefined,
         cwd: sourceRun.cwd ?? undefined,
-        input: {
+        input: compactWorkflowRunInput({
           resumeOfRunId: runId,
-          agent: sourceRun.agent,
-          model: sourceRun.model,
-          cwd: sourceRun.cwd,
-        },
+          agent: sourceRun.agent ?? undefined,
+          model: sourceRun.model ?? undefined,
+          cwd: sourceRun.cwd ?? undefined,
+        }),
       },
       retryRunId: runId,
       failureLogPrefix: "resume failed",

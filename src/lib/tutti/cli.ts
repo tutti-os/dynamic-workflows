@@ -22,6 +22,7 @@ import {
 import {
   readRunResult,
 } from "@/lib/workflow/run-state";
+import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
 import type { ParsedWorkflow } from "@/lib/workflow/types";
 import { summarizeWorkflow } from "@/lib/workflow/executor";
 import {
@@ -331,12 +332,12 @@ async function runWorkflowForCli(input: {
     model: input.model,
     cwd,
     inputs: input.inputs,
-    input: {
+    input: compactWorkflowRunInput({
       inputs: input.inputs,
       agent: input.agent,
       model: input.model,
       cwd,
-    },
+    }),
   });
 
   return {
