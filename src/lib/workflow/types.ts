@@ -50,7 +50,7 @@ export type WorkflowLoopStep = {
 
 export type WorkflowLoopUntil = {
   source: string;
-  includes: string;
+  finalStatus: string;
 };
 
 export type WorkflowLoopSpec = {

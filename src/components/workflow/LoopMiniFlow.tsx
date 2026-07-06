@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   RotateCcw,
 } from "lucide-react";
+import { formatLoopUntil } from "@/lib/workflow/loop-until";
 import { resolveLoopStepSessionSpec } from "@/lib/workflow/session";
 import type {
   WorkflowLoopSpec,
@@ -18,6 +19,8 @@ type LoopMiniFlowProps = {
 };
 
 export function LoopMiniFlow(props: LoopMiniFlowProps) {
+  const untilView = formatLoopUntil(props.loop.until);
+
   return (
     <div className="loop-mini-flow">
       <div aria-label="Loop step flow" className="loop-mini-flow-steps">
@@ -93,21 +96,14 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
       <div className="loop-mini-flow-footer">
         <div
           className="loop-mini-flow-until"
-          title={`${props.loop.until.source} includes ${JSON.stringify(
-            props.loop.until.includes,
-          )}`}
+          title={untilView}
         >
           <RotateCcw aria-hidden size={13} strokeWidth={2.2} />
-          <span>
-            repeat while {props.loop.until.source} misses{" "}
-            {JSON.stringify(props.loop.until.includes)}
-          </span>
+          <span>repeat until {untilView}</span>
         </div>
         <div
           className="loop-mini-flow-exit"
-          title={`Exit when ${props.loop.until.source} includes ${JSON.stringify(
-            props.loop.until.includes,
-          )}, max ${props.loop.maxIterations} iterations`}
+          title={`Exit when ${untilView}, max ${props.loop.maxIterations} iterations`}
         >
           <CheckCircle2 aria-hidden size={13} strokeWidth={2.2} />
           exit / max {props.loop.maxIterations}

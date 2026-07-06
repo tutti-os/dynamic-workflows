@@ -118,13 +118,13 @@ phase("RD delivery and acceptance", () => {
 
 你是验收器。请在同一个 cwd 对应的项目目录中严格验收 RD 本轮交付是否满足原始需求。注意你不需要做修改，直接提出你的审查意见即可。
 
-你必须只返回以下两种格式之一：
-PASS: <简短通过理由>
-FAIL: <具体打回意见>
+你可以先给出简短验收意见，但最后一个非空行必须只返回以下两种状态之一：
+PASS
+FAIL
 \`,
       }),
     ],
-    until: { source: "acceptance", includes: "PASS:" },
+    until: { source: "acceptance", finalStatus: "PASS" },
   });
 
   agent({

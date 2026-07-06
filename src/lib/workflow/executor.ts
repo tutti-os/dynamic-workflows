@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
 import { resolveWorkflowCwd, resolveWorkflowCwdFrom } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
+import { formatLoopUntil, matchesLoopUntil } from "./loop-until";
 import { resolveLoopStepRunContext } from "./loop-runtime";
 import { assertWorkflowScriptValid } from "./parser";
 import {
@@ -552,7 +553,7 @@ async function* runLoopNode(input: {
         currentStepOutputs[loop.until.source] ??
         previousStepOutputs[loop.until.source] ??
         "";
-      const untilMatched = untilOutput.includes(loop.until.includes);
+      const untilMatched = matchesLoopUntil(untilOutput, loop.until);
       iterations.push({
         index: iteration,
         outputs: { ...currentStepOutputs },
@@ -572,7 +573,7 @@ async function* runLoopNode(input: {
       yield loopStatusEvent({
         runId: input.runId,
         nodeId: input.node.id,
-        message: `Loop "${input.node.id}" iteration ${iteration} until check: ${untilMatched ? "matched" : "not matched"} (${loop.until.source} includes ${JSON.stringify(loop.until.includes)}).`,
+        message: `Loop "${input.node.id}" iteration ${iteration} until check: ${untilMatched ? "matched" : "not matched"} (${formatLoopUntil(loop.until)}).`,
       });
 
       if (untilMatched) {
@@ -1064,9 +1065,7 @@ function formatLoopOutput(input: {
   ];
 
   if (loop) {
-    lines.push(
-      `Until: ${loop.until.source} includes ${JSON.stringify(loop.until.includes)}`,
-    );
+    lines.push(`Until: ${formatLoopUntil(loop.until)}`);
   }
 
   lines.push("", "Final step outputs:");

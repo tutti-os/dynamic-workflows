@@ -65,7 +65,7 @@ Rules:
 - Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
 - Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
 - A loop can provide session: { mode: "inherit", key: "loop_room", scope: "step" } to derive per-step session keys, or scope: "loop" to share one loop-level session.
-- loop until must be { source: "<step id>", includes: "<literal marker>" }.
+- loop until must be { source: "<step id>", finalStatus: "<literal status>" }; prompt that step to put that status alone on the final non-empty line.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
 - Use {{workflow.cwd}} in prompts when agents need to know the actual run cwd; do not create a normal {{cwd}} input for this.
@@ -276,7 +276,7 @@ Rules:
 - Use appendPrompt on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas.
 - Use session: { mode: "independent" } only when a step must explicitly start a fresh agent session each time.
 - A loop can provide session: { mode: "inherit", key: "loop_room", scope: "step" } to derive per-step session keys, or scope: "loop" to share one loop-level session.
-- loop until must be { source: "<step id>", includes: "<literal marker>" }.
+- loop until must be { source: "<step id>", finalStatus: "<literal status>" }; prompt that step to put that status alone on the final non-empty line.
 - Put upstream values in inputs, for example inputs: { inventory }.
 - Reference inputs inside prompts with {{inventory}}.
 - Use {{workflow.cwd}} in prompts when agents need to know the actual run cwd; do not create a normal {{cwd}} input for this.

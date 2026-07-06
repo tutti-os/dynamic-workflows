@@ -133,7 +133,7 @@ Previous acceptance: {{acceptance}}\`,
       prompt: \`Review {{rd}} for {{task}}\`,
     }),
   ],
-  until: { source: "acceptance", includes: "PASS:" },
+  until: { source: "acceptance", finalStatus: "PASS" },
 })
 `);
 
@@ -152,7 +152,7 @@ Previous acceptance: {{acceptance}}\`,
         maxIterations: 3,
         onMaxIterations: "complete",
         session: { mode: "inherit", key: "delivery", scope: "step" },
-        until: { source: "acceptance", includes: "PASS:" },
+        until: { source: "acceptance", finalStatus: "PASS" },
       },
     });
     expect(
@@ -177,6 +177,76 @@ Previous acceptance: {{acceptance}}\`,
       "Iteration {{iteration}} feedback: {{acceptance}}",
     );
     expect(parsed.externalInputs).toEqual(["task"]);
+  });
+
+  it("parses loop until finalStatus", () => {
+    const parsed = parseWorkflowScript(`
+const last_line = await loop({
+  id: "last_line",
+  maxIterations: 1,
+  steps: [agent({ id: "reviewer", prompt: "Review" })],
+  until: { source: "reviewer", finalStatus: "ACCEPTED" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes[0].loop?.until).toEqual({
+      source: "reviewer",
+      finalStatus: "ACCEPTED",
+    });
+  });
+
+  it("reports missing and blank loop until finalStatus", () => {
+    const parsed = parseWorkflowScript(`
+const missing = await loop({
+  id: "missing",
+  maxIterations: 1,
+  steps: [agent({ id: "reviewer", prompt: "Review" })],
+  until: { source: "reviewer" },
+})
+const empty = await loop({
+  id: "empty",
+  maxIterations: 1,
+  steps: [agent({ id: "reviewer", prompt: "Review" })],
+  until: { source: "reviewer", finalStatus: "   " },
+})
+`);
+
+    expect(parsed.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          message: "loop until.finalStatus is required.",
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: "loop until.finalStatus must be non-empty.",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects legacy loop until matchers", () => {
+    const script = `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 1,
+  steps: [agent({ id: "reviewer", prompt: "Review" })],
+  until: { source: "reviewer", includes: "PASS:" },
+})
+`;
+
+    const parsed = parseWorkflowScript(script);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: "loop until.finalStatus is required.",
+      }),
+    );
+    expect(() => assertWorkflowScriptValid(script)).toThrow(
+      WorkflowScriptSyntaxError,
+    );
   });
 
   it("collects required agent and model template inputs without requiring defaults", () => {
@@ -206,7 +276,7 @@ const delivery = await loop({
       prompt: "Review {{coder}}",
     }),
   ],
-  until: { source: "reviewer", includes: "PASS:" },
+  until: { source: "reviewer", finalStatus: "PASS" },
 })
 `);
 
@@ -242,7 +312,7 @@ const conflict = await loop({
     agent({ id: "coder", model: "{{coder:}}", prompt: "Code" }),
     agent({ id: "reviewer", model: "{{coder}}", prompt: "Review {{coder}}" }),
   ],
-  until: { source: "reviewer", includes: "PASS:" },
+  until: { source: "reviewer", finalStatus: "PASS" },
 })
 `);
 
@@ -321,7 +391,7 @@ phase("RD delivery and acceptance", () => {
       agent({ id: "rd", prompt: \`Task: {{requirement}}\nFeedback: {{acceptance}}\` }),
       agent({ id: "acceptance", prompt: \`Review {{rd}}\` }),
     ],
-    until: { source: "acceptance", includes: "PASS:" },
+    until: { source: "acceptance", finalStatus: "PASS" },
   })
 
   agent({
@@ -355,7 +425,7 @@ const broken = await loop({
   id: "broken",
   maxIterations: 99,
   steps: [agent({ id: "one", prompt: "one" })],
-  until: { source: "missing", includes: "PASS:" },
+  until: { source: "missing", finalStatus: "PASS" },
 })
 `),
     ).toThrow(WorkflowScriptSyntaxError);

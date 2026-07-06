@@ -275,7 +275,7 @@ const delivery = await loop({
     agent({ id: "rd", cwd: "lib", prompt: "work" }),
     agent({ id: "review", prompt: "review {{rd}}" }),
   ],
-  until: { source: "review", includes: "PASS:" },
+  until: { source: "review", finalStatus: "PASS: ok" },
 })
 `,
       agent: "local:codex",
@@ -324,7 +324,7 @@ const delivery = await loop({
     agent({ id: "rd", agent: "local:codex", model: "gpt-5.1", prompt: "work" }),
     agent({ id: "review", prompt: "review {{rd}}" }),
   ],
-  until: { source: "review", includes: "PASS:" },
+  until: { source: "review", finalStatus: "PASS: ok" },
 })
 `,
       agent: "mock",
@@ -397,7 +397,7 @@ const delivery = await loop({
       prompt: "review {{coder}}",
     }),
   ],
-  until: { source: "reviewer", includes: "PASS:" },
+  until: { source: "reviewer", finalStatus: "PASS: ok" },
 })
 `,
       agent: "mock",
@@ -448,7 +448,7 @@ const delivery = await loop({
     agent({ id: "draft", prompt: "draft {{iteration}}" }),
     agent({ id: "review", prompt: "review {{draft}}" }),
   ],
-  until: { source: "review", includes: "PASS:" },
+  until: { source: "review", finalStatus: "PASS: accepted" },
 })
 `,
       agent: "mock",
@@ -623,7 +623,7 @@ feedback: {{acceptance}}\`,
       prompt: \`review: {{rd}}\`,
     }),
   ],
-  until: { source: "acceptance", includes: "PASS:" },
+  until: { source: "acceptance", finalStatus: "PASS: accepted" },
 })
 `,
       agent: "local:codex",
@@ -647,8 +647,8 @@ feedback: {{acceptance}}\`,
     ]);
     expect(readStatusMessages(events)).toEqual(
       expect.arrayContaining([
-        'Loop "delivery" iteration 1 until check: not matched (acceptance includes "PASS:").',
-        'Loop "delivery" iteration 2 until check: matched (acceptance includes "PASS:").',
+        'Loop "delivery" iteration 1 until check: not matched (acceptance final status "PASS: accepted").',
+        'Loop "delivery" iteration 2 until check: matched (acceptance final status "PASS: accepted").',
       ]),
     );
     expect(events.at(-1)).toEqual(
@@ -668,6 +668,62 @@ feedback: {{acceptance}}\`,
     expect(finalEvent).toEqual(
       expect.objectContaining({
         output: expect.stringContaining("[acceptance]\nPASS: accepted"),
+      }),
+    );
+  });
+
+  it("matches finalStatus only against the final non-empty output line", async () => {
+    const reviewOutputs = [
+      "This is not ACCEPTED.\nNEEDS_WORK\n\n",
+      "Looks good after fixes.\nACCEPTED\n\n",
+    ];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      yield {
+        type: "text_delta",
+        text: input.prompt.startsWith("review")
+          ? reviewOutputs.shift() ?? "ACCEPTED"
+          : "work",
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "rd", prompt: "work {{iteration}}" }),
+    agent({ id: "review", prompt: "review {{rd}}" }),
+  ],
+  until: { source: "review", finalStatus: "ACCEPTED" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(runAgentMock).toHaveBeenCalledTimes(4);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Loop "delivery" iteration 1 until check: not matched (review final status "ACCEPTED").',
+        'Loop "delivery" iteration 2 until check: matched (review final status "ACCEPTED").',
+      ]),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({
+        type: "run_completed",
+        status: "completed",
       }),
     );
   });
@@ -698,7 +754,7 @@ const debate = await loop({
     agent({ id: "agent_b", prompt: "B sees {{agent_a}}" }),
     agent({ id: "moderator", prompt: "Judge {{agent_a}} {{agent_b}}" }),
   ],
-  until: { source: "moderator", includes: "RESOLVED:" },
+  until: { source: "moderator", finalStatus: "RESOLVED" },
 })
 `,
       agent: "mock",
@@ -744,7 +800,7 @@ const debate = await loop({
     agent({ id: "agent_b", prompt: "B sees {{agent_a}}" }),
     agent({ id: "moderator", prompt: "Judge {{agent_a}} {{agent_b}}" }),
   ],
-  until: { source: "moderator", includes: "RESOLVED:" },
+  until: { source: "moderator", finalStatus: "RESOLVED" },
 })
 `,
       agent: "mock",
@@ -805,7 +861,7 @@ const debate = await loop({
     }),
     agent({ id: "moderator", prompt: "Judge {{agent_a}}" }),
   ],
-  until: { source: "moderator", includes: "RESOLVED:" },
+  until: { source: "moderator", finalStatus: "RESOLVED" },
 })
 `,
       agent: "mock",
@@ -862,7 +918,7 @@ const delivery = await loop({
     agent({ id: "rd", prompt: "rd {{qa}}", appendPrompt: "rd append {{iteration}} {{qa}}" }),
     agent({ id: "qa", prompt: "qa {{rd}}" }),
   ],
-  until: { source: "qa", includes: "PASS:" },
+  until: { source: "qa", finalStatus: "PASS" },
 })
 `,
       agent: "local:codex",

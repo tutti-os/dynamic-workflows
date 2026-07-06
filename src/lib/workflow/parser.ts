@@ -5,6 +5,7 @@ import type {
   WorkflowDiagnostic,
   WorkflowEdge,
   WorkflowInputBinding,
+  WorkflowLoopUntil,
   WorkflowLoopSpec,
   WorkflowLoopStep,
   WorkflowMeta,
@@ -488,15 +489,16 @@ function readLoopUntil(
   options: AnyNode | undefined,
   state: ParserState,
   stepIds: Set<string>,
-) {
+): WorkflowLoopUntil {
   const untilObject = readObjectPropertyValue(options, "until");
   const source = readObjectString(untilObject, "source") ?? "";
-  const includes = readObjectString(untilObject, "includes") ?? "";
+  const finalStatus = readObjectString(untilObject, "finalStatus");
 
   if (!untilObject || untilObject.type !== "ObjectExpression") {
     state.diagnostics.push({
       severity: "error",
-      message: "loop(...) requires until: { source, includes }.",
+      message:
+        "loop(...) requires until: { source: <step id>, finalStatus: <status> }.",
       range: readObjectPropertyValueRange(options, "until"),
     });
   }
@@ -509,18 +511,21 @@ function readLoopUntil(
       range: readObjectPropertyValueRange(untilObject, "source"),
     });
   }
-  if (!includes) {
+  if (finalStatus === undefined) {
     state.diagnostics.push({
       severity: "error",
-      message: "loop until.includes is required.",
-      range: readObjectPropertyValueRange(untilObject, "includes"),
+      message: "loop until.finalStatus is required.",
+      range: readObjectPropertyValueRange(options, "until") ?? toRange(options),
+    });
+  } else if (!finalStatus.trim()) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop until.finalStatus must be non-empty.",
+      range: readObjectPropertyValueRange(untilObject, "finalStatus"),
     });
   }
 
-  return {
-    source,
-    includes,
-  };
+  return { source, finalStatus: finalStatus ?? "" };
 }
 
 function readLoopOnMaxIterations(

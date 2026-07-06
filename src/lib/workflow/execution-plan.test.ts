@@ -13,7 +13,7 @@ const review = await loop({
   id: "review",
   maxIterations: 2,
   steps: [agent({ id: "check", prompt: "check" })],
-  until: { source: "check", includes: "PASS" },
+  until: { source: "check", finalStatus: "PASS" },
 })
 log("done")
 const dynamic = pipeline([])

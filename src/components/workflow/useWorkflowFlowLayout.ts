@@ -5,6 +5,7 @@ import {
   type Edge,
   type Node,
 } from "@xyflow/react";
+import { formatLoopUntil } from "@/lib/workflow/loop-until";
 import type {
   ParsedWorkflow,
   WorkflowNodeStatus,
@@ -230,7 +231,7 @@ function createFlowLayoutKey(parsed: ParsedWorkflow): string {
       if (node.loop) {
         return `${node.id}:${node.phase ?? "Workflow"}:${node.loop.steps
           .map((step) => step.id)
-          .join(",")}:${node.loop.maxIterations}:${node.loop.until.source}:${node.loop.until.includes}`;
+          .join(",")}:${node.loop.maxIterations}:${formatLoopUntil(node.loop.until)}`;
       }
 
       return `${node.id}:${node.phase ?? "Workflow"}`;

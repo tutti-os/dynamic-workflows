@@ -52,8 +52,8 @@ const delivery = loop({
   maxIterations: 4,
   steps: [
     agent({ id: "coder", model: "{{coder_model:gpt-5.5}}", prompt: "Code {{requirement}}" }),
-    agent({ id: "reviewer", model: "{{reviewer_model:gpt-5}}", prompt: "Review {{coder}}" }),
+    agent({ id: "reviewer", model: "{{reviewer_model:gpt-5}}", prompt: "Review {{coder}}. Put PASS or FAIL on the final non-empty line." }),
   ],
-  until: { source: "reviewer", includes: "PASS:" },
+  until: { source: "reviewer", finalStatus: "PASS" },
 });
 ```
