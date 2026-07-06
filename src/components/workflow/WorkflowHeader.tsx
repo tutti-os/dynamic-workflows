@@ -10,6 +10,7 @@ import type {
   WorkflowDetail,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows/types";
+import { CopyToClipboardButton } from "@/components/workflow/CopyToClipboardButton";
 import { VersionSelect } from "@/components/workflow/VersionSelect";
 import { WorkflowActionBar } from "@/components/workflow/WorkflowActionBar";
 
@@ -83,6 +84,15 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
                 props.selectedVersion?.id ?? props.detail.currentVersion.id
               }
               onValueChange={props.onSelectVersion}
+            />
+            <CopyToClipboardButton
+              className="workflow-id-copy-button"
+              variant="outline"
+              size="sm"
+              text={props.detail.workflow.id}
+              label="Copy ID"
+              title="Copy workflow ID for CLI usage"
+              aria-label="Copy workflow ID"
             />
             {props.viewingOldVersion ? (
               <Badge variant="warning">not official</Badge>

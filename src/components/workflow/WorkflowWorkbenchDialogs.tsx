@@ -69,6 +69,7 @@ export function WorkflowWorkbenchDialogs(props: {
 
       <WorkflowDetailsDialog
         open={props.detailsOpen}
+        workflowId={props.workflowId}
         name={props.metadataName}
         description={props.metadataDescription}
         dirty={props.metadataDirty}

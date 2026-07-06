@@ -833,13 +833,21 @@ a {
   display: flex;
   min-width: 0;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   color: var(--text-secondary);
   font-size: 12px;
 }
 
+.workflow-id-copy-button {
+  height: 24px;
+  min-height: 24px;
+  padding-inline: 8px;
+}
+
 .detail-description {
   overflow: hidden;
+  min-width: 180px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1409,6 +1417,17 @@ a {
 .workflow-details-dialog-body {
   display: grid;
   gap: 12px;
+}
+
+.workflow-id-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.workflow-id-field input {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
 }
 
 .agent-edit-dialog-body {

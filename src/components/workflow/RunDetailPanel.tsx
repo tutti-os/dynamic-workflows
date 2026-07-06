@@ -1,8 +1,6 @@
 import {
   Badge,
   Button,
-  CheckIcon,
-  CopyIcon,
   LaunchIcon,
   PlayIcon,
   RefreshIcon,
@@ -23,6 +21,7 @@ import {
   nodeStatusBadge,
   runStatusBadge,
 } from "@/components/workflow/runPanelUtils";
+import { CopyToClipboardButton } from "@/components/workflow/CopyToClipboardButton";
 
 export function RunDetailPanel(props: {
   detail: RunDetail;
@@ -129,10 +128,13 @@ function RunDetailHeader(props: {
         </span>
       </div>
       <div className="run-detail-actions">
-        <CopyTextButton
+        <CopyToClipboardButton
+          className="copy-text-button"
+          size="sm"
+          variant="outline"
           copied={props.copied}
           label="Copy ID"
-          onClick={() => props.onCopyRunText(`id:${run.id}`, run.id)}
+          onCopyText={() => props.onCopyRunText(`id:${run.id}`, run.id)}
         />
         {canResumeRun(run.status) ? (
           <Button
@@ -282,10 +284,13 @@ function RunTextBlock(props: {
     <div className="field">
       <div className="field-heading">
         <label>{props.label}</label>
-        <CopyTextButton
+        <CopyToClipboardButton
+          className="copy-text-button"
+          size="sm"
+          variant="outline"
           copied={props.copiedRunField === props.copyKey}
           label="Copy"
-          onClick={() => props.onCopy(props.copyKey, props.text)}
+          onCopyText={() => props.onCopy(props.copyKey, props.text)}
         />
       </div>
       {props.note ? <span className="run-text-note">{props.note}</span> : null}
@@ -302,28 +307,5 @@ function RunFact(props: { label: string; value: string }) {
       <span>{props.label}</span>
       <strong title={props.value}>{props.value}</strong>
     </div>
-  );
-}
-
-function CopyTextButton(props: {
-  copied: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      className="copy-text-button"
-      size="sm"
-      variant="outline"
-      type="button"
-      onClick={props.onClick}
-    >
-      {props.copied ? (
-        <CheckIcon data-icon="inline-start" />
-      ) : (
-        <CopyIcon data-icon="inline-start" />
-      )}
-      {props.copied ? "Copied" : props.label}
-    </Button>
   );
 }

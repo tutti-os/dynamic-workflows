@@ -13,9 +13,11 @@ import {
   Textarea,
 } from "@tutti-os/ui-system";
 import { useEffect } from "react";
+import { CopyToClipboardButton } from "@/components/workflow/CopyToClipboardButton";
 
 type WorkflowDetailsDialogProps = {
   open: boolean;
+  workflowId?: string;
   name: string;
   description: string;
   dirty: boolean;
@@ -47,6 +49,22 @@ export function WorkflowDetailsDialog(props: WorkflowDetailsDialogProps) {
           </DialogDescription>
         </DialogHeader>
         <div className="workflow-details-dialog-body">
+          {props.workflowId ? (
+            <div className="field">
+              <label htmlFor="workflow-details-id">Workflow ID</label>
+              <div className="workflow-id-field">
+                <Input id="workflow-details-id" value={props.workflowId} readOnly />
+                <CopyToClipboardButton
+                  size="sm"
+                  variant="outline"
+                  text={props.workflowId}
+                  label="Copy ID"
+                  title="Copy workflow ID for CLI usage"
+                  aria-label="Copy workflow ID"
+                />
+              </div>
+            </div>
+          ) : null}
           <div className="field">
             <label htmlFor="workflow-details-name">Workflow name</label>
             <Input

@@ -17,6 +17,7 @@ import {
   EmptyState,
   WorkflowGridSkeleton,
 } from "@/components/workflow/WorkflowStates";
+import { CopyToClipboardButton } from "@/components/workflow/CopyToClipboardButton";
 import type {
   WorkflowListItem,
   WorkflowRunStatus,
@@ -130,6 +131,14 @@ function WorkflowCard(props: {
             </>
           ) : null}
           <div className="workflow-card-actions">
+            <CopyToClipboardButton
+              size="sm"
+              variant="outline"
+              text={item.workflow.id}
+              label="Copy ID"
+              title="Copy workflow ID for CLI usage"
+              aria-label={`Copy ID for ${item.workflow.name}`}
+            />
             <Button
               asChild
               size="sm"
