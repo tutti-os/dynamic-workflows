@@ -12,6 +12,11 @@ const VALID_SCRIPT = `export const meta = {
   requiresCwd: true,
 }
 
+export const inputs = {
+  repo: { type: "string", required: true, label: "Repo" },
+  audience: { type: "string", required: true, label: "Audience" },
+}
+
 phase("Scan")
 
 const inventory = await agent({
@@ -33,7 +38,7 @@ log("done")
 `;
 
 describe("parseWorkflowScript", () => {
-  it("parses workflow nodes, edges, and external inputs", () => {
+  it("parses workflow nodes, edges, and input schema", () => {
     const parsed = parseWorkflowScript(VALID_SCRIPT);
 
     expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
@@ -55,7 +60,11 @@ describe("parseWorkflowScript", () => {
         label: "inventory",
       },
     ]);
-    expect(parsed.externalInputs.sort()).toEqual(["audience", "repo"]);
+    expect(parsed.inputSchema).toMatchObject({
+      audience: { type: "string", required: true },
+      repo: { type: "string", required: true },
+    });
+    expect(parsed.requiredInputNames.sort()).toEqual(["audience", "repo"]);
   });
 
   it("reports duplicate node ids as validation errors", () => {
@@ -104,8 +113,105 @@ const first = await agent({ id: "first", session: "writer", prompt: "one" })
     );
   });
 
+  it("reports undeclared template inputs", () => {
+    const parsed = parseWorkflowScript(`
+const plan = await agent({ id: "plan", prompt: "Plan {{requirement}}" })
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          'Workflow input "requirement" is used in a template but is not declared in export const inputs.',
+      }),
+    );
+  });
+
+  it("validates workflow input schema fields", () => {
+    const parsed = parseWorkflowScript(`
+export const inputs = {
+  requirement: { type: "string", required: true, widget: "textarea" },
+  threshold: { type: "number", default: -1, min: -5, max: 5 },
+  mode: { type: "enum", options: ["research", "implementation"], default: "research" },
+  broken: { type: "enum", options: [], typo: true },
+}
+`);
+
+    expect(parsed.inputSchema.requirement).toMatchObject({
+      type: "string",
+      required: true,
+      widget: "textarea",
+    });
+    expect(parsed.inputSchema.mode).toMatchObject({
+      type: "enum",
+      options: ["research", "implementation"],
+      default: "research",
+    });
+    expect(parsed.inputSchema.threshold).toMatchObject({
+      type: "number",
+      default: -1,
+      min: -5,
+      max: 5,
+    });
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          'Workflow input "broken" options must contain at least one option.',
+      }),
+    );
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: 'Workflow input "broken" has unsupported field "typo".',
+      }),
+    );
+  });
+
+  it("reports defaults that violate input schema constraints", () => {
+    const parsed = parseWorkflowScript(`
+export const inputs = {
+  tooShort: { type: "string", default: "x", minLength: 2 },
+  tooLong: { type: "string", default: "abcd", maxLength: 3 },
+  patternMismatch: { type: "string", default: "abc", pattern: "^req-" },
+  tooSmall: { type: "number", default: -1, min: 0 },
+  tooLarge: { type: "number", default: 11, max: 10 },
+}
+`);
+
+    expect(parsed.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "error",
+          message: 'Workflow input "tooShort" default must be at least 2 characters.',
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: 'Workflow input "tooLong" default must be at most 3 characters.',
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message:
+            'Workflow input "patternMismatch" default does not match the required pattern.',
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: 'Workflow input "tooSmall" default must be at least 0.',
+        }),
+        expect.objectContaining({
+          severity: "error",
+          message: 'Workflow input "tooLarge" default must be at most 10.',
+        }),
+      ]),
+    );
+  });
+
   it("parses bounded loop nodes and excludes loop step refs from external inputs", () => {
     const parsed = parseWorkflowScript(`
+export const inputs = {
+  task: { type: "string", required: true },
+}
+
 const delivery = await loop({
   id: "delivery_loop",
   label: "Delivery Loop",
@@ -176,7 +282,7 @@ Previous acceptance: {{acceptance}}\`,
     expect(parsed.nodes[0].loop?.steps[0].appendPrompt).toBe(
       "Iteration {{iteration}} feedback: {{acceptance}}",
     );
-    expect(parsed.externalInputs).toEqual(["task"]);
+    expect(parsed.requiredInputNames).toEqual(["task"]);
   });
 
   it("parses loop until finalStatus", () => {
@@ -251,6 +357,17 @@ const delivery = await loop({
 
   it("collects required agent and model template inputs without requiring defaults", () => {
     const parsed = parseWorkflowScript(`
+export const inputs = {
+  planner_agent: { type: "string", required: true },
+  planner_model: { type: "string", default: "gpt-5" },
+  task: { type: "string", required: true },
+  loop_agent: { type: "string", default: "local:codex" },
+  loop_model: { type: "string", required: true },
+  coder_model: { type: "string", default: "gpt-5.1" },
+  reviewer_agent: { type: "string", required: true },
+  reviewer_model: { type: "string", required: true },
+}
+
 const plan = await agent({
   id: "plan",
   agent: "{{planner_agent}}",
@@ -281,14 +398,14 @@ const delivery = await loop({
 `);
 
     expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
-    expect(parsed.externalInputs.sort()).toEqual([
+    expect(parsed.requiredInputNames.sort()).toEqual([
       "loop_model",
       "planner_agent",
       "reviewer_agent",
       "reviewer_model",
       "task",
     ]);
-    expect(parsed.optionalExternalInputs.sort()).toEqual([
+    expect(parsed.optionalInputNames.sort()).toEqual([
       "coder_model",
       "loop_agent",
       "planner_model",
@@ -383,6 +500,10 @@ const summary = await agent({
 
   it("parses workflow nodes inside phase callback blocks", () => {
     const parsed = parseWorkflowScript(`
+export const inputs = {
+  requirement: { type: "string", required: true },
+}
+
 phase("RD delivery and acceptance", () => {
   const delivery_loop = loop({
     id: "delivery_loop",
@@ -415,7 +536,7 @@ phase("RD delivery and acceptance", () => {
         label: "delivery_loop",
       },
     ]);
-    expect(parsed.externalInputs).toEqual(["requirement"]);
+    expect(parsed.requiredInputNames).toEqual(["requirement"]);
   });
 
   it("reports invalid loop configuration as validation errors", () => {
@@ -435,7 +556,7 @@ const broken = await loop({
     const parsed = assertWorkflowScriptValid(LOOP_RD_ACCEPTANCE_TEST_WORKFLOW);
 
     expect(parsed.meta.requiresCwd).toBe(true);
-    expect(parsed.externalInputs).toEqual(["requirement"]);
+    expect(parsed.requiredInputNames).toEqual(["requirement"]);
     expect(parsed.nodes[0].loop?.onMaxIterations).toBe("fail");
     expect(parsed.nodes.map((node) => [node.id, node.cwd])).toEqual([
       ["delivery_loop", "."],

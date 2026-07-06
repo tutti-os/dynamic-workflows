@@ -15,6 +15,42 @@ describe("runWorkflow", () => {
     runAgentMock.mockReset();
   });
 
+  it("normalizes schema defaults for direct workflow execution", async () => {
+    const calls: AgentRunInput[] = [];
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield {
+        type: "text_delta",
+        text: input.prompt,
+      };
+      yield {
+        type: "done",
+        status: "completed",
+        reason: "completed",
+      };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+export const inputs = {
+  maxRounds: { type: "number", default: 3 },
+  dryRun: { type: "boolean", default: false },
+}
+
+const first = await agent({ id: "first", prompt: "rounds={{maxRounds}} dryRun={{dryRun}}" })
+`,
+      agent: "local:codex",
+      cwd: process.cwd(),
+    })) {
+      // drain
+    }
+
+    expect(calls[0].prompt).toBe("rounds=3 dryRun=false");
+  });
+
   it("serializes nodes that share an agent session and resumes the session", async () => {
     const calls: AgentRunInput[] = [];
     let activeRuns = 0;
@@ -371,6 +407,16 @@ const delivery = await loop({
 
     for await (const _event of runWorkflow({
       script: `
+export const inputs = {
+  first_agent: { type: "string", default: "local:codex" },
+  first_model: { type: "string", default: "gpt-5" },
+  loop_agent: { type: "string", default: "local:claude-code" },
+  loop_model: { type: "string", default: "claude-sonnet-4" },
+  coder_agent: { type: "string", required: true },
+  coder_model: { type: "string", default: "gpt-5.1" },
+  reviewer_model: { type: "string", required: true },
+}
+
 const first = await agent({
   id: "first",
   agent: "{{first_agent:local:codex}}",
@@ -605,6 +651,10 @@ const second = await agent({ id: "second", cwd: "tools", session: { mode: "inher
     const events = [];
     for await (const event of runWorkflow({
       script: `
+export const inputs = {
+  task: { type: "string", required: true },
+}
+
 const delivery = await loop({
   id: "delivery",
   maxIterations: 3,

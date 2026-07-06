@@ -101,6 +101,51 @@ export type WorkflowMeta = {
   requiresCwd?: boolean;
 };
 
+export type WorkflowInputValue = string | number | boolean;
+
+export type WorkflowInputCommon = {
+  required?: boolean;
+  label?: string;
+  description?: string;
+};
+
+export type WorkflowStringInput = WorkflowInputCommon & {
+  type: "string";
+  default?: string;
+  placeholder?: string;
+  widget?: "text" | "textarea";
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+};
+
+export type WorkflowNumberInput = WorkflowInputCommon & {
+  type: "number";
+  default?: number;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
+export type WorkflowBooleanInput = WorkflowInputCommon & {
+  type: "boolean";
+  default?: boolean;
+};
+
+export type WorkflowEnumInput = WorkflowInputCommon & {
+  type: "enum";
+  default?: string;
+  options: string[];
+};
+
+export type WorkflowInputDefinition =
+  | WorkflowStringInput
+  | WorkflowNumberInput
+  | WorkflowBooleanInput
+  | WorkflowEnumInput;
+
+export type WorkflowInputSchema = Record<string, WorkflowInputDefinition>;
+
 export type WorkflowDiagnostic = {
   severity: "info" | "warning" | "error";
   message: string;
@@ -112,8 +157,9 @@ export type ParsedWorkflow = {
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   phases: WorkflowPhase[];
-  externalInputs: string[];
-  optionalExternalInputs: string[];
+  inputSchema: WorkflowInputSchema;
+  requiredInputNames: string[];
+  optionalInputNames: string[];
   diagnostics: WorkflowDiagnostic[];
   variableToNodeId: Record<string, string>;
 };
@@ -124,7 +170,7 @@ export type WorkflowRunRequest = {
   agent?: string;
   model?: string;
   cwd?: string;
-  inputs?: Record<string, string>;
+  inputs?: Record<string, WorkflowInputValue>;
   recovery?: WorkflowRunRecoveryState;
   onCheckpoint?: (checkpoint: WorkflowRunCheckpoint) => void | Promise<void>;
   signal?: AbortSignal;

@@ -41,3 +41,10 @@ export function workflowVersionNotFoundError(): AppError {
 export function workflowRunNotFoundError(): AppError {
   return new AppError("RUN_NOT_FOUND", "Run not found");
 }
+
+export function workflowInputsInvalidError(error: unknown): AppError {
+  return new AppError(
+    "WORKFLOW_INPUTS_INVALID",
+    error instanceof Error ? error.message : "Workflow inputs are invalid.",
+  );
+}

@@ -44,6 +44,7 @@ import {
   resolveSessionKey,
 } from "@/lib/workflow/session";
 import type {
+  WorkflowInputValue,
   WorkflowNode,
   WorkflowLoopRecoveryState,
   WorkflowRunEvent,
@@ -57,7 +58,7 @@ export type WorkflowRunJobOptions = {
   model?: string;
   cwd: string;
   executorKind: string;
-  inputs: Record<string, string>;
+  inputs: Record<string, WorkflowInputValue>;
   input: unknown;
   recovery?: WorkflowRunRecoveryState;
   initialSummary?: WorkflowRunSummary;
@@ -483,7 +484,7 @@ function safeResolveWorkflowCwdFrom(
   }
 }
 
-function readRunInputs(value: unknown): Record<string, string> {
+function readRunInputs(value: unknown): Record<string, WorkflowInputValue> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
@@ -493,7 +494,11 @@ function readRunInputs(value: unknown): Record<string, string> {
   }
   return Object.fromEntries(
     Object.entries(maybeInputs).flatMap(([key, inputValue]) =>
-      typeof inputValue === "string" ? [[key, inputValue]] : [],
+      typeof inputValue === "string" ||
+      typeof inputValue === "number" ||
+      typeof inputValue === "boolean"
+        ? [[key, inputValue]]
+        : [],
     ),
   );
 }

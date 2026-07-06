@@ -20,6 +20,11 @@ import {
 } from "@/components/workflow/WorkflowRunSelectors";
 import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
 import type { AgentTargetOption } from "@/lib/agents/types";
+import type {
+  WorkflowInputDefinition,
+  WorkflowInputSchema,
+  WorkflowInputValue,
+} from "@/lib/workflow/types";
 
 type RunInputsDialogProps = {
   open: boolean;
@@ -29,9 +34,10 @@ type RunInputsDialogProps = {
   modelOptions: string[];
   cwd: string;
   requiresCwd: boolean;
+  inputSchema: WorkflowInputSchema;
   workflowInputNames: string[];
   optionalWorkflowInputNames: string[];
-  runInputValues: Record<string, string>;
+  runInputValues: Record<string, WorkflowInputValue>;
   missingRunInputNames: string[];
   missingCwd: boolean;
   isRunning: boolean;
@@ -39,7 +45,7 @@ type RunInputsDialogProps = {
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
-  onRunInputChange: (name: string, value: string) => void;
+  onRunInputChange: (name: string, value: WorkflowInputValue) => void;
   onRun: () => void;
 };
 
@@ -47,9 +53,8 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
   const requiredWorkflowInputNames = props.workflowInputNames.filter(
     (name) => !props.optionalWorkflowInputNames.includes(name),
   );
-  const filledRunInputCount = requiredWorkflowInputNames.filter((name) =>
-    props.runInputValues[name]?.trim(),
-  ).length;
+  const filledRunInputCount =
+    requiredWorkflowInputNames.length - props.missingRunInputNames.length;
   const inputStatusLabel =
     requiredWorkflowInputNames.length > 0
       ? `${filledRunInputCount}/${requiredWorkflowInputNames.length}`
@@ -154,23 +159,28 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
               </div>
               {props.workflowInputNames.map((name) => {
                 const fieldId = `run-dialog-input-${name}`;
+                const definition = props.inputSchema[name];
                 const isMissing = props.missingRunInputNames.includes(name);
                 const isOptional = props.optionalWorkflowInputNames.includes(name);
                 return (
                   <div className="field" key={name}>
                     <label htmlFor={fieldId}>
-                      {name}
+                      {definition?.label ?? name}
                       {isOptional ? <Badge variant="default">optional</Badge> : null}
                     </label>
-                    <Textarea
-                      id={fieldId}
-                      rows={name === "bug" ? 4 : 2}
-                      value={props.runInputValues[name] ?? ""}
-                      aria-invalid={isMissing}
-                      onChange={(event) =>
-                        props.onRunInputChange(name, event.target.value)
-                      }
-                    />
+                    {renderWorkflowInputControl({
+                      id: fieldId,
+                      name,
+                      definition,
+                      value: props.runInputValues[name],
+                      isMissing,
+                      onChange: props.onRunInputChange,
+                    })}
+                    {definition?.description ? (
+                      <span className="run-dialog-input-description">
+                        {definition.description}
+                      </span>
+                    ) : null}
                   </div>
                 );
               })}
@@ -199,5 +209,89 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function renderWorkflowInputControl(input: {
+  id: string;
+  name: string;
+  definition: WorkflowInputDefinition | undefined;
+  value: WorkflowInputValue | undefined;
+  isMissing: boolean;
+  onChange: (name: string, value: WorkflowInputValue) => void;
+}) {
+  const definition = input.definition;
+  if (!definition || definition.type === "string") {
+    const stringDefinition =
+      definition?.type === "string" ? definition : undefined;
+    if (stringDefinition?.widget === "text") {
+      return (
+        <Input
+          id={input.id}
+          value={String(input.value ?? "")}
+          placeholder={stringDefinition.placeholder}
+          aria-invalid={input.isMissing}
+          onChange={(event) => input.onChange(input.name, event.target.value)}
+        />
+      );
+    }
+    return (
+      <Textarea
+        id={input.id}
+        rows={stringDefinition?.widget === "textarea" ? 4 : 2}
+        value={String(input.value ?? "")}
+        placeholder={stringDefinition?.placeholder}
+        aria-invalid={input.isMissing}
+        onChange={(event) => input.onChange(input.name, event.target.value)}
+      />
+    );
+  }
+
+  if (definition.type === "number") {
+    return (
+      <Input
+        id={input.id}
+        type="number"
+        min={definition.min}
+        max={definition.max}
+        step={definition.step}
+        value={String(input.value ?? "")}
+        aria-invalid={input.isMissing}
+        onChange={(event) => input.onChange(input.name, event.target.value)}
+      />
+    );
+  }
+
+  if (definition.type === "boolean") {
+    return (
+      <label className="run-dialog-checkbox-field">
+        <input
+          id={input.id}
+          type="checkbox"
+          checked={input.value === true}
+          onChange={(event) => input.onChange(input.name, event.target.checked)}
+        />
+        <span>{definition.description ?? definition.label ?? input.name}</span>
+      </label>
+    );
+  }
+
+  return (
+    <select
+      id={input.id}
+      className="control-select"
+      value={String(input.value ?? "")}
+      aria-invalid={input.isMissing}
+      onChange={(event) => input.onChange(input.name, event.target.value)}
+    >
+      {definition.required && definition.default === undefined ? (
+        <option value="">Select {definition.label ?? input.name}</option>
+      ) : null}
+      {definition.options.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
   );
 }

@@ -52,6 +52,9 @@ describe("dynamic workflows CLI", () => {
 
     const detail = createWorkflowFromScript(`
 export const meta = { name: "Requirement", description: "Requirement" }
+export const inputs = {
+  requirement: { type: "string", required: true, label: "Requirement" },
+}
 const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
 `);
 

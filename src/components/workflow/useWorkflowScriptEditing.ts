@@ -5,6 +5,7 @@ import {
 } from "@/lib/workflow/script-patch";
 import { parseWorkflowScript } from "@/components/workflow/workflowApiService";
 import type {
+  WorkflowInputSchema,
   ParsedWorkflow,
   WorkflowDiagnostic,
   WorkflowLoopStep,
@@ -15,8 +16,9 @@ const EMPTY_PARSED: ParsedWorkflow = {
   nodes: [],
   edges: [],
   phases: [],
-  externalInputs: [],
-  optionalExternalInputs: [],
+  inputSchema: {},
+  requiredInputNames: [],
+  optionalInputNames: [],
   diagnostics: [],
   variableToNodeId: {},
 };
@@ -39,6 +41,7 @@ export function useWorkflowScriptEditing(input: {
   diagnosticWarningCount: number;
   hasParseErrors: boolean;
   isDirty: boolean;
+  inputSchema: WorkflowInputSchema;
   workflowInputNames: string[];
   optionalWorkflowInputNames: string[];
   acceptSavedScript: (nextScript: string) => void;
@@ -277,8 +280,9 @@ export function useWorkflowScriptEditing(input: {
     diagnosticWarningCount,
     hasParseErrors,
     isDirty,
-    workflowInputNames: parsed.externalInputs,
-    optionalWorkflowInputNames: parsed.optionalExternalInputs,
+    inputSchema: parsed.inputSchema,
+    workflowInputNames: parsed.requiredInputNames,
+    optionalWorkflowInputNames: parsed.optionalInputNames,
     acceptSavedScript,
     setScriptFromEditor,
     resetScriptChanges,

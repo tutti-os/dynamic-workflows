@@ -4,6 +4,8 @@ import type {
   ParsedWorkflow,
   WorkflowDiagnostic,
   WorkflowEdge,
+  WorkflowInputDefinition,
+  WorkflowInputSchema,
   WorkflowInputBinding,
   WorkflowLoopUntil,
   WorkflowLoopSpec,
@@ -13,6 +15,10 @@ import type {
   WorkflowPhase,
   WorkflowSessionSpec,
 } from "./types";
+import {
+  listOptionalInputNames,
+  listRequiredInputNames,
+} from "./input-schema";
 import {
   extractTemplateRefs,
   validateRuntimeOptionTemplate,
@@ -100,8 +106,9 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
       nodes: [],
       edges: [],
       phases: [],
-      externalInputs: [],
-      optionalExternalInputs: [],
+      inputSchema: {},
+      requiredInputNames: [],
+      optionalInputNames: [],
       diagnostics: [
         parseErrorToDiagnostic(error),
       ],
@@ -112,6 +119,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   state.diagnostics.push(...readRecoveredParserErrors(ast));
 
   const meta = readMeta(ast) ?? DEFAULT_META;
+  const inputSchema = readInputSchema(ast, state);
   const body = getProgramBody(ast);
 
   for (const statement of body) {
@@ -121,15 +129,16 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   addDuplicateNodeIdDiagnostics(state);
   addRuntimeOptionDiagnostics(state);
   connectTemplateRefs(state);
-  const externalInputs = collectExternalInputs(state);
+  addInputSchemaReferenceDiagnostics(state, inputSchema);
 
   return {
     meta,
     nodes: state.nodes,
     edges: state.edges,
     phases: state.phases,
-    externalInputs: externalInputs.required,
-    optionalExternalInputs: externalInputs.optional,
+    inputSchema,
+    requiredInputNames: listRequiredInputNames(inputSchema),
+    optionalInputNames: listOptionalInputNames(inputSchema),
     diagnostics: state.diagnostics,
     variableToNodeId: state.variableToNodeId,
   };
@@ -700,12 +709,12 @@ function validateRuntimeOptionField(input: {
   }
 }
 
-function collectExternalInputs(state: ParserState): {
-  required: string[];
-  optional: string[];
-} {
-  const requiredRefs = new Set<string>();
-  const optionalRefs = new Set<string>();
+function addInputSchemaReferenceDiagnostics(
+  state: ParserState,
+  inputSchema: WorkflowInputSchema,
+): void {
+  const declaredInputs = new Set(Object.keys(inputSchema));
+  const usedInputs = new Set<string>();
 
   for (const node of state.nodes) {
     for (const ref of node.templateRefs) {
@@ -716,26 +725,41 @@ function collectExternalInputs(state: ParserState): {
       if (boundInput?.sourceNodeId) {
         continue;
       }
-      requiredRefs.add(ref);
+      if (declaredInputs.has(ref)) {
+        usedInputs.add(ref);
+        continue;
+      }
+      state.diagnostics.push({
+        severity: "error",
+        message: `Workflow input "${ref}" is used in a template but is not declared in export const inputs.`,
+        range: node.promptRange ?? node.sourceRange,
+      });
     }
     const runtimeOptionRefs = collectRuntimeOptionRefs(node);
-    for (const ref of runtimeOptionRefs.required) {
-      if (!isReservedTemplateRef(ref)) {
-        requiredRefs.add(ref);
-        optionalRefs.delete(ref);
+    for (const ref of [...runtimeOptionRefs.required, ...runtimeOptionRefs.optional]) {
+      if (isReservedTemplateRef(ref) || declaredInputs.has(ref)) {
+        if (declaredInputs.has(ref)) {
+          usedInputs.add(ref);
+        }
+        continue;
       }
-    }
-    for (const ref of runtimeOptionRefs.optional) {
-      if (!isReservedTemplateRef(ref) && !requiredRefs.has(ref)) {
-        optionalRefs.add(ref);
-      }
+      state.diagnostics.push({
+        severity: "error",
+        message: `Runtime option input "${ref}" is not declared in export const inputs.`,
+        range: node.sourceRange,
+      });
     }
   }
 
-  return {
-    required: [...requiredRefs],
-    optional: [...optionalRefs],
-  };
+  for (const name of declaredInputs) {
+    if (usedInputs.has(name)) {
+      continue;
+    }
+    state.diagnostics.push({
+      severity: "warning",
+      message: `Workflow input "${name}" is declared but not used by any template or runtime option.`,
+    });
+  }
 }
 
 function collectRuntimeOptionRefs(node: WorkflowNode): {
@@ -823,33 +847,476 @@ function addNodeToCurrentPhase(nodeId: string, state: ParserState): void {
 }
 
 function readMeta(ast: AnyNode): WorkflowMeta | undefined {
-  const body = getProgramBody(ast);
-  for (const statement of body) {
-    if (statement.type !== "ExportNamedDeclaration") {
+  const value = readExportedConstValue(ast, "meta");
+  if (!value || value.type !== "ObjectExpression") {
+    return undefined;
+  }
+  return {
+    name: readObjectString(value, "name") ?? DEFAULT_META.name,
+    description:
+      readObjectString(value, "description") ?? DEFAULT_META.description,
+    ...(readObjectBoolean(value, "requiresCwd")
+      ? { requiresCwd: true }
+      : {}),
+  };
+}
+
+function readInputSchema(ast: AnyNode, state: ParserState): WorkflowInputSchema {
+  const value = readExportedConstValue(ast, "inputs");
+  if (!value) {
+    return {};
+  }
+  if (value.type !== "ObjectExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "export const inputs must be an object literal.",
+      range: toRange(value),
+    });
+    return {};
+  }
+
+  const properties = (value.properties as AnyNode[] | undefined) ?? [];
+  const schema: WorkflowInputSchema = {};
+  for (const property of properties) {
+    if (property.type !== "ObjectProperty") {
+      state.diagnostics.push({
+        severity: "error",
+        message: "Workflow inputs only support object properties.",
+        range: toRange(property),
+      });
       continue;
     }
-    const declaration = statement.declaration as AnyNode | undefined;
-    if (declaration?.type !== "VariableDeclaration") {
+    const name = readKeyName(property.key as AnyNode);
+    const definitionObject = property.value as AnyNode | undefined;
+    if (!name) {
+      state.diagnostics.push({
+        severity: "error",
+        message: "Workflow input names must be identifiers or string keys.",
+        range: toRange(property),
+      });
       continue;
     }
-    const declarations = declaration.declarations as AnyNode[] | undefined;
-    const metaDeclaration = declarations?.find(
-      (item) => readIdentifierName(item.id as AnyNode) === "meta",
+    if (!definitionObject || definitionObject.type !== "ObjectExpression") {
+      state.diagnostics.push({
+        severity: "error",
+        message: `Workflow input "${name}" must be an object literal.`,
+        range: toRange(property),
+      });
+      continue;
+    }
+    const definition = readInputDefinition(name, definitionObject, state);
+    if (definition) {
+      schema[name] = definition;
+    }
+  }
+  return schema;
+}
+
+function readInputDefinition(
+  name: string,
+  objectExpression: AnyNode,
+  state: ParserState,
+): WorkflowInputDefinition | undefined {
+  const type = readObjectString(objectExpression, "type");
+  const common = {
+    ...(readOptionalObjectBoolean(objectExpression, "required", state, name) === true
+      ? { required: true }
+      : {}),
+    ...readOptionalStringProperty(objectExpression, "label", state, name),
+    ...readOptionalStringProperty(objectExpression, "description", state, name),
+  };
+
+  if (!type) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${name}" requires type.`,
+      range: readObjectPropertyValueRange(objectExpression, "type") ??
+        toRange(objectExpression),
+    });
+    return undefined;
+  }
+
+  if (type === "string") {
+    addUnknownInputDefinitionFieldDiagnostics(
+      objectExpression,
+      name,
+      [
+        "type",
+        "required",
+        "label",
+        "description",
+        "default",
+        "placeholder",
+        "widget",
+        "minLength",
+        "maxLength",
+        "pattern",
+      ],
+      state,
     );
-    const value = metaDeclaration?.init as AnyNode | undefined;
-    if (!value || value.type !== "ObjectExpression") {
-      continue;
-    }
+    const definition: WorkflowInputDefinition = {
+      type,
+      ...common,
+      ...readOptionalStringProperty(objectExpression, "default", state, name),
+      ...readOptionalStringProperty(objectExpression, "placeholder", state, name),
+      ...readStringWidgetProperty(objectExpression, state, name),
+      ...readOptionalNumberProperty(objectExpression, "minLength", state, name),
+      ...readOptionalNumberProperty(objectExpression, "maxLength", state, name),
+      ...readPatternProperty(objectExpression, state, name),
+    };
+    addStringInputConstraintDiagnostics(definition, objectExpression, name, state);
+    return definition;
+  }
+
+  if (type === "number") {
+    addUnknownInputDefinitionFieldDiagnostics(
+      objectExpression,
+      name,
+      ["type", "required", "label", "description", "default", "min", "max", "step"],
+      state,
+    );
+    const definition: WorkflowInputDefinition = {
+      type,
+      ...common,
+      ...readOptionalNumberProperty(objectExpression, "default", state, name),
+      ...readOptionalNumberProperty(objectExpression, "min", state, name),
+      ...readOptionalNumberProperty(objectExpression, "max", state, name),
+      ...readOptionalNumberProperty(objectExpression, "step", state, name),
+    };
+    addNumberInputConstraintDiagnostics(definition, objectExpression, name, state);
+    return definition;
+  }
+
+  if (type === "boolean") {
+    addUnknownInputDefinitionFieldDiagnostics(
+      objectExpression,
+      name,
+      ["type", "required", "label", "description", "default"],
+      state,
+    );
     return {
-      name: readObjectString(value, "name") ?? DEFAULT_META.name,
-      description:
-        readObjectString(value, "description") ?? DEFAULT_META.description,
-      ...(readObjectBoolean(value, "requiresCwd")
-        ? { requiresCwd: true }
-        : {}),
+      type,
+      ...common,
+      ...readOptionalBooleanProperty(objectExpression, "default", state, name),
     };
   }
+
+  if (type === "enum") {
+    addUnknownInputDefinitionFieldDiagnostics(
+      objectExpression,
+      name,
+      ["type", "required", "label", "description", "default", "options"],
+      state,
+    );
+    const options = readStringArrayProperty(objectExpression, "options", state, name);
+    const defaultValue = readObjectString(objectExpression, "default");
+    if (defaultValue !== undefined && !options.includes(defaultValue)) {
+      state.diagnostics.push({
+        severity: "error",
+        message: `Workflow input "${name}" default must be one of its options.`,
+        range: readObjectPropertyValueRange(objectExpression, "default"),
+      });
+    }
+    return {
+      type,
+      ...common,
+      options,
+      ...(defaultValue !== undefined ? { default: defaultValue } : {}),
+    };
+  }
+
+  state.diagnostics.push({
+    severity: "error",
+    message: `Workflow input "${name}" type must be "string", "number", "boolean", or "enum".`,
+    range: readObjectPropertyValueRange(objectExpression, "type"),
+  });
   return undefined;
+}
+
+function addUnknownInputDefinitionFieldDiagnostics(
+  objectExpression: AnyNode,
+  inputName: string,
+  allowedFields: string[],
+  state: ParserState,
+): void {
+  const allowed = new Set(allowedFields);
+  const properties = (objectExpression.properties as AnyNode[] | undefined) ?? [];
+  for (const property of properties) {
+    if (property.type !== "ObjectProperty") {
+      continue;
+    }
+    const key = readKeyName(property.key as AnyNode);
+    if (!key || allowed.has(key)) {
+      continue;
+    }
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" has unsupported field "${key}".`,
+      range: toRange(property.key as AnyNode),
+    });
+  }
+}
+
+function addStringInputConstraintDiagnostics(
+  definition: Extract<WorkflowInputDefinition, { type: "string" }>,
+  objectExpression: AnyNode,
+  inputName: string,
+  state: ParserState,
+): void {
+  if (
+    definition.minLength !== undefined &&
+    definition.maxLength !== undefined &&
+    definition.minLength > definition.maxLength
+  ) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" minLength must be at most maxLength.`,
+      range: readObjectPropertyValueRange(objectExpression, "maxLength"),
+    });
+  }
+
+  if (definition.default === undefined) {
+    return;
+  }
+
+  if (
+    definition.minLength !== undefined &&
+    definition.default.length < definition.minLength
+  ) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" default must be at least ${definition.minLength} characters.`,
+      range: readObjectPropertyValueRange(objectExpression, "default"),
+    });
+  }
+  if (
+    definition.maxLength !== undefined &&
+    definition.default.length > definition.maxLength
+  ) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" default must be at most ${definition.maxLength} characters.`,
+      range: readObjectPropertyValueRange(objectExpression, "default"),
+    });
+  }
+  if (definition.pattern !== undefined) {
+    try {
+      const pattern = new RegExp(definition.pattern);
+      if (!pattern.test(definition.default)) {
+        state.diagnostics.push({
+          severity: "error",
+          message: `Workflow input "${inputName}" default does not match the required pattern.`,
+          range: readObjectPropertyValueRange(objectExpression, "default"),
+        });
+      }
+    } catch {
+      // readPatternProperty already reports invalid regex syntax.
+    }
+  }
+}
+
+function addNumberInputConstraintDiagnostics(
+  definition: Extract<WorkflowInputDefinition, { type: "number" }>,
+  objectExpression: AnyNode,
+  inputName: string,
+  state: ParserState,
+): void {
+  if (
+    definition.min !== undefined &&
+    definition.max !== undefined &&
+    definition.min > definition.max
+  ) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" min must be at most max.`,
+      range: readObjectPropertyValueRange(objectExpression, "max"),
+    });
+  }
+
+  if (definition.default === undefined) {
+    return;
+  }
+
+  if (definition.min !== undefined && definition.default < definition.min) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" default must be at least ${definition.min}.`,
+      range: readObjectPropertyValueRange(objectExpression, "default"),
+    });
+  }
+  if (definition.max !== undefined && definition.default > definition.max) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" default must be at most ${definition.max}.`,
+      range: readObjectPropertyValueRange(objectExpression, "default"),
+    });
+  }
+}
+
+function readOptionalStringProperty(
+  objectExpression: AnyNode,
+  key: string,
+  state: ParserState,
+  inputName: string,
+): Record<string, string> {
+  const value = readObjectPropertyValue(objectExpression, key);
+  if (!value) {
+    return {};
+  }
+  const stringValue = readStringLike(value);
+  if (stringValue === undefined) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" ${key} must be a string.`,
+      range: toRange(value),
+    });
+    return {};
+  }
+  return { [key]: stringValue };
+}
+
+function readOptionalNumberProperty(
+  objectExpression: AnyNode,
+  key: string,
+  state: ParserState,
+  inputName: string,
+): Record<string, number> {
+  const value = readObjectPropertyValue(objectExpression, key);
+  if (!value) {
+    return {};
+  }
+  const numberValue = readNumberLike(value);
+  if (numberValue === undefined) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" ${key} must be a number.`,
+      range: toRange(value),
+    });
+    return {};
+  }
+  return { [key]: numberValue };
+}
+
+function readOptionalBooleanProperty(
+  objectExpression: AnyNode,
+  key: string,
+  state: ParserState,
+  inputName: string,
+): Record<string, boolean> {
+  const value = readObjectPropertyValue(objectExpression, key);
+  if (!value) {
+    return {};
+  }
+  if (value.type !== "BooleanLiteral" || typeof value.value !== "boolean") {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" ${key} must be a boolean.`,
+      range: toRange(value),
+    });
+    return {};
+  }
+  return { [key]: value.value as boolean };
+}
+
+function readOptionalObjectBoolean(
+  objectExpression: AnyNode,
+  key: string,
+  state: ParserState,
+  inputName: string,
+): boolean | undefined {
+  const value = readObjectPropertyValue(objectExpression, key);
+  if (!value) {
+    return undefined;
+  }
+  if (value.type !== "BooleanLiteral" || typeof value.value !== "boolean") {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" ${key} must be a boolean.`,
+      range: toRange(value),
+    });
+    return undefined;
+  }
+  return value.value as boolean;
+}
+
+function readStringWidgetProperty(
+  objectExpression: AnyNode,
+  state: ParserState,
+  inputName: string,
+): Partial<Extract<WorkflowInputDefinition, { type: "string" }>> {
+  const widget = readObjectString(objectExpression, "widget");
+  if (widget === undefined) {
+    return {};
+  }
+  if (widget !== "text" && widget !== "textarea") {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" widget must be "text" or "textarea".`,
+      range: readObjectPropertyValueRange(objectExpression, "widget"),
+    });
+    return {};
+  }
+  return { widget };
+}
+
+function readPatternProperty(
+  objectExpression: AnyNode,
+  state: ParserState,
+  inputName: string,
+): Partial<Extract<WorkflowInputDefinition, { type: "string" }>> {
+  const pattern = readObjectString(objectExpression, "pattern");
+  if (pattern === undefined) {
+    return {};
+  }
+  try {
+    new RegExp(pattern);
+  } catch {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" pattern must be a valid regular expression.`,
+      range: readObjectPropertyValueRange(objectExpression, "pattern"),
+    });
+  }
+  return { pattern };
+}
+
+function readStringArrayProperty(
+  objectExpression: AnyNode,
+  key: string,
+  state: ParserState,
+  inputName: string,
+): string[] {
+  const value = readObjectPropertyValue(objectExpression, key);
+  if (!value || value.type !== "ArrayExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" ${key} must be a string array.`,
+      range: readObjectPropertyValueRange(objectExpression, key) ??
+        toRange(objectExpression),
+    });
+    return [];
+  }
+  const elements = (value.elements as AnyNode[] | undefined) ?? [];
+  const strings = elements.flatMap((element) => {
+    const stringValue = readStringLike(element);
+    if (stringValue === undefined) {
+      state.diagnostics.push({
+        severity: "error",
+        message: `Workflow input "${inputName}" ${key} must contain only strings.`,
+        range: toRange(element),
+      });
+      return [];
+    }
+    return [stringValue];
+  });
+  if (strings.length === 0) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `Workflow input "${inputName}" ${key} must contain at least one option.`,
+      range: toRange(value),
+    });
+  }
+  return strings;
 }
 
 function readSessionSpec(
@@ -1056,9 +1523,7 @@ function readObjectNumber(
   key: string,
 ): number {
   const value = readObjectPropertyValue(objectExpression, key);
-  return value?.type === "NumericLiteral" && typeof value.value === "number"
-    ? value.value
-    : Number.NaN;
+  return readNumberLike(value) ?? Number.NaN;
 }
 
 function readObjectBoolean(
@@ -1092,6 +1557,30 @@ function readObjectPropertyValueRange(
   return toRange(readObjectPropertyValue(objectExpression, key));
 }
 
+function readExportedConstValue(
+  ast: AnyNode,
+  exportName: string,
+): AnyNode | undefined {
+  const body = getProgramBody(ast);
+  for (const statement of body) {
+    if (statement.type !== "ExportNamedDeclaration") {
+      continue;
+    }
+    const declaration = statement.declaration as AnyNode | undefined;
+    if (declaration?.type !== "VariableDeclaration") {
+      continue;
+    }
+    const declarations = declaration.declarations as AnyNode[] | undefined;
+    const found = declarations?.find(
+      (item) => readIdentifierName(item.id as AnyNode) === exportName,
+    );
+    if (found) {
+      return found.init as AnyNode | undefined;
+    }
+  }
+  return undefined;
+}
+
 function readStringLike(node: AnyNode | undefined): string | undefined {
   if (!node) {
     return undefined;
@@ -1109,6 +1598,27 @@ function readStringLike(node: AnyNode | undefined): string | undefined {
       const value = quasi.value as { cooked?: string; raw?: string } | undefined;
       return value?.cooked ?? value?.raw ?? "";
     }).join("");
+  }
+  return undefined;
+}
+
+function readNumberLike(node: AnyNode | undefined): number | undefined {
+  if (!node) {
+    return undefined;
+  }
+  if (node.type === "NumericLiteral" && typeof node.value === "number") {
+    return node.value;
+  }
+  if (node.type === "UnaryExpression") {
+    const operator = node.operator;
+    const argument = node.argument as AnyNode | undefined;
+    if (
+      (operator === "-" || operator === "+") &&
+      argument?.type === "NumericLiteral" &&
+      typeof argument.value === "number"
+    ) {
+      return operator === "-" ? -argument.value : argument.value;
+    }
   }
   return undefined;
 }

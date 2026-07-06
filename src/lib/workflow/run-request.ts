@@ -10,10 +10,15 @@ import {
 } from "@/lib/db/workflows/runs";
 import {
   workflowNotFoundError,
+  workflowInputsInvalidError,
   workflowRunNotFoundError,
   workflowVersionNotFoundError,
 } from "@/lib/api/app-error";
 import { resolveWorkflowCwd } from "@/lib/workflow/cwd";
+import {
+  normalizeWorkflowInputsForSchema,
+  readWorkflowInputsObject,
+} from "@/lib/workflow/input-schema";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
 import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
 import type { WorkflowRunJobOptions } from "@/lib/workflow/run-jobs";
@@ -54,8 +59,7 @@ export async function prepareCurrentWorkflowRun(input: {
 
   const script = body.script ?? requestedVersion.script;
   const parsed = assertWorkflowScriptValid(script);
-  const inputs = normalizeWorkflowInputs(body.inputs);
-  assertRequiredWorkflowInputs(parsed.externalInputs, inputs);
+  const inputs = normalizeRunInputs(parsed.inputSchema, body.inputs);
   assertRequiredWorkflowCwd(parsed, body.cwd);
   const cwd = resolveWorkflowCwd(body.cwd);
   const version =
@@ -109,9 +113,11 @@ export function prepareRetryWorkflowRun(input: {
   }
 
   const cwd = resolveWorkflowCwd(sourceRun.cwd ?? undefined);
-  const inputs = readRunInputs(sourceRun.input);
   const parsed = assertWorkflowScriptValid(version.script);
-  assertRequiredWorkflowInputs(parsed.externalInputs, inputs);
+  const inputs = normalizeRunInputs(
+    parsed.inputSchema,
+    readRunInputs(sourceRun.input),
+  );
   assertRequiredWorkflowCwd(parsed, sourceRun.cwd ?? undefined);
 
   return {
@@ -132,48 +138,23 @@ export function prepareRetryWorkflowRun(input: {
   };
 }
 
-function normalizeWorkflowInputs(value: unknown): Record<string, string> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  return readStringableRecord(value);
-}
-
-function readRunInputs(value: unknown): Record<string, string> {
+function readRunInputs(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
 
   const maybeInputs = (value as { inputs?: unknown }).inputs;
-  if (!maybeInputs || typeof maybeInputs !== "object" || Array.isArray(maybeInputs)) {
-    return {};
-  }
-
-  return readStringableRecord(maybeInputs);
+  return readWorkflowInputsObject(maybeInputs);
 }
 
-function readStringableRecord(value: object): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(value).flatMap(([key, inputValue]) => {
-      if (typeof inputValue === "string") {
-        return [[key, inputValue]];
-      }
-      if (typeof inputValue === "number" || typeof inputValue === "boolean") {
-        return [[key, String(inputValue)]];
-      }
-      return [];
-    }),
-  );
-}
-
-function assertRequiredWorkflowInputs(
-  requiredInputs: string[],
-  inputs: Record<string, string>,
+function normalizeRunInputs(
+  schema: Parameters<typeof normalizeWorkflowInputsForSchema>[0],
+  inputs: unknown,
 ) {
-  const missingInputs = requiredInputs.filter((name) => !inputs[name]?.trim());
-  if (missingInputs.length > 0) {
-    throw new Error(`Missing workflow input(s): ${missingInputs.join(", ")}`);
+  try {
+    return normalizeWorkflowInputsForSchema(schema, inputs);
+  } catch (error) {
+    throw workflowInputsInvalidError(error);
   }
 }
 

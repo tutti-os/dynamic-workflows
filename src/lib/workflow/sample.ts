@@ -69,6 +69,15 @@ export const LOOP_RD_ACCEPTANCE_TEST_WORKFLOW = `export const meta = {
   requiresCwd: true,
 };
 
+export const inputs = {
+  requirement: {
+    type: "string",
+    required: true,
+    label: "需求描述",
+    widget: "textarea",
+  },
+};
+
 phase("RD delivery and acceptance", () => {
   const delivery_loop = loop({
     id: "delivery_loop",

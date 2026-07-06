@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  WorkflowInputDefinition,
+  WorkflowInputSchema,
+  WorkflowInputValue,
+} from "@/lib/workflow/types";
 
 export function useWorkflowRunInputs(
+  inputSchema: WorkflowInputSchema,
   requiredWorkflowInputNames: string[],
   optionalWorkflowInputNames: string[] = [],
 ): {
   workflowInputNames: string[];
-  runInputValues: Record<string, string>;
+  runInputValues: Record<string, WorkflowInputValue>;
   missingRunInputNames: string[];
-  workflowInputPayload: Record<string, string>;
-  setRunInputValue: (name: string, value: string) => void;
+  workflowInputPayload: Record<string, WorkflowInputValue>;
+  setRunInputValue: (name: string, value: WorkflowInputValue) => void;
 } {
-  const [runInputValues, setRunInputValues] = useState<Record<string, string>>({});
+  const [runInputValues, setRunInputValues] = useState<
+    Record<string, WorkflowInputValue>
+  >({});
   const workflowInputNames = useMemo(
     () => [
       ...requiredWorkflowInputNames,
@@ -23,14 +31,19 @@ export function useWorkflowRunInputs(
 
   const missingRunInputNames = useMemo(
     () =>
-      requiredWorkflowInputNames.filter((name) => !runInputValues[name]?.trim()),
-    [requiredWorkflowInputNames, runInputValues],
+      requiredWorkflowInputNames.filter((name) =>
+        isMissingInputValue(inputSchema[name], runInputValues[name]),
+      ),
+    [inputSchema, requiredWorkflowInputNames, runInputValues],
   );
 
   const workflowInputPayload = useMemo(
     () =>
       Object.fromEntries(
-        workflowInputNames.map((name) => [name, runInputValues[name] ?? ""]),
+        workflowInputNames.flatMap((name) => {
+          const value = runInputValues[name];
+          return value === undefined ? [] : [[name, value]];
+        }),
       ),
     [runInputValues, workflowInputNames],
   );
@@ -38,16 +51,19 @@ export function useWorkflowRunInputs(
   useEffect(() => {
     setRunInputValues((values) => {
       const nextValues = Object.fromEntries(
-        workflowInputNames.map((name) => [name, values[name] ?? ""]),
+        workflowInputNames.map((name) => [
+          name,
+          values[name] ?? createDefaultInputValue(inputSchema[name]),
+        ]),
       );
       const hasSameKeys =
         Object.keys(values).length === workflowInputNames.length &&
         workflowInputNames.every((name) => values[name] === nextValues[name]);
       return hasSameKeys ? values : nextValues;
     });
-  }, [workflowInputNames]);
+  }, [inputSchema, workflowInputNames]);
 
-  const setRunInputValue = useCallback((name: string, value: string) => {
+  const setRunInputValue = useCallback((name: string, value: WorkflowInputValue) => {
     setRunInputValues((values) => ({ ...values, [name]: value }));
   }, []);
 
@@ -58,4 +74,35 @@ export function useWorkflowRunInputs(
     workflowInputPayload,
     setRunInputValue,
   };
+}
+
+function createDefaultInputValue(
+  definition: WorkflowInputDefinition | undefined,
+): WorkflowInputValue {
+  if (!definition) {
+    return "";
+  }
+  if (definition.default !== undefined) {
+    return definition.default;
+  }
+  if (definition.type === "boolean") {
+    return false;
+  }
+  return "";
+}
+
+function isMissingInputValue(
+  definition: WorkflowInputDefinition | undefined,
+  value: WorkflowInputValue | undefined,
+): boolean {
+  if (!definition) {
+    return false;
+  }
+  if (definition.type === "boolean") {
+    return value === undefined;
+  }
+  if (definition.type === "number") {
+    return value === undefined || value === "";
+  }
+  return value === undefined || (typeof value === "string" && !value.trim());
 }

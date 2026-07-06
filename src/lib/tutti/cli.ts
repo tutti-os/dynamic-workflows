@@ -22,8 +22,12 @@ import {
 import {
   readRunResult,
 } from "@/lib/workflow/run-state";
+import {
+  normalizeWorkflowInputsForSchema,
+  readWorkflowInputsObject,
+} from "@/lib/workflow/input-schema";
 import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
-import type { ParsedWorkflow } from "@/lib/workflow/types";
+import type { ParsedWorkflow, WorkflowInputValue } from "@/lib/workflow/types";
 import { summarizeWorkflow } from "@/lib/workflow/executor";
 import {
   resumeWorkflowRunJob,
@@ -293,7 +297,7 @@ async function runWorkflowForCli(input: {
   agent: string;
   model?: string;
   cwd?: string;
-  inputs: Record<string, string>;
+  inputs: Record<string, WorkflowInputValue>;
 }): Promise<{
   run: WorkflowRunRecord;
 }> {
@@ -321,7 +325,7 @@ async function runWorkflowForCli(input: {
   }
 
   const parsed = assertWorkflowScriptValid(version.script);
-  assertRequiredWorkflowInputs(parsed.externalInputs, input.inputs);
+  const inputs = normalizeCliWorkflowInputs(parsed, input.inputs);
   assertRequiredWorkflowCwd(parsed, input.cwd);
   const cwd = resolveWorkflowCwd(input.cwd);
   const run = startWorkflowRunJob({
@@ -331,9 +335,9 @@ async function runWorkflowForCli(input: {
     agent: input.agent,
     model: input.model,
     cwd,
-    inputs: input.inputs,
+    inputs,
     input: compactWorkflowRunInput({
-      inputs: input.inputs,
+      inputs,
       agent: input.agent,
       model: input.model,
       cwd,
@@ -348,10 +352,11 @@ async function runWorkflowForCli(input: {
 function parsedSummary(parsed: ParsedWorkflow) {
   return {
     meta: parsed.meta,
+    inputSchema: parsed.inputSchema,
+    requiredInputNames: parsed.requiredInputNames,
+    optionalInputNames: parsed.optionalInputNames,
     nodeCount: parsed.nodes.length,
     phaseCount: parsed.phases.length,
-    externalInputs: parsed.externalInputs,
-    optionalExternalInputs: parsed.optionalExternalInputs,
     nodes: parsed.nodes.map((node) => ({
       id: node.id,
       kind: node.kind,
@@ -385,7 +390,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
   };
 }
 
-function readWorkflowInputs(input: CliInput): Record<string, string> {
+function readWorkflowInputs(input: CliInput): Record<string, WorkflowInputValue> {
   const rawInputs =
     readOptionalString(input, ["inputs", "inputs-json", "inputsJson"]) ??
     undefined;
@@ -410,28 +415,19 @@ function readWorkflowInputs(input: CliInput): Record<string, string> {
     throw new CliHttpError("invalid_input", "inputs must be a JSON object.", 400);
   }
 
-  return Object.fromEntries(
-    Object.entries(parsed).flatMap(([key, value]) => {
-      if (typeof value === "string") {
-        return [[key, value]];
-      }
-      if (typeof value === "number" || typeof value === "boolean") {
-        return [[key, String(value)]];
-      }
-      return [];
-    }),
-  );
+  return readWorkflowInputsObject(parsed);
 }
 
-function assertRequiredWorkflowInputs(
-  requiredInputs: string[],
-  inputs: Record<string, string>,
-) {
-  const missingInputs = requiredInputs.filter((name) => !inputs[name]?.trim());
-  if (missingInputs.length > 0) {
+function normalizeCliWorkflowInputs(
+  parsed: ParsedWorkflow,
+  inputs: Record<string, WorkflowInputValue>,
+): Record<string, WorkflowInputValue> {
+  try {
+    return normalizeWorkflowInputsForSchema(parsed.inputSchema, inputs);
+  } catch (error) {
     throw new CliHttpError(
-      "missing_workflow_inputs",
-      `Missing workflow input(s): ${missingInputs.join(", ")}`,
+      "invalid_workflow_inputs",
+      error instanceof Error ? error.message : "Invalid workflow inputs.",
       400,
     );
   }

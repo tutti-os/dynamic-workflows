@@ -5,6 +5,10 @@ import type {
   WorkflowVersionRecord,
 } from "@/lib/db/workflows/types";
 import type { AgentTargetOption } from "@/lib/agents/types";
+import type {
+  WorkflowInputSchema,
+  WorkflowInputValue,
+} from "@/lib/workflow/types";
 
 export function WorkflowWorkbenchDialogs(props: {
   runInputsOpen: boolean;
@@ -17,9 +21,10 @@ export function WorkflowWorkbenchDialogs(props: {
   modelOptions: string[];
   cwd: string;
   requiresCwd: boolean;
+  inputSchema: WorkflowInputSchema;
   workflowInputNames: string[];
   optionalWorkflowInputNames: string[];
-  runInputValues: Record<string, string>;
+  runInputValues: Record<string, WorkflowInputValue>;
   missingRunInputNames: string[];
   missingCwd: boolean;
   isRunning: boolean;
@@ -34,7 +39,7 @@ export function WorkflowWorkbenchDialogs(props: {
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
-  onRunInputChange: (name: string, value: string) => void;
+  onRunInputChange: (name: string, value: WorkflowInputValue) => void;
   onRun: () => void;
   onMetadataNameChange: (value: string) => void;
   onMetadataDescriptionChange: (value: string) => void;
@@ -53,6 +58,7 @@ export function WorkflowWorkbenchDialogs(props: {
         modelOptions={props.modelOptions}
         cwd={props.cwd}
         requiresCwd={props.requiresCwd}
+        inputSchema={props.inputSchema}
         workflowInputNames={props.workflowInputNames}
         optionalWorkflowInputNames={props.optionalWorkflowInputNames}
         runInputValues={props.runInputValues}

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
 import { resolveWorkflowCwd, resolveWorkflowCwdFrom } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
+import { normalizeWorkflowInputsForSchema } from "./input-schema";
 import { formatLoopUntil, matchesLoopUntil } from "./loop-until";
 import { resolveLoopStepRunContext } from "./loop-runtime";
 import { assertWorkflowScriptValid } from "./parser";
@@ -12,6 +13,7 @@ import {
 import { renderPrompt, renderTemplate, renderValueTemplate } from "./templates";
 import type {
   ParsedWorkflow,
+  WorkflowInputValue,
   WorkflowLoopRecoveryState,
   WorkflowLoopStep,
   WorkflowNode,
@@ -27,9 +29,14 @@ export async function* runWorkflow(
   const runId = request.runId ?? randomUUID();
   const parsed = assertWorkflowScriptValid(request.script);
   assertRequiredWorkflowCwd(parsed, request.cwd);
+  const inputs = normalizeWorkflowInputsForSchema(
+    parsed.inputSchema,
+    request.inputs,
+  );
   const normalizedRequest = {
     ...request,
     cwd: resolveWorkflowCwd(request.cwd),
+    inputs,
   };
   const { executableNodes } = createWorkflowExecutionPlan(parsed);
   const previousSessionNodeIds = createPreviousSessionNodeIds(executableNodes);
@@ -628,7 +635,7 @@ async function* runLoopAgentStep(input: {
   defaultModel?: string;
   defaultSession?: WorkflowSessionSpec;
   cwd: string;
-  workflowInputs?: Record<string, string>;
+  workflowInputs?: Record<string, WorkflowInputValue>;
   signal?: AbortSignal;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
@@ -764,7 +771,7 @@ function resolveEffectiveNodeCwd(
 function resolveRuntimeOption(
   template: string | undefined,
   fallback: string | undefined,
-  workflowInputs: Record<string, string> = {},
+  workflowInputs: Record<string, WorkflowInputValue> = {},
 ): string | undefined {
   if (template === undefined) {
     return fallback;
@@ -1015,7 +1022,7 @@ function renderLoopStepPrompt(input: {
   iteration: number;
   loopNode: WorkflowNode;
   workflowOutputs: Record<string, string>;
-  workflowInputs: Record<string, string> | undefined;
+  workflowInputs: Record<string, WorkflowInputValue> | undefined;
   workflowCwd: string;
   previousStepOutputs: Record<string, string>;
   currentStepOutputs: Record<string, string>;
@@ -1042,7 +1049,8 @@ function renderLoopStepPrompt(input: {
     if (sourceNodeId) {
       return input.workflowOutputs[sourceNodeId] ?? "";
     }
-    return input.workflowInputs?.[name] ?? "";
+    const value = input.workflowInputs?.[name];
+    return value === undefined ? "" : String(value);
   });
 }
 

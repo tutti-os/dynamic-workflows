@@ -1538,6 +1538,27 @@ a {
   border-color: color-mix(in srgb, var(--state-danger) 54%, var(--border-1));
 }
 
+.workflow-input-dialog input[aria-invalid="true"],
+.workflow-input-dialog select[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--state-danger) 54%, var(--border-1));
+}
+
+.run-dialog-checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.run-dialog-input-description {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .field {
   display: grid;
   gap: 8px;

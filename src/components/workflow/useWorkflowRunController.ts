@@ -14,6 +14,7 @@ import type {
 import type { RunDetail } from "@/lib/workflow/run-detail";
 import type {
   ParsedWorkflow,
+  WorkflowInputValue,
   WorkflowNodeStatus,
 } from "@/lib/workflow/types";
 import type { InspectorTab } from "@/components/workflow/WorkflowWorkbench.types";
@@ -38,7 +39,7 @@ export function useWorkflowRunController(input: {
   model: string;
   cwd: string;
   requiresCwd: boolean;
-  workflowInputPayload: Record<string, string>;
+  workflowInputPayload: Record<string, WorkflowInputValue>;
   missingRunInputNames: string[];
   missingCwd: boolean;
   loadWorkflow: (options?: { resetScript?: boolean }) => Promise<WorkflowDetail>;

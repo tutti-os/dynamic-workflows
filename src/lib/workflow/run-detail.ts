@@ -8,6 +8,7 @@ import {
 import { renderPrompt } from "@/lib/workflow/templates";
 import type {
   ParsedWorkflow,
+  WorkflowInputValue,
   WorkflowNode,
   WorkflowNodeSessionRef,
   WorkflowNodeStatus,
@@ -70,13 +71,13 @@ export function readRunParsed(log: string): ParsedWorkflow | undefined {
   return startedEvent?.parsed;
 }
 
-function readWorkflowRunInputs(input: unknown): Record<string, string> {
+function readWorkflowRunInputs(input: unknown): Record<string, WorkflowInputValue> {
   if (!input || typeof input !== "object") {
     return {};
   }
 
   const inputs = (input as { inputs?: unknown }).inputs;
-  return isStringRecord(inputs) ? inputs : {};
+  return isInputValueRecord(inputs) ? inputs : {};
 }
 
 function readRunResultFromEvents(events: WorkflowRunEvent[]) {
@@ -133,10 +134,15 @@ function formatCompactJson(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
+function isInputValueRecord(value: unknown): value is Record<string, WorkflowInputValue> {
   return (
     value !== null &&
     typeof value === "object" &&
-    Object.values(value).every((item) => typeof item === "string")
+    Object.values(value).every(
+      (item) =>
+        typeof item === "string" ||
+        typeof item === "number" ||
+        typeof item === "boolean",
+    )
   );
 }

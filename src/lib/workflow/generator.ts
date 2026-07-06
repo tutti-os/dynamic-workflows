@@ -48,6 +48,8 @@ ${input.description}
 Rules:
 - Return only JavaScript code, no markdown fences.
 - Use "export const meta = { name, description }"; add requiresCwd: true when the workflow must be launched from an explicit project directory.
+- Declare every run-provided value with "export const inputs = { name: { type, required, label } }"; supported types are "string", "number", "boolean", and "enum".
+- Any {{name}} prompt reference that is not an upstream node variable, loop step id, iteration, or workflow.* value must be declared in export const inputs.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
@@ -259,6 +261,8 @@ ${diagnostics}
 Rules:
 - Return only JavaScript code, no markdown fences.
 - Use "export const meta = { name, description }"; add requiresCwd: true when the workflow must be launched from an explicit project directory.
+- Declare every run-provided value with "export const inputs = { name: { type, required, label } }"; supported types are "string", "number", "boolean", and "enum".
+- Any {{name}} prompt reference that is not an upstream node variable, loop step id, iteration, or workflow.* value must be declared in export const inputs.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".
@@ -308,6 +312,7 @@ Rules:
 - Return the complete updated JavaScript workflow script only, no markdown fences.
 - Preserve unrelated behavior and structure where possible.
 - Keep "export const meta = { name, description }"; update meta only when useful for the requested edit.
+- Keep or add "export const inputs = { ... }" for every run-provided value referenced by prompts or agent/model runtime option templates.
 - Use phase("...") to group work.
 - Use agent({ id, label, inputs, prompt }) for normal DAG steps, with optional session: { mode: "inherit", key: "name" } when multiple steps should reuse the same agent conversation.
 - A normal agent can include agent and model to override the run defaults; agent must be an agent target id such as "local:codex" or "local:claude-code".

@@ -1,4 +1,4 @@
-import type { WorkflowNode } from "./types";
+import type { WorkflowInputValue, WorkflowNode } from "./types";
 
 const TEMPLATE_REF_PATTERN =
   /\{\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\}\}/g;
@@ -122,7 +122,7 @@ export function validateRuntimeOptionTemplate(
 export function renderPrompt(
   node: WorkflowNode,
   outputs: Record<string, string>,
-  workflowInputs: Record<string, string> = {},
+  workflowInputs: Record<string, WorkflowInputValue> = {},
   context: { cwd?: string } = {},
 ): string {
   const bindings = new Map(
@@ -135,7 +135,7 @@ export function renderPrompt(
     }
     const sourceNodeId = bindings.get(name);
     if (!sourceNodeId) {
-      return workflowInputs[name] ?? "";
+      return stringifyTemplateValue(workflowInputs[name]);
     }
     return outputs[sourceNodeId] ?? "";
   });
@@ -152,18 +152,22 @@ export function renderTemplate(
 
 export function renderValueTemplate(
   template: string,
-  resolveValue: (name: string) => string | undefined,
+  resolveValue: (name: string) => WorkflowInputValue | undefined,
 ): string {
   return template.replace(
     VALUE_TEMPLATE_REF_PATTERN,
     (_match, name: string, defaultValue: string | undefined) => {
-      const value = resolveValue(name);
+      const value = stringifyTemplateValue(resolveValue(name));
       if (value?.trim()) {
         return value;
       }
       return defaultValue?.trim() ?? "";
     },
   );
+}
+
+function stringifyTemplateValue(value: WorkflowInputValue | undefined): string {
+  return value === undefined ? "" : String(value);
 }
 
 export function quoteTemplateLiteral(value: string): string {

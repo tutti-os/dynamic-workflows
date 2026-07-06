@@ -10,6 +10,7 @@ export type ApiErrorCode =
   | "WORKFLOW_VERSION_NOT_FOUND"
   | "RUN_NOT_FOUND"
   | "WORKFLOW_SCRIPT_INVALID"
+  | "WORKFLOW_INPUTS_INVALID"
   | "WORKFLOW_CWD_INVALID"
   | "WORKFLOW_GENERATION_FAILED"
   | "WORKFLOW_EDIT_FAILED"
@@ -47,6 +48,7 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   RUN_NOT_FOUND: "Run not found.",
   WORKFLOW_SCRIPT_INVALID:
     "The workflow script has syntax or workflow rule errors.",
+  WORKFLOW_INPUTS_INVALID: "Workflow inputs are invalid.",
   WORKFLOW_CWD_INVALID:
     "The working directory is invalid or outside the allowed workspace.",
   WORKFLOW_GENERATION_FAILED: "Workflow generation failed.",
