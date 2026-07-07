@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import {
   assertWorkflowScriptValid,
   parseWorkflowScript,
   WorkflowScriptSyntaxError,
 } from "./parser";
-import { LOOP_RD_ACCEPTANCE_TEST_WORKFLOW } from "./sample";
 
 const VALID_SCRIPT = `export const meta = {
   name: "repo_review",
@@ -553,7 +554,14 @@ const broken = await loop({
   });
 
   it("keeps the loop RD acceptance sample aligned with cwd protocol", () => {
-    const parsed = assertWorkflowScriptValid(LOOP_RD_ACCEPTANCE_TEST_WORKFLOW);
+    const script = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/lib/workflow/blueprints/loop-primitive-rd-acceptance-test-v1.workflow.js",
+      ),
+      "utf8",
+    );
+    const parsed = assertWorkflowScriptValid(script);
 
     expect(parsed.meta.requiresCwd).toBe(true);
     expect(parsed.requiredInputNames).toEqual(["requirement"]);

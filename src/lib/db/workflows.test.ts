@@ -75,6 +75,28 @@ describe("workflow version publishing", () => {
     expect(published.workflow.description).toBe("Edited workflow");
   });
 
+  it("records blueprint source metadata when creating from a script", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
+
+    const created = createWorkflowFromScript(INITIAL_SCRIPT, {
+      source: "blueprint",
+      note: "loop-primitive-rd-acceptance-test-v1",
+    });
+
+    expect(created.currentVersion).toEqual(
+      expect.objectContaining({
+        source: "blueprint",
+        note: "loop-primitive-rd-acceptance-test-v1",
+      }),
+    );
+  });
+
   it("creates retry edit jobs without mutating the failed job", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;

@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { Badge, WarningLinedIcon } from "@tutti-os/ui-system";
 import type { WorkflowDiagnostic } from "@/lib/workflow/types";
+import { formatWorkflowDiagnosticLocation } from "@/lib/workflow/validation";
 
 export function DiagnosticsPanel(props: {
   title?: string;
@@ -27,14 +28,17 @@ export function DiagnosticsPanel(props: {
       {props.message ? (
         <div className="diagnostic error">
           <WarningLinedIcon size={14} />
-          <span>{props.message}</span>
+          <span>
+            {props.message}
+            {primaryDiagnostic?.hint ? (
+              <small>{primaryDiagnostic.hint}</small>
+            ) : null}
+          </span>
           {primaryDiagnostic ? (
             <Badge variant="default">{primaryDiagnostic.severity}</Badge>
           ) : null}
-          {primaryDiagnostic?.range ? (
-            <Badge variant="muted">
-              {primaryDiagnostic.range.start}-{primaryDiagnostic.range.end}
-            </Badge>
+          {primaryDiagnostic ? (
+            <DiagnosticLocationBadge diagnostic={primaryDiagnostic} />
           ) : null}
         </div>
       ) : null}
@@ -44,15 +48,22 @@ export function DiagnosticsPanel(props: {
           key={`${diagnostic.message}-${index}`}
         >
           <WarningLinedIcon size={14} />
-          <span>{diagnostic.message}</span>
+          <span>
+            {diagnostic.message}
+            {diagnostic.hint ? <small>{diagnostic.hint}</small> : null}
+          </span>
           <Badge variant="default">{diagnostic.severity}</Badge>
-          {diagnostic.range ? (
-            <Badge variant="muted">
-              {diagnostic.range.start}-{diagnostic.range.end}
-            </Badge>
-          ) : null}
+          <DiagnosticLocationBadge diagnostic={diagnostic} />
         </div>
       ))}
     </div>
   );
+}
+
+function DiagnosticLocationBadge(props: { diagnostic: WorkflowDiagnostic }) {
+  const location = formatWorkflowDiagnosticLocation(props.diagnostic);
+  if (!location) {
+    return null;
+  }
+  return <Badge variant="muted">{location}</Badge>;
 }

@@ -79,7 +79,10 @@ describe("workflow JSON column schemas", () => {
       diagnostics: [
         {
           severity: "error",
+          code: "workflow.input.typeMissing",
           message: "Missing node id",
+          path: "inputs.requirement.type",
+          hint: "Add a type field.",
           range: { start: 1, end: 4 },
         },
       ],

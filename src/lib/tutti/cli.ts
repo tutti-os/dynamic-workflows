@@ -30,6 +30,10 @@ import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
 import type { ParsedWorkflow, WorkflowInputValue } from "@/lib/workflow/types";
 import { summarizeWorkflow } from "@/lib/workflow/executor";
 import {
+  hasWorkflowDiagnosticErrors,
+  summarizeWorkflowDiagnostics,
+} from "@/lib/workflow/validation";
+import {
   resumeWorkflowRunJob,
   startWorkflowRunJob,
 } from "@/lib/workflow/run-jobs";
@@ -224,13 +228,11 @@ function validateCommand(input: CliInput) {
   const script = readRequiredString(input, ["script"]);
   const parsed = parseWorkflowScript(script);
   const diagnostics = parsed.diagnostics;
-  const valid = !diagnostics.some(
-    (diagnostic) => diagnostic.severity === "error",
-  );
 
   return {
-    valid,
+    valid: !hasWorkflowDiagnosticErrors(diagnostics),
     ...parsedSummary(parsed),
+    diagnosticSummary: summarizeWorkflowDiagnostics(diagnostics),
     diagnostics,
     summary: summarizeWorkflow(parsed),
   };

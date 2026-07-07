@@ -148,8 +148,17 @@ export type WorkflowInputSchema = Record<string, WorkflowInputDefinition>;
 
 export type WorkflowDiagnostic = {
   severity: "info" | "warning" | "error";
+  code?: string;
   message: string;
+  path?: string;
+  hint?: string;
   range?: EditableRange;
+};
+
+export type WorkflowDiagnosticSummary = {
+  errorCount: number;
+  warningCount: number;
+  infoCount: number;
 };
 
 export type ParsedWorkflow = {

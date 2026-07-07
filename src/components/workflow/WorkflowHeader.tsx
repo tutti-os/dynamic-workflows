@@ -48,6 +48,10 @@ type WorkflowHeaderProps = {
 };
 
 export function WorkflowHeader(props: WorkflowHeaderProps) {
+  const blueprintSource = readBlueprintSource(
+    props.selectedVersion ?? props.detail.currentVersion,
+  );
+
   return (
     <header className="detail-topbar">
       <div className="detail-titlebar">
@@ -101,6 +105,17 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
             {props.requiresCwd ? (
               <Badge variant="default">requires cwd</Badge>
             ) : null}
+            {blueprintSource ? (
+              <>
+                <Badge variant="pending">blueprint</Badge>
+                <span
+                  className="detail-source"
+                  title={`Created from blueprint: ${blueprintSource}`}
+                >
+                  from {blueprintSource}
+                </span>
+              </>
+            ) : null}
             <span className="detail-description">
               {props.detail.workflow.description}
             </span>
@@ -134,4 +149,11 @@ export function WorkflowHeader(props: WorkflowHeaderProps) {
       />
     </header>
   );
+}
+
+function readBlueprintSource(version: WorkflowVersionRecord): string | undefined {
+  if (version.source !== "blueprint" && version.source !== "template") {
+    return undefined;
+  }
+  return version.note?.trim() || "built-in";
 }

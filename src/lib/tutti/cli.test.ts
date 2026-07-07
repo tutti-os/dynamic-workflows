@@ -29,6 +29,51 @@ afterEach(() => {
 });
 
 describe("dynamic workflows CLI", () => {
+  it("returns structured diagnostics from validate", async () => {
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+
+    const response = await handleDynamicWorkflowsCliRequest(["validate"], {
+      input: {
+        script: `
+export const inputs = {
+  requirement: { required: true },
+  unused: { type: "string" },
+}
+const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
+`,
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value).toMatchObject({
+      valid: false,
+      diagnosticSummary: {
+        errorCount: 2,
+        warningCount: 1,
+        infoCount: 0,
+      },
+      diagnostics: [
+        expect.objectContaining({
+          severity: "error",
+          code: "workflow.input.typeMissing",
+          path: "inputs.requirement.type",
+          hint: expect.stringContaining("Set type"),
+        }),
+        expect.objectContaining({
+          severity: "error",
+          code: "workflow.input.undeclared",
+          path: "inputs.requirement",
+        }),
+        expect.objectContaining({
+          severity: "warning",
+          code: "workflow.input.unused",
+          path: "inputs.unused",
+        }),
+      ],
+    });
+  });
+
   it("starts a run with inputs without persisting undefined metadata", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;

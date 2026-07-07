@@ -540,6 +540,356 @@ a {
   padding: 4px 24px 34px;
 }
 
+.blueprint-library {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  padding: 8px 24px 36px;
+}
+
+.blueprint-search {
+  position: relative;
+  display: flex;
+  width: min(320px, 100%);
+  align-items: center;
+}
+
+.blueprint-search svg {
+  position: absolute;
+  left: 11px;
+  z-index: 1;
+  color: var(--text-tertiary);
+}
+
+.blueprint-search input {
+  width: 100%;
+  border: 1px solid var(--border-1);
+  background: var(--background-fronted);
+  padding-left: 34px;
+}
+
+.blueprint-grid {
+  display: grid;
+  width: min(1260px, 100%);
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.blueprint-card {
+  min-height: 266px;
+  border-color: var(--border-1);
+  background: color-mix(in srgb, var(--background-fronted) 92%, transparent);
+}
+
+.blueprint-card-header {
+  gap: 8px;
+}
+
+.blueprint-card-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.blueprint-card-title-row [data-slot="card-title"] {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.blueprint-card-header p,
+.blueprint-card-body p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.blueprint-card-header p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.blueprint-card-body {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  align-content: start;
+  gap: 12px;
+  padding: 0 12px;
+}
+
+.blueprint-card-body p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.blueprint-tags {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.blueprint-card-footer {
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 0;
+  background: transparent;
+}
+
+.blueprint-card-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.blueprint-empty {
+  grid-column: 1 / -1;
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  border: 1px dashed var(--border-1);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.blueprint-skeleton {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.blueprint-detail-dialog {
+  width: min(1120px, calc(100vw - 32px));
+  max-width: min(1120px, calc(100vw - 32px));
+  max-height: min(860px, calc(100vh - 40px));
+}
+
+.blueprint-detail-body {
+  display: grid;
+  max-height: min(650px, calc(100vh - 220px));
+  gap: 14px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.blueprint-detail-loading {
+  display: flex;
+  min-height: 260px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.blueprint-detail-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.blueprint-detail-summary {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-fronted) 94%, transparent);
+  padding: 12px;
+}
+
+.blueprint-detail-summary p,
+.blueprint-detail-summary ul {
+  margin: 0;
+}
+
+.blueprint-detail-summary p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.blueprint-detail-summary ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.blueprint-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.blueprint-overview-panel {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-fronted) 94%, transparent);
+  padding: 12px;
+}
+
+.blueprint-overview-panel h4 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.blueprint-overview-panel p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.blueprint-overview-list {
+  display: grid;
+  gap: 8px;
+}
+
+.blueprint-overview-row {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border-1) 70%, transparent);
+  padding-top: 8px;
+}
+
+.blueprint-overview-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.blueprint-overview-row span {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.blueprint-overview-row small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.blueprint-overview-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.blueprint-overview-metric {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 2px;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.blueprint-overview-metric strong {
+  color: var(--foreground);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.blueprint-overview-metric span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.blueprint-overview-chips {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.blueprint-preview-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.blueprint-preview-header h3 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.blueprint-preview-header p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.blueprint-preview-tabs {
+  flex: 0 0 auto;
+  min-width: 156px;
+}
+
+.blueprint-graph-preview,
+.blueprint-script-preview {
+  min-height: 430px;
+  max-height: 430px;
+  overflow: hidden;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--background-fronted);
+}
+
+.blueprint-graph-preview {
+  background:
+    radial-gradient(var(--border-1) 0.8px, transparent 0.8px),
+    linear-gradient(180deg, var(--background-fronted), var(--background));
+  background-size:
+    18px 18px,
+    100% 100%;
+}
+
+.blueprint-script-preview {
+  margin: 0;
+  overflow: auto;
+  padding: 14px;
+  color: var(--text-primary);
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .section-heading {
   display: flex;
   width: min(1260px, 100%);
@@ -848,6 +1198,14 @@ a {
 .detail-description {
   overflow: hidden;
   min-width: 180px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-source {
+  overflow: hidden;
+  max-width: 240px;
+  color: var(--text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1352,9 +1710,16 @@ a {
 }
 
 .diagnostic > span {
+  display: grid;
+  gap: 3px;
   min-width: 160px;
   flex: 1 1 220px;
   overflow-wrap: anywhere;
+}
+
+.diagnostic small {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .diagnostic.warning {
@@ -1409,7 +1774,8 @@ a {
 .workflow-input-dialog,
 .workflow-details-dialog,
 .agent-edit-dialog,
-.import-dialog {
+.import-dialog,
+.blueprint-detail-dialog {
   animation: dialog-enter 150ms ease-out;
   transform-origin: center top;
 }
@@ -1959,6 +2325,16 @@ a {
     gap: 14px;
   }
 
+  .blueprint-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .blueprint-search,
+  .blueprint-card-actions,
+  .blueprint-card-actions > button {
+    width: 100%;
+  }
+
   .section-heading {
     align-items: start;
     flex-direction: column;
@@ -2030,5 +2406,25 @@ a {
 
   .run-facts {
     grid-template-columns: 1fr;
+  }
+
+  .blueprint-preview-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .blueprint-preview-tabs {
+    width: 100%;
+  }
+
+  .blueprint-overview-grid,
+  .blueprint-overview-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .blueprint-graph-preview,
+  .blueprint-script-preview {
+    min-height: 340px;
+    max-height: 340px;
   }
 }

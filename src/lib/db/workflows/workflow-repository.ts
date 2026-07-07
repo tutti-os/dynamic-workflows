@@ -156,7 +156,13 @@ export function getWorkflowDetail(workflowId: string): WorkflowDetail | null {
   };
 }
 
-export function createWorkflowFromScript(script: string): WorkflowDetail {
+export function createWorkflowFromScript(
+  script: string,
+  options: {
+    source?: string;
+    note?: string;
+  } = {},
+): WorkflowDetail {
   const parsed = assertWorkflowScriptValid(script);
   const now = new Date().toISOString();
   const workflowId = randomUUID();
@@ -201,9 +207,9 @@ export function createWorkflowFromScript(script: string): WorkflowDetail {
             column: "meta_json",
             id: versionId,
           }),
-          "import",
+          options.source ?? "import",
           null,
-          null,
+          options.note ?? null,
           now,
         );
     })();

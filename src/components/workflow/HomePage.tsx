@@ -7,6 +7,7 @@ import { useWorkflowHomeController } from "@/components/workflow/useWorkflowHome
 import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
 import { WorkflowGrid } from "@/components/workflow/WorkflowGrid";
 import { WorkflowIndexToolbar } from "@/components/workflow/WorkflowIndexToolbar";
+import { WorkflowBlueprintLibrary } from "@/components/workflow/WorkflowBlueprintLibrary";
 
 export function HomePage() {
   const {
@@ -89,6 +90,8 @@ export function HomePage() {
           onCreate={createWorkflow}
         />
       </section>
+
+      <WorkflowBlueprintLibrary />
 
       <section className="workflow-index">
         <div className="ornament-divider" aria-hidden="true">

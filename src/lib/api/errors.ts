@@ -8,6 +8,7 @@ export type ApiErrorCode =
   | "WORKFLOW_DESCRIPTION_TOO_LONG"
   | "WORKFLOW_NOT_FOUND"
   | "WORKFLOW_VERSION_NOT_FOUND"
+  | "WORKFLOW_BLUEPRINT_NOT_FOUND"
   | "RUN_NOT_FOUND"
   | "WORKFLOW_SCRIPT_INVALID"
   | "WORKFLOW_INPUTS_INVALID"
@@ -45,6 +46,7 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
     "Workflow description must be 500 characters or less.",
   WORKFLOW_NOT_FOUND: "Workflow not found.",
   WORKFLOW_VERSION_NOT_FOUND: "Workflow version not found.",
+  WORKFLOW_BLUEPRINT_NOT_FOUND: "Workflow blueprint not found.",
   RUN_NOT_FOUND: "Run not found.",
   WORKFLOW_SCRIPT_INVALID:
     "The workflow script has syntax or workflow rule errors.",

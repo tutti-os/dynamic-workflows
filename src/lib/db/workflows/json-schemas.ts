@@ -266,6 +266,15 @@ function isWorkflowDiagnostic(value: unknown): value is WorkflowDiagnostic {
   if (typeof value.message !== "string") {
     return false;
   }
+  if (value.code !== undefined && typeof value.code !== "string") {
+    return false;
+  }
+  if (value.path !== undefined && typeof value.path !== "string") {
+    return false;
+  }
+  if (value.hint !== undefined && typeof value.hint !== "string") {
+    return false;
+  }
   return value.range === undefined || isEditableRange(value.range);
 }
 

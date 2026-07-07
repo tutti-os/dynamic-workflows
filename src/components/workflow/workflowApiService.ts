@@ -15,6 +15,11 @@ import type {
   ParsedWorkflow,
   WorkflowRunEvent,
 } from "@/lib/workflow/types";
+import type {
+  WorkflowBlueprintDetail,
+  WorkflowBlueprintSearchResult,
+  WorkflowBlueprintSummary,
+} from "@/lib/workflow/blueprint-types";
 import type { AgentTargetOption } from "@/lib/agents/types";
 import {
   delay,
@@ -104,6 +109,59 @@ export async function listWorkflowSummaries(): Promise<WorkflowListItem[]> {
     "/api/workflows",
   );
   return data.workflows ?? [];
+}
+
+export async function listWorkflowBlueprints(): Promise<
+  WorkflowBlueprintSummary[]
+> {
+  const data = await apiJson<{ blueprints?: WorkflowBlueprintSummary[] }>(
+    "/api/workflow-blueprints",
+  );
+  return data.blueprints ?? [];
+}
+
+export async function searchWorkflowBlueprints(input: {
+  query?: string;
+  includeScript?: boolean;
+  limit?: number;
+}): Promise<WorkflowBlueprintSearchResult[]> {
+  const data = await apiJson<{ blueprints?: WorkflowBlueprintSearchResult[] }>(
+    "/api/workflow-blueprints/search",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  return data.blueprints ?? [];
+}
+
+export async function loadWorkflowBlueprint(
+  blueprintId: string,
+): Promise<WorkflowBlueprintDetail> {
+  const data = await apiJson<{ blueprint?: WorkflowBlueprintDetail }>(
+    `/api/workflow-blueprints/${blueprintId}`,
+    undefined,
+    "WORKFLOW_BLUEPRINT_NOT_FOUND",
+  );
+  if (!data.blueprint) {
+    throw new Error("Workflow blueprint not found");
+  }
+  return data.blueprint;
+}
+
+export async function instantiateWorkflowBlueprint(
+  blueprintId: string,
+): Promise<WorkflowDetail> {
+  const data = await apiJson<WorkflowDetail>(
+    `/api/workflow-blueprints/${blueprintId}/instantiate`,
+    { method: "POST" },
+    "WORKFLOW_IMPORT_FAILED",
+  );
+  if (!data.workflow) {
+    throw new Error("Workflow blueprint instantiation failed");
+  }
+  return data;
 }
 
 export async function createWorkflowFromPrompt(input: {
