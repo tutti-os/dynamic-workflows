@@ -100,11 +100,20 @@ export type AgentRuntimeEvent =
       resumeToken?: string;
     };
 
+export type AgentSessionStartInput = {
+  agent: string;
+  model?: string;
+  cwd: string;
+  prompt: string;
+};
+
 export type AgentRuntimeAdapter = {
   id: string;
   label: string;
   listTargets(): Promise<AgentTargetOption[]>;
   run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent>;
+  startSession?(input: AgentSessionStartInput): Promise<AgentSessionRef>;
   cancel?(runId: string): Promise<void>;
+  cancelSession?(agentSessionId: string): Promise<void>;
   openSession?(agentSessionId: string): Promise<void>;
 };

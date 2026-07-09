@@ -135,8 +135,8 @@
       "path": [
         "create"
       ],
-      "summary": "Generate and save a workflow",
-      "description": "Generate a workflow from a prompt, save it, and return the created workflow and script.",
+      "summary": "Launch a workflow authoring session",
+      "description": "Create a workflow and launch an authoring agent session from a prompt, returning immediately with the workflow id and session. Versions land whenever the session submits.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -213,6 +213,143 @@
         "kind": "http",
         "method": "POST",
         "path": "/tutti/cli/run"
+      }
+    },
+    {
+      "path": [
+        "blueprints",
+        "list"
+      ],
+      "summary": "List workflow blueprints",
+      "description": "List built-in workflow blueprint summaries (patterns, tags, use cases).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/blueprints/list"
+      }
+    },
+    {
+      "path": [
+        "blueprints",
+        "search"
+      ],
+      "summary": "Search workflow blueprints",
+      "description": "Search built-in workflow blueprints by keywords, category, tags, or cwd requirement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Keywords matched against title, description, tags, and pattern summary."
+          },
+          "category": {
+            "type": "string",
+            "description": "Filter by category: coding, review, planning, research, or ops."
+          },
+          "tags": {
+            "type": "string",
+            "description": "Comma-separated tag filter."
+          },
+          "requires-cwd": {
+            "type": "boolean",
+            "description": "Filter by whether the blueprint requires an explicit project directory."
+          },
+          "include-script": {
+            "type": "boolean",
+            "description": "Include full workflow scripts in the results."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of results. Defaults to 20."
+          }
+        }
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/blueprints/search"
+      }
+    },
+    {
+      "path": [
+        "blueprints",
+        "get"
+      ],
+      "summary": "Show one workflow blueprint",
+      "description": "Return one blueprint's metadata and optionally its full workflow script.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint-id": {
+            "type": "string",
+            "description": "Blueprint id to fetch."
+          },
+          "include-script": {
+            "type": "boolean",
+            "description": "Include the full workflow script."
+          }
+        },
+        "required": [
+          "blueprint-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/blueprints/get"
+      }
+    },
+    {
+      "path": [
+        "authoring",
+        "submit"
+      ],
+      "summary": "Submit an authored workflow script",
+      "description": "Save a script version for a workflow authoring job (create or edit). Validates the script; on accepted: false, fix the returned diagnostics and submit again. A session may submit multiple times; each accepted submit saves a new version.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job-id": {
+            "type": "string",
+            "description": "Authoring job id from the task prompt (generation or edit job)."
+          },
+          "file": {
+            "type": "string",
+            "description": "Script file path inside the authoring workspace (relative paths resolve against it)."
+          },
+          "script": {
+            "type": "string",
+            "description": "Inline workflow script source; alternative to file."
+          }
+        },
+        "required": [
+          "job-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/authoring/submit"
       }
     },
     {

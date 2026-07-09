@@ -372,6 +372,30 @@ export async function publishWorkflowVersion(input: {
   return data.detail;
 }
 
+export type WorkflowAuthoringSessionItem = {
+  id: string;
+  kind: "create" | "edit";
+  status: string;
+  agentSessionId: string | null;
+  agent: string | null;
+  model: string | null;
+  request: string;
+  createdVersionId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+};
+
+export async function listWorkflowAuthoringSessions(
+  workflowId: string,
+): Promise<WorkflowAuthoringSessionItem[]> {
+  const data = await apiJson<{ sessions?: WorkflowAuthoringSessionItem[] }>(
+    `/api/workflows/${workflowId}/authoring-sessions`,
+    undefined,
+    "WORKFLOW_EDIT_FAILED",
+  );
+  return data.sessions ?? [];
+}
+
 export async function listWorkflowAgentEdits(
   workflowId: string,
 ): Promise<WorkflowEditJobRecord[]> {

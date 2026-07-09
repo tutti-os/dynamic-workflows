@@ -118,7 +118,6 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     isDeletingWorkflow,
     isGeneratingWorkflow,
     isRetryingGeneration,
-    isAgentEditingWorkflow,
     isPublishingVersion,
     generationError,
     agentEditError,
@@ -308,7 +307,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         hasParseErrors={hasParseErrors}
         canRun={parsed.nodes.length > 0 && !hasParseErrors}
         viewingOldVersion={isViewingOldVersion}
-        agentEditing={isAgentEditingWorkflow || isAgentEditDialogOpen}
+        agentEditing={isAgentEditDialogOpen}
         publishingVersion={isPublishingVersion}
         duplicating={isDuplicatingWorkflow}
         deleting={isDeletingWorkflow}
@@ -369,6 +368,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
       />
 
       <WorkflowWorkbenchWorkspace
+        workflowId={workflowId}
         mainView={mainView}
         activeTab={activeTab}
         isRunPreview={isRunPreview}

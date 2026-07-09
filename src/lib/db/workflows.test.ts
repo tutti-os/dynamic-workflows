@@ -146,7 +146,7 @@ describe("workflow version publishing", () => {
     expect(retry.cwd).toBe(firstEdit.cwd);
   });
 
-  it("marks non-active running edit jobs stale for retry", async () => {
+  it("leaves running edit jobs with a live session untouched", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
     vi.resetModules();
@@ -157,6 +157,7 @@ describe("workflow version publishing", () => {
     const {
       createWorkflowEditJob,
       markWorkflowEditJobRunning,
+      updateWorkflowEditJobAgentSession,
     } = await import("./workflows/edit-jobs");
     const { ensureWorkflowEditStarted } = await import("@/lib/workflow/edit-jobs");
 
@@ -167,14 +168,19 @@ describe("workflow version publishing", () => {
       agent: "local:codex",
     });
     markWorkflowEditJobRunning(edit.id);
+    updateWorkflowEditJobAgentSession({
+      editId: edit.id,
+      agentSessionId: "agent-session-decoupled",
+    });
 
+    // Decoupled authoring: the session converses in AgentGUI and submits
+    // whenever ready, so a running edit with a session is a healthy resting
+    // state, not a stale job.
     const reconciled = ensureWorkflowEditStarted(edit.id);
 
-    expect(reconciled?.status).toBe("failed");
-    expect(reconciled?.error?.code).toBe("WORKFLOW_EDIT_STALE");
-    expect(reconciled?.error?.message).toBe(
-      "Workflow edit runner was interrupted. Retry this edit.",
-    );
+    expect(reconciled?.status).toBe("running");
+    expect(reconciled?.agentSessionId).toBe("agent-session-decoupled");
+    expect(reconciled?.error).toBeNull();
   });
 
   it("persists workflow run checkpoints by run and node", async () => {

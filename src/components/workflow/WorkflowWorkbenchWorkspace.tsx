@@ -29,6 +29,7 @@ import type {
 } from "@/components/workflow/WorkflowWorkbench.types";
 
 export function WorkflowWorkbenchWorkspace(props: {
+  workflowId: string;
   mainView: MainView;
   activeTab: InspectorTab;
   isRunPreview: boolean;
@@ -116,6 +117,7 @@ export function WorkflowWorkbenchWorkspace(props: {
       />
 
       <WorkflowInspectorPane
+        workflowId={props.workflowId}
         activeTab={props.activeTab}
         visibleRuns={props.visibleRuns}
         selectedRun={props.selectedRun}

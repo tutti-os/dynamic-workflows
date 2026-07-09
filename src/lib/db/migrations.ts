@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -44,6 +44,10 @@ export function migrateDb(database: Database.Database): void {
       if (currentVersion < 7) {
         applySchemaV7(database);
         recordSchemaMigration(database, 7);
+      }
+      if (currentVersion < 8) {
+        applySchemaV8(database);
+        recordSchemaMigration(database, 8);
       }
     })();
 }
@@ -224,5 +228,11 @@ function applySchemaV7(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_workflow_runs_resume_token
       ON workflow_runs(resume_token)
       WHERE resume_token IS NOT NULL;
+  `);
+}
+
+function applySchemaV8(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_generations ADD COLUMN agent_session_id TEXT;
   `);
 }

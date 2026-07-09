@@ -17,6 +17,7 @@ type NextopCliAdapterOptions = {
   includeMockTarget?: boolean;
   cliPath?: string;
   pollIntervalMs?: number;
+  waitTimeoutMs?: number;
   providerDetectionTimeoutMs?: number;
   providerModelsTimeoutMs?: number;
   commandDetector?: LocalCommandDetector;
@@ -93,9 +94,8 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 360_000;
 const DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS = 3_000;
 const DEFAULT_PROVIDER_MODELS_TIMEOUT_MS = 1_500;
 const DEFAULT_LOCAL_COMMAND_TIMEOUT_MS = 2_000;
-const POLL_SUMMARY_LIMIT = 100;
+const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const TAIL_SUMMARY_LIMIT = 50;
-const TERMINAL_SESSION_STATUSES = new Set(["completed", "failed", "canceled"]);
 
 type NextopAgentTargetSpec = {
   id: string;
@@ -145,6 +145,10 @@ export function createNextopCliAgentAdapter(
     options.pollIntervalMs ??
     readPositiveIntegerEnv("NEXTOP_POLL_INTERVAL_MS") ??
     DEFAULT_POLL_INTERVAL_MS;
+  const waitTimeoutMs =
+    options.waitTimeoutMs ??
+    readPositiveIntegerEnv("NEXTOP_WAIT_TIMEOUT_MS") ??
+    DEFAULT_WAIT_TIMEOUT_MS;
   const providerDetectionTimeoutMs =
     options.providerDetectionTimeoutMs ??
     readPositiveIntegerEnv("NEXTOP_PROVIDER_DETECTION_TIMEOUT_MS") ??
@@ -198,6 +202,45 @@ export function createNextopCliAgentAdapter(
       }
 
       return [...(await mockAdapter.listTargets()), ...targets];
+    },
+    async startSession(input: {
+      agent: string;
+      model?: string;
+      cwd: string;
+      prompt: string;
+    }): Promise<AgentSessionRef> {
+      const target = findNextopAgentTarget(input.agent);
+      if (!target) {
+        throw new Error(
+          `Unknown agent target "${input.agent}". Known agent targets: ${knownAgentTargetIds().join(", ")}.`,
+        );
+      }
+
+      const model =
+        input.model || (await resolveDefaultModel(target.provider, runner));
+      const startOutput = await runner([
+        "--json",
+        ...target.startPath,
+        "--model",
+        model,
+        "--prompt",
+        input.prompt,
+        "--cwd",
+        input.cwd,
+      ]);
+      const session = parseSessionFromOutput(startOutput);
+      return {
+        ...session,
+        agent: target.id,
+        model: session.model ?? model,
+      };
+    },
+    async cancelSession(agentSessionId: string): Promise<void> {
+      const trimmed = agentSessionId.trim();
+      if (!trimmed) {
+        return;
+      }
+      await cancelSession(trimmed, runner);
     },
     async *run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent> {
       console.info(
@@ -342,7 +385,6 @@ export function createNextopCliAgentAdapter(
               input.prompt,
               "--cwd",
               input.cwd,
-              "--visible",
             ],
             { signal: input.signal },
           );
@@ -361,6 +403,9 @@ export function createNextopCliAgentAdapter(
 
         let latestText = "";
 
+        // Turn completion is decided by `agent wait` reasons. Session-level
+        // status/turnLifecycle from session-summary is stale while a turn is
+        // active, so it must not be used as a terminal signal.
         while (true) {
           if (input.signal?.aborted) {
             await requestCancel();
@@ -368,63 +413,57 @@ export function createNextopCliAgentAdapter(
             return;
           }
 
-          const summaryOutput = await runner(
+          const waitOutput = await runner(
             [
               "--json",
               "agent",
-              "session-summary",
+              "wait",
               "--session-id",
               agentSessionId,
               "--after-version",
               String(latestVersion),
-              "--limit",
-              String(POLL_SUMMARY_LIMIT),
+              "--timeout-ms",
+              String(waitTimeoutMs),
             ],
             { signal: input.signal },
           );
-          const previousVersion = latestVersion;
-          const summary = parseSessionSummary(summaryOutput, initialSession);
-          latestVersion = Math.max(latestVersion, summary.latestVersion);
-          if (summary.hasMore && latestVersion <= previousVersion) {
-            throw new Error(
-              "Nextop CLI session-summary did not advance while hasMore is true.",
-            );
-          }
-          const nextText = latestAssistantText(summary.messages);
+          const wait = parseSessionSummary(waitOutput, initialSession);
+          const reason = readWaitReason(waitOutput);
+          latestVersion = Math.max(latestVersion, wait.latestVersion);
+          const nextText = latestAssistantText(wait.messages);
           if (nextText) {
             latestText = nextText;
           }
 
           yield sessionRefEvent(input, target.id, model, {
             ...initialSession,
-            ...summary.session,
+            ...wait.session,
             agentSessionId,
           });
 
-          const status = normalizeSessionStatus(summary.session.status);
-          if (status && TERMINAL_SESSION_STATUSES.has(status)) {
-            if (status === "completed") {
-              const finalText =
-                (await readLatestAssistantTextFromTail(
-                  agentSessionId,
-                  initialSession,
-                  runner,
-                  input.signal,
-                )) || latestText;
-              if (finalText) {
-                yield { type: "text_delta", text: finalText };
-              }
-              yield { type: "done", status: "completed", reason: "completed" };
-              return;
+          if (reason === "completed" || reason === "waiting_input") {
+            const finalText =
+              (await readLatestAssistantTextFromTail(
+                agentSessionId,
+                initialSession,
+                runner,
+                input.signal,
+              )) || latestText;
+            if (finalText) {
+              yield { type: "text_delta", text: finalText };
             }
+            yield { type: "done", status: "completed", reason: "completed" };
+            return;
+          }
 
-            if (status === "canceled") {
-              yield { type: "done", status: "canceled", reason: "cancelled" };
-              return;
-            }
+          if (reason === "canceled") {
+            yield { type: "done", status: "canceled", reason: "cancelled" };
+            return;
+          }
 
+          if (reason === "failed") {
             const message =
-              readOptionalString(summary.session.lastError) ??
+              readOptionalString(wait.session.lastError) ??
               "Nextop agent session failed.";
             yield {
               type: "error",
@@ -436,11 +475,13 @@ export function createNextopCliAgentAdapter(
             return;
           }
 
-          if (summary.hasMore) {
-            continue;
+          // ready / timeout / waiting / waiting_approval: the turn is still in
+          // flight (or blocked on an in-GUI approval); keep waiting. `agent
+          // wait` blocks server-side, so no extra delay is needed when it
+          // returned with fresh messages.
+          if (reason !== "ready" && !wait.hasMore) {
+            await delay(pollIntervalMs, input.signal);
           }
-
-          await delay(pollIntervalMs, input.signal);
         }
       } catch (error) {
         if (isAbortError(error) || input.signal?.aborted) {
@@ -619,6 +660,11 @@ export function parseSessionSummary(
     messages,
     session,
   };
+}
+
+export function readWaitReason(waitOutput: unknown): string | undefined {
+  const output = readRecord(waitOutput);
+  return readOptionalString(output?.reason);
 }
 
 export function latestAssistantText(messages: NextopMessage[]): string {

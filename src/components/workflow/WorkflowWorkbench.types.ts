@@ -8,4 +8,4 @@ export type FlowNodeData = {
 };
 
 export type MainView = "graph" | "script";
-export type InspectorTab = "edit" | "runs";
+export type InspectorTab = "edit" | "runs" | "authoring";

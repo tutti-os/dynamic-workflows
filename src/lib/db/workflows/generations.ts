@@ -54,9 +54,9 @@ export function createPendingWorkflowGeneration(input: {
         .prepare(
           `
           INSERT INTO workflow_generations (
-            id, workflow_id, prompt, agent, model, cwd, status,
+            id, workflow_id, prompt, agent, model, cwd, agent_session_id, status,
             generation_json, error_json, created_at, started_at, finished_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
         .run(
@@ -66,6 +66,7 @@ export function createPendingWorkflowGeneration(input: {
           input.agent ?? null,
           input.model ?? null,
           input.cwd ?? null,
+          null,
           "pending",
           null,
           null,
@@ -89,6 +90,23 @@ export function getWorkflowGeneration(
     .prepare("SELECT * FROM workflow_generations WHERE id = ?")
     .get(generationId) as GenerationRow | undefined;
   return row ? mapGeneration(row) : null;
+}
+
+export function listWorkflowGenerations(input: {
+  workflowId: string;
+  limit?: number;
+}): WorkflowGenerationRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT * FROM workflow_generations
+      WHERE workflow_id = ?
+      ORDER BY created_at DESC, rowid DESC
+      LIMIT ?
+    `,
+    )
+    .all(input.workflowId, input.limit ?? 20) as GenerationRow[];
+  return rows.map(mapGeneration);
 }
 
 export function getLatestWorkflowGeneration(
@@ -136,6 +154,26 @@ export function markWorkflowGenerationRunning(
   })();
 }
 
+export function updateWorkflowGenerationAgentSession(input: {
+  generationId: string;
+  agentSessionId: string;
+}): WorkflowGenerationRecord | null {
+  const database = getDb();
+  return database.transaction(() => {
+    database
+      .prepare(
+        `
+        UPDATE workflow_generations
+        SET agent_session_id = ?
+        WHERE id = ?
+      `,
+      )
+      .run(input.agentSessionId, input.generationId);
+
+    return getWorkflowGeneration(input.generationId);
+  })();
+}
+
 export function resetWorkflowGenerationForRetry(
   workflowId: string,
 ): WorkflowGenerationRecord | null {
@@ -153,6 +191,7 @@ export function resetWorkflowGenerationForRetry(
         SET status = 'pending',
           generation_json = NULL,
           error_json = NULL,
+          agent_session_id = NULL,
           started_at = NULL,
           finished_at = NULL
         WHERE id = ?

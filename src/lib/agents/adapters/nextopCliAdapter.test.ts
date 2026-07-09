@@ -170,11 +170,12 @@ describe("nextop cli adapter", () => {
     ).toBe("newest");
   });
 
-  it("streams session refs and final text from polling", async () => {
+  it("streams session refs and final text from waiting", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
         if (args.includes("start")) {
@@ -187,19 +188,22 @@ describe("nextop cli adapter", () => {
           };
         }
         if (args.includes("session-summary")) {
-          if (args.includes("--order")) {
-            return {
-              hasMore: false,
-              latestVersion: 0,
-              session: {
-                agentSessionId: "session-1",
-                provider: "codex",
-                status: "completed",
-              },
-              messages: [{ role: "assistant", text: "done", version: 2 }],
-            };
-          }
           return {
+            hasMore: false,
+            latestVersion: 0,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "completed",
+            },
+            messages: [{ role: "assistant", text: "done", version: 2 }],
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "completed",
+            timedOut: false,
+            hasMore: false,
             latestVersion: 2,
             session: {
               agentSessionId: "session-1",
@@ -234,7 +238,6 @@ describe("nextop cli adapter", () => {
       "scan",
       "--cwd",
       "/tmp/project",
-      "--visible",
     ]);
     expect(events).toContainEqual({
       type: "session_ref",
@@ -253,12 +256,12 @@ describe("nextop cli adapter", () => {
     });
   });
 
-  it("treats settled turn lifecycle as terminal when session status stays created", async () => {
+  it("completes on wait reason completed while session status stays created", async () => {
     const calls: string[][] = [];
-    let pollCount = 0;
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
         if (args.includes("start")) {
@@ -271,27 +274,6 @@ describe("nextop cli adapter", () => {
           };
         }
         if (args.includes("session-summary")) {
-          if (args.includes("--order")) {
-            return {
-              hasMore: false,
-              latestVersion: 0,
-              session: {
-                agentSessionId: "session-1",
-                provider: "codex",
-                status: "created",
-                turnLifecycle: {
-                  phase: "settled",
-                  outcome: "completed",
-                },
-              },
-              messages: [{ role: "assistant", text: "done", version: 154 }],
-            };
-          }
-
-          pollCount += 1;
-          if (pollCount > 1) {
-            throw new Error("session kept polling after turn settled");
-          }
           return {
             hasMore: false,
             latestVersion: 154,
@@ -304,7 +286,25 @@ describe("nextop cli adapter", () => {
                 outcome: "completed",
               },
             },
-            messages: [],
+            messages: [{ role: "assistant", text: "done", version: 154 }],
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "completed",
+            timedOut: false,
+            hasMore: false,
+            latestVersion: 154,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+              turnLifecycle: {
+                phase: "settled",
+                outcome: "completed",
+              },
+            },
+            messages: [{ role: "assistant", text: "done", version: 154 }],
           };
         }
         throw new Error(`unexpected call: ${args.join(" ")}`);
@@ -325,13 +325,13 @@ describe("nextop cli adapter", () => {
     expect(calls).toContainEqual([
       "--json",
       "agent",
-      "session-summary",
+      "wait",
       "--session-id",
       "session-1",
-      "--order",
-      "desc",
-      "--limit",
-      "50",
+      "--after-version",
+      "0",
+      "--timeout-ms",
+      "1000",
     ]);
     expect(events).toContainEqual({
       type: "session_ref",
@@ -342,6 +342,99 @@ describe("nextop cli adapter", () => {
         status: "completed",
       },
     });
+    expect(events).toContainEqual({ type: "text_delta", text: "done" });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
+  it("keeps waiting through ready and timeout reasons despite stale settled lifecycle", async () => {
+    const calls: string[][] = [];
+    let waitCount = 0;
+    // The daemon reports turnLifecycle settled/completed even while a turn is
+    // active, so only the wait reason may end the turn.
+    const staleSession = {
+      agentSessionId: "session-1",
+      provider: "codex",
+      status: "created",
+      turnLifecycle: {
+        activeTurnId: null,
+        phase: "settled",
+        outcome: "completed",
+      },
+    };
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
+      runner: async (args) => {
+        calls.push(args);
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+            },
+          };
+        }
+        if (args.includes("session-summary")) {
+          return {
+            hasMore: false,
+            latestVersion: 3,
+            session: staleSession,
+            messages: [{ role: "assistant", text: "done", version: 3 }],
+          };
+        }
+        if (args.includes("wait")) {
+          waitCount += 1;
+          if (waitCount === 1) {
+            return {
+              reason: "ready",
+              timedOut: false,
+              hasMore: false,
+              latestVersion: 1,
+              session: staleSession,
+              messages: [{ role: "user", text: "prompt", version: 1 }],
+            };
+          }
+          if (waitCount === 2) {
+            return {
+              reason: "timeout",
+              timedOut: true,
+              hasMore: false,
+              latestVersion: 1,
+              session: staleSession,
+              messages: [],
+            };
+          }
+          return {
+            reason: "completed",
+            timedOut: false,
+            hasMore: false,
+            latestVersion: 3,
+            session: staleSession,
+            messages: [{ role: "assistant", text: "done", version: 3 }],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:scan",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "scan",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(waitCount).toBe(3);
     expect(events).toContainEqual({ type: "text_delta", text: "done" });
     expect(events.at(-1)).toEqual({
       type: "done",
@@ -396,7 +489,12 @@ describe("nextop cli adapter", () => {
               messages: [{ role: "assistant", text: "second done", version: 6 }],
             };
           }
+        }
+        if (args.includes("wait")) {
           return {
+            reason: "completed",
+            timedOut: false,
+            hasMore: false,
             latestVersion: 6,
             session: {
               agentSessionId: "session-1",
@@ -442,13 +540,13 @@ describe("nextop cli adapter", () => {
     expect(calls).toContainEqual([
       "--json",
       "agent",
-      "session-summary",
+      "wait",
       "--session-id",
       "session-1",
       "--after-version",
       "4",
-      "--limit",
-      "100",
+      "--timeout-ms",
+      "30000",
     ]);
     expect(events).toContainEqual({ type: "text_delta", text: "second done" });
     expect(events.at(-1)).toEqual({
@@ -474,9 +572,11 @@ describe("nextop cli adapter", () => {
             },
           };
         }
-        if (args.includes("session-summary") && !args.includes("--order")) {
+        if (args.includes("wait")) {
           return {
-            hasMore: true,
+            reason: "completed",
+            timedOut: false,
+            hasMore: false,
             latestVersion: 120,
             session: {
               agentSessionId: "session-1",

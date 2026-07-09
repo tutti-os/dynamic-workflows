@@ -12,9 +12,7 @@ import {
   publishWorkflowVersion,
   requestWorkflowGeneration,
   saveWorkflowVersion,
-  startWorkflowAgentEdit,
   updateWorkflowMetadata,
-  watchWorkflowAgentEdit,
   watchWorkflowGeneration,
   readApiJsonError,
 } from "@/components/workflow/workflowApiService";
@@ -52,7 +50,6 @@ export function useWorkflowDocument(input: {
   isDeletingWorkflow: boolean;
   isGeneratingWorkflow: boolean;
   isRetryingGeneration: boolean;
-  isAgentEditingWorkflow: boolean;
   isPublishingVersion: boolean;
   generationError: string | undefined;
   agentEditError: string | undefined;
@@ -71,13 +68,6 @@ export function useWorkflowDocument(input: {
   duplicateCurrentWorkflow: () => Promise<void>;
   deleteCurrentWorkflow: () => Promise<void>;
   retryWorkflowGeneration: () => Promise<void>;
-  agentEditWorkflow: (input: {
-    instruction: string;
-    baseVersionId?: string;
-    agent?: string;
-    model?: string;
-    cwd?: string;
-  }) => Promise<void>;
   publishSelectedVersion: () => Promise<void>;
   exportSelectedVersion: () => void;
 } {
@@ -104,7 +94,6 @@ export function useWorkflowDocument(input: {
   const [isDuplicatingWorkflow, setIsDuplicatingWorkflow] = useState(false);
   const [isDeletingWorkflow, setIsDeletingWorkflow] = useState(false);
   const [isRetryingGeneration, setIsRetryingGeneration] = useState(false);
-  const [isAgentEditingWorkflow, setIsAgentEditingWorkflow] = useState(false);
   const [isPublishingVersion, setIsPublishingVersion] = useState(false);
   const [generationError, setGenerationError] = useState<string | undefined>();
   const [agentEditError, setAgentEditError] = useState<string | undefined>();
@@ -449,75 +438,6 @@ export function useWorkflowDocument(input: {
     }
   }
 
-  async function agentEditWorkflow(input: {
-    instruction: string;
-    baseVersionId?: string;
-    agent?: string;
-    model?: string;
-    cwd?: string;
-  }) {
-    const instruction = input.instruction.trim();
-    if (!instruction) {
-      setAgentEditError("Instruction is required.");
-      return;
-    }
-
-    setIsAgentEditingWorkflow(true);
-    setAgentEditError(undefined);
-    try {
-      const started = await startWorkflowAgentEdit({
-        workflowId,
-        instruction,
-        baseVersionId: input.baseVersionId,
-        agent: input.agent,
-        model: input.model,
-        cwd: input.cwd,
-      });
-      onLogEvent(`agent edit: started from ${input.baseVersionId?.slice(0, 8) ?? "current"}`);
-
-      const result = await watchWorkflowAgentEdit({
-        workflowId,
-        editId: started.id,
-        isMounted: () => mountedRef.current,
-      });
-      if (!result || !mountedRef.current) {
-        return;
-      }
-      const { edit, version } = result;
-      let createdVersion = version;
-      if (edit.status === "failed") {
-        throw new Error(edit.error?.message ?? "Workflow edit failed");
-      }
-      if (!createdVersion && edit.createdVersionId) {
-        const nextDetail = await loadWorkflow();
-        createdVersion =
-          nextDetail.versions.find((version) => version.id === edit.createdVersionId) ??
-          null;
-      }
-      if (!createdVersion) {
-        throw new Error("Workflow edit completed without a version");
-      }
-
-      const nextDetail = await loadWorkflow();
-      applyLoadedDetail(nextDetail);
-      setSelectedVersionId(createdVersion.id);
-      acceptSavedScript(createdVersion.script);
-      onVersionApplied();
-      onLogEvent(`agent edit: created v${createdVersion.version}`);
-    } catch (error) {
-      if (!mountedRef.current) {
-        return;
-      }
-      const apiError = readApiJsonError(error, "WORKFLOW_EDIT_FAILED");
-      setAgentEditError(apiError.message);
-      onLogEvent(`agent edit failed: ${apiError.message}`);
-    } finally {
-      if (mountedRef.current) {
-        setIsAgentEditingWorkflow(false);
-      }
-    }
-  }
-
   async function publishSelectedVersion() {
     if (!selectedVersion || !detail || selectedVersion.id === detail.currentVersion?.id) {
       return;
@@ -556,7 +476,6 @@ export function useWorkflowDocument(input: {
     isDeletingWorkflow,
     isGeneratingWorkflow,
     isRetryingGeneration,
-    isAgentEditingWorkflow,
     isPublishingVersion,
     generationError,
     agentEditError,
@@ -575,7 +494,6 @@ export function useWorkflowDocument(input: {
     duplicateCurrentWorkflow,
     deleteCurrentWorkflow,
     retryWorkflowGeneration,
-    agentEditWorkflow,
     publishSelectedVersion,
     exportSelectedVersion,
   };

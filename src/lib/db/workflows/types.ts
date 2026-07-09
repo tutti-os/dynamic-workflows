@@ -51,6 +51,7 @@ export type WorkflowGenerationRecord = {
   agent: string | null;
   model: string | null;
   cwd: string | null;
+  agentSessionId: string | null;
   status: WorkflowGenerationStatus;
   generation: unknown;
   error: WorkflowGenerationError | null;

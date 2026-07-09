@@ -112,8 +112,8 @@ function WorkflowCard(props: {
               variant={generationStatus === "failed" ? "destructive" : "pending"}
             >
               {generationStatus === "failed"
-                ? "generation failed"
-                : "generating"}
+                ? "authoring failed"
+                : "authoring"}
             </Badge>
           )}
           <span className="workflow-card-dot">·</span>

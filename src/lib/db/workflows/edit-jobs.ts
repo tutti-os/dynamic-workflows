@@ -280,16 +280,6 @@ export function cancelWorkflowEditJob(input: {
   })();
 }
 
-export function markWorkflowEditJobStale(editId: string): WorkflowEditJobRecord | null {
-  return failWorkflowEditJob({
-    editId,
-    error: {
-      code: "WORKFLOW_EDIT_STALE",
-      message: "Workflow edit runner was interrupted. Retry this edit.",
-    },
-  });
-}
-
 export function createWorkflowEditRetry(
   editId: string,
 ): WorkflowEditJobRecord {

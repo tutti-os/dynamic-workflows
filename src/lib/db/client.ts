@@ -26,3 +26,7 @@ export function getDb(): Database.Database {
 export function getRunLogPath(runId: string): string {
   return path.join(DATA_DIR, "runs", `${runId}.jsonl`);
 }
+
+export function getDataDir(): string {
+  return DATA_DIR;
+}

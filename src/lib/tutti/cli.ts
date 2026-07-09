@@ -13,7 +13,24 @@ import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
 import { getWorkflowCwdRoot, resolveWorkflowCwd } from "@/lib/workflow/cwd";
-import { generateWorkflowScriptWithRepair } from "@/lib/workflow/generator";
+import { createPendingWorkflowGeneration } from "@/lib/db/workflows/generations";
+import {
+  ensureWorkflowGenerationStarted,
+  waitForWorkflowGenerationLaunch,
+} from "@/lib/workflow/generation-jobs";
+import {
+  getWorkflowBlueprint,
+  listWorkflowBlueprints,
+  searchWorkflowBlueprints,
+} from "@/lib/workflow/blueprint-catalog";
+import {
+  WORKFLOW_BLUEPRINT_CATEGORIES,
+  isWorkflowBlueprintCategory,
+} from "@/lib/workflow/blueprint-contract";
+import {
+  AuthoringSubmitError,
+  submitAuthoringScript,
+} from "@/lib/workflow/authoring/submit";
 import {
   assertWorkflowScriptValid,
   parseWorkflowScript,
@@ -98,6 +115,14 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(await runCommand(input));
       case "resume":
         return cliJson(await resumeCommand(input));
+      case "blueprints/list":
+        return cliJson(blueprintsListCommand());
+      case "blueprints/search":
+        return cliJson(blueprintsSearchCommand(input));
+      case "blueprints/get":
+        return cliJson(blueprintsGetCommand(input));
+      case "authoring/submit":
+        return cliJson(authoringSubmitCommand(input));
       default:
         throw new CliHttpError(
           "unknown_command",
@@ -243,21 +268,113 @@ async function createCommand(input: CliInput) {
   const agent = readOptionalString(input, ["agent"]);
   const model = readOptionalString(input, ["model"]);
   const cwd = readOptionalString(input, ["cwd"]);
-  const generated = await generateWorkflowScriptWithRepair({
-    description: prompt,
-    agent,
-    model,
-    cwd,
-  });
-  const detail = createWorkflowFromScript(generated.script);
-  const parsed = assertWorkflowScriptValid(generated.script);
+
+  const pending = createPendingWorkflowGeneration({ prompt, agent, model, cwd });
+  ensureWorkflowGenerationStarted(pending.workflow.id);
+  // Decoupled authoring: wait only for the session launch. The workflow fills
+  // in whenever the authoring agent submits (possibly after clarification
+  // turns in AgentGUI); poll `show` to observe versions landing.
+  const generation = await waitForWorkflowGenerationLaunch(pending.workflow.id);
+  if (!generation || generation.status === "failed") {
+    throw new CliHttpError(
+      "workflow_generation_failed",
+      generation?.error?.message ?? "Workflow generation failed to launch.",
+      500,
+      generation?.error ?? undefined,
+    );
+  }
+
+  const detail = getWorkflowDetail(pending.workflow.id);
+  if (!detail) {
+    throw new CliHttpError("workflow_not_found", "Workflow not found.", 404);
+  }
 
   return {
     workflow: detail.workflow,
     currentVersion: detail.currentVersion,
-    generation: generated,
-    parsed: parsedSummary(parsed),
+    generation,
+    ...(detail.currentVersion
+      ? {
+          parsed: parsedSummary(
+            assertWorkflowScriptValid(detail.currentVersion.script),
+          ),
+        }
+      : {}),
   };
+}
+
+function blueprintsListCommand() {
+  const blueprints = listWorkflowBlueprints();
+  return {
+    blueprints,
+    count: blueprints.length,
+  };
+}
+
+function blueprintsSearchCommand(input: CliInput) {
+  const category = readOptionalString(input, ["category"]);
+  if (category && !isWorkflowBlueprintCategory(category)) {
+    throw new CliHttpError(
+      "invalid_input",
+      `category must be one of: ${WORKFLOW_BLUEPRINT_CATEGORIES.join(", ")}`,
+      400,
+    );
+  }
+
+  const tags = readOptionalString(input, ["tags"])
+    ?.split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const results = searchWorkflowBlueprints({
+    query: readOptionalString(input, ["query"]),
+    category: category && isWorkflowBlueprintCategory(category)
+      ? category
+      : undefined,
+    tags,
+    requiresCwd: readOptionalBoolean(input, ["requires-cwd", "requiresCwd"]),
+    includeScript:
+      readOptionalBoolean(input, ["include-script", "includeScript"]) ?? false,
+    limit: readOptionalInteger(input, ["limit"]),
+  });
+
+  return {
+    blueprints: results,
+    count: results.length,
+  };
+}
+
+function blueprintsGetCommand(input: CliInput) {
+  const blueprintId = readRequiredString(input, ["blueprint-id", "blueprintId"]);
+  const includeScript =
+    readOptionalBoolean(input, ["include-script", "includeScript"]) ?? false;
+  const blueprint = getWorkflowBlueprint(blueprintId);
+  if (!blueprint) {
+    throw new CliHttpError(
+      "workflow_blueprint_not_found",
+      "Workflow blueprint not found.",
+      404,
+    );
+  }
+
+  const { script, ...summary } = blueprint;
+  return {
+    blueprint: includeScript ? { ...summary, script } : summary,
+  };
+}
+
+function authoringSubmitCommand(input: CliInput) {
+  const jobId = readRequiredString(input, ["job-id", "jobId"]);
+  const file = readOptionalString(input, ["file"]);
+  const script = readOptionalString(input, ["script"]);
+
+  try {
+    return submitAuthoringScript({ jobId, file, script });
+  } catch (error) {
+    if (error instanceof AuthoringSubmitError) {
+      throw new CliHttpError(error.code, error.message, error.status);
+    }
+    throw error;
+  }
 }
 
 async function runCommand(input: CliInput) {

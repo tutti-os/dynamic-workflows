@@ -169,7 +169,10 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
         return;
       }
       if (!result.version) {
-        throw new Error("Workflow edit completed without a version");
+        // Decoupled authoring: the session may still be conversing; versions
+        // land whenever the agent submits.
+        setError(undefined);
+        return;
       }
       setCreatedVersion(result.version);
       setError(undefined);
@@ -335,6 +338,11 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
               {error}
             </div>
           ) : null}
+
+          <p className="agent-edit-hint">
+            Starting an edit launches an agent session. Track and reopen past
+            sessions from the workflow&rsquo;s Authoring tab.
+          </p>
         </div>
 
         <DialogFooter>

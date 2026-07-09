@@ -45,6 +45,7 @@ export type GenerationRow = {
   agent: string | null;
   model: string | null;
   cwd: string | null;
+  agent_session_id: string | null;
   status: WorkflowGenerationStatus;
   generation_json: string | null;
   error_json: string | null;
@@ -166,6 +167,7 @@ export function mapGeneration(row: GenerationRow): WorkflowGenerationRecord {
     agent: row.agent,
     model: row.model,
     cwd: row.cwd,
+    agentSessionId: row.agent_session_id,
     status: row.status,
     generation: row.generation_json
       ? parseJsonValueColumn(row.generation_json, {

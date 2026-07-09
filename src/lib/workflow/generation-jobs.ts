@@ -5,14 +5,21 @@ import {
   getWorkflowGeneration,
   markWorkflowGenerationRunning,
   resetWorkflowGenerationForRetry,
+  updateWorkflowGenerationAgentSession,
 } from "@/lib/db/workflows/generations";
 import type {
   WorkflowGenerationRecord,
 } from "@/lib/db/workflows/types";
 import type { ApiErrorCode } from "@/lib/api/errors";
+import { startAgentSession } from "@/lib/agents/runtime";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
-import { generateWorkflowScriptWithRepair } from "@/lib/workflow/generator";
-import { WorkflowScriptSyntaxError } from "@/lib/workflow/parser";
+import { buildCreateAuthoringPrompt } from "@/lib/workflow/authoring/prompts";
+import { prepareAuthoringWorkspace } from "@/lib/workflow/authoring/workspace";
+import {
+  assertWorkflowScriptValid,
+  WorkflowScriptSyntaxError,
+} from "@/lib/workflow/parser";
+import { SAMPLE_WORKFLOW } from "@/lib/workflow/sample";
 
 const activeGenerationJobs = new Map<string, Promise<void>>();
 
@@ -23,7 +30,10 @@ export function ensureWorkflowGenerationStarted(
   if (
     !generation ||
     generation.status === "completed" ||
-    generation.status === "failed"
+    generation.status === "failed" ||
+    // A running generation with a session is already decoupled: the session
+    // lives in AgentGUI and the workflow fills in whenever the agent submits.
+    (generation.status === "running" && generation.agentSessionId)
   ) {
     return generation;
   }
@@ -44,55 +54,106 @@ export function retryWorkflowGeneration(
   return getWorkflowGeneration(generation.id) ?? generation;
 }
 
+export async function waitForWorkflowGenerationLaunch(
+  workflowId: string,
+): Promise<WorkflowGenerationRecord | null> {
+  const generation = getLatestWorkflowGeneration(workflowId);
+  if (!generation) {
+    return null;
+  }
+
+  const active = activeGenerationJobs.get(generation.id);
+  if (active) {
+    await active;
+  }
+  return getWorkflowGeneration(generation.id);
+}
+
 function startGenerationJob(generationId: string) {
   if (activeGenerationJobs.has(generationId)) {
     return;
   }
 
-  const promise = runGenerationJob(generationId).finally(() => {
+  const promise = launchGenerationSession(generationId).finally(() => {
     activeGenerationJobs.delete(generationId);
   });
   activeGenerationJobs.set(generationId, promise);
 }
 
-async function runGenerationJob(generationId: string) {
+// Launch-only: start the authoring session and record it. The session runs
+// its own multi-turn conversation in AgentGUI; the workflow fills in whenever
+// the agent calls `authoring submit` (possibly multiple times).
+async function launchGenerationSession(generationId: string) {
   const generation = markWorkflowGenerationRunning(generationId);
   if (!generation) {
     return;
   }
 
   try {
-    const generated = await generateWorkflowScriptWithRepair({
-      description: generation.prompt,
-      agent: generation.agent ?? undefined,
-      model: generation.model ?? undefined,
-      cwd: generation.cwd ?? undefined,
-    });
+    if (!generation.agent || generation.agent === "mock") {
+      const script = personalizeSample(generation.prompt);
+      assertWorkflowScriptValid(script);
+      completeWorkflowGeneration({
+        generationId,
+        script,
+        generation: { source: "sample" },
+      });
+      return;
+    }
 
-    completeWorkflowGeneration({
+    const workspace = prepareAuthoringWorkspace({ jobId: generationId });
+    const session = await startAgentSession({
+      agent: generation.agent,
+      model: generation.model ?? undefined,
+      cwd: workspace.dir,
+      prompt: buildCreateAuthoringPrompt({
+        jobId: generationId,
+        description: generation.prompt,
+        userCwd: generation.cwd ?? undefined,
+      }),
+    });
+    updateWorkflowGenerationAgentSession({
       generationId,
-      script: generated.script,
-      generation: {
-        repaired: generated.repaired,
-        repairAttempts: generated.repairAttempts,
-      },
+      agentSessionId: session.agentSessionId,
     });
   } catch (error) {
-    failWorkflowGeneration({
-      generationId,
-      error: serializeGenerationError(error),
-    });
+    try {
+      failWorkflowGeneration({
+        generationId,
+        error: serializeGenerationError(error),
+      });
+    } catch {
+      // Never leave the job stuck in "running" because the error itself
+      // failed to persist.
+      failWorkflowGeneration({
+        generationId,
+        error: {
+          code: "WORKFLOW_GENERATION_FAILED",
+          message: error instanceof Error ? error.message : "Workflow generation failed",
+        },
+      });
+    }
   }
 }
 
+function personalizeSample(description: string): string {
+  if (!description.trim()) {
+    return SAMPLE_WORKFLOW;
+  }
+  return SAMPLE_WORKFLOW.replace(
+    'description: "Inspect a codebase with focused local agents and synthesize the results"',
+    `description: ${JSON.stringify(description.trim())}`,
+  );
+}
+
 function serializeGenerationError(error: unknown) {
-  const code = getGenerationErrorCode(error);
+  const diagnostics =
+    error instanceof WorkflowScriptSyntaxError ? error.diagnostics : undefined;
   return {
-    code,
+    code: getGenerationErrorCode(error),
     message:
       error instanceof Error ? error.message : "Workflow generation failed",
-    diagnostics:
-      error instanceof WorkflowScriptSyntaxError ? error.diagnostics : undefined,
+    ...(diagnostics ? { diagnostics } : {}),
   };
 }
 

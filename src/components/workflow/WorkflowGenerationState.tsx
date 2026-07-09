@@ -1,9 +1,11 @@
 import Link from "next/link";
+import { useCallback, useState } from "react";
 import {
   Badge,
   Button,
   DashboardIcon,
   FailedLinedIcon,
+  LaunchIcon,
   LoadingIcon,
   Spinner,
 } from "@tutti-os/ui-system";
@@ -11,6 +13,7 @@ import type {
   WorkflowDetail,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows/types";
+import { openWorkflowAgentSession } from "./workflowApiService";
 
 export function hasCurrentVersion(
   detail: WorkflowDetail,
@@ -27,8 +30,20 @@ export function WorkflowGenerationState(props: {
 }) {
   const generation = props.detail.generation;
   const failed = generation?.status === "failed";
+  const agentSessionId = generation?.agentSessionId ?? undefined;
   const errorMessage =
     props.generationError ?? generation?.error?.message ?? "Generation failed.";
+  const [openingSession, setOpeningSession] = useState(false);
+
+  const openSession = useCallback(() => {
+    if (!agentSessionId) {
+      return;
+    }
+    setOpeningSession(true);
+    void openWorkflowAgentSession(agentSessionId).finally(() => {
+      setOpeningSession(false);
+    });
+  }, [agentSessionId]);
 
   return (
     <main className="app-shell">
@@ -44,8 +59,15 @@ export function WorkflowGenerationState(props: {
               <h1>{props.detail.workflow.name}</h1>
             </div>
             <div className="detail-meta">
-              <Badge variant={failed ? "destructive" : "pending"}>
-                {failed ? "generation failed" : "generating"}
+              <Badge
+                className={failed ? undefined : "status-pulse"}
+                variant={failed ? "destructive" : "pending"}
+              >
+                {failed
+                  ? "session launch failed"
+                  : agentSessionId
+                    ? "authoring session active"
+                    : "launching session"}
               </Badge>
               <span className="detail-description">
                 {props.detail.workflow.description}
@@ -72,12 +94,16 @@ export function WorkflowGenerationState(props: {
           )}
           <div className="generation-status-copy">
             <h2>
-              {failed ? "Workflow generation failed" : "Generating workflow"}
+              {failed
+                ? "Authoring session failed to launch"
+                : "Authoring session in progress"}
             </h2>
             <p>
               {failed
                 ? errorMessage
-                : "The workflow detail is ready. The script is being generated and will open here when it finishes."}
+                : agentSessionId
+                  ? "The authoring agent is working in its own session. Open it to follow along or answer its questions; the workflow opens here as soon as the agent submits a script."
+                  : "Launching the authoring agent session..."}
             </p>
           </div>
           {failed ? (
@@ -91,6 +117,16 @@ export function WorkflowGenerationState(props: {
                 <LoadingIcon className="spin" data-icon="inline-start" />
               ) : null}
               Retry generation
+            </Button>
+          ) : agentSessionId ? (
+            <Button
+              className="generation-retry-button"
+              type="button"
+              disabled={openingSession}
+              onClick={openSession}
+            >
+              <LaunchIcon data-icon="inline-start" />
+              Open session
             </Button>
           ) : null}
         </div>

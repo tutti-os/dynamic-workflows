@@ -4,7 +4,6 @@ import {
   failWorkflowEditJob,
   getWorkflowEditJob,
   markWorkflowEditJobRunning,
-  markWorkflowEditJobStale,
   updateWorkflowEditJobAgentSession,
 } from "@/lib/db/workflows/edit-jobs";
 import {
@@ -14,10 +13,11 @@ import type {
   WorkflowEditJobRecord,
 } from "@/lib/db/workflows/types";
 import { workflowVersionNotFoundError } from "@/lib/api/app-error";
-import { cancelAgentRun } from "@/lib/agents/runtime";
+import { cancelAgentSession, startAgentSession } from "@/lib/agents/runtime";
 import type { ApiErrorCode } from "@/lib/api/errors";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
-import { editWorkflowScriptWithRepair } from "@/lib/workflow/generator";
+import { buildEditAuthoringPrompt } from "@/lib/workflow/authoring/prompts";
+import { prepareAuthoringWorkspace } from "@/lib/workflow/authoring/workspace";
 import { WorkflowScriptSyntaxError } from "@/lib/workflow/parser";
 
 const activeEditJobs = new Map<string, Promise<void>>();
@@ -34,13 +34,12 @@ export function ensureWorkflowEditStarted(
     !edit ||
     edit.status === "completed" ||
     edit.status === "failed" ||
-    edit.status === "canceled"
+    edit.status === "canceled" ||
+    // A running edit with a session is decoupled: the conversation lives in
+    // AgentGUI and versions land whenever the agent submits.
+    (edit.status === "running" && edit.agentSessionId)
   ) {
     return edit;
-  }
-
-  if (edit.status === "running") {
-    return activeEditJobs.has(edit.id) ? edit : markWorkflowEditJobStale(edit.id);
   }
 
   startEditJob(edit.id);
@@ -52,13 +51,26 @@ function startEditJob(editId: string) {
     return;
   }
 
-  const promise = runEditJob(editId).finally(() => {
+  const promise = launchEditSession(editId).finally(() => {
     activeEditJobs.delete(editId);
   });
   activeEditJobs.set(editId, promise);
 }
 
-async function runEditJob(editId: string) {
+export async function waitForWorkflowEditLaunch(
+  editId: string,
+): Promise<WorkflowEditJobRecord | null> {
+  const active = activeEditJobs.get(editId);
+  if (active) {
+    await active;
+  }
+  return getWorkflowEditJob(editId);
+}
+
+// Launch-only: start the authoring session with the current script
+// materialized in the workspace. Draft versions land whenever the agent
+// calls `authoring submit` (possibly multiple times).
+async function launchEditSession(editId: string) {
   const edit = markWorkflowEditJobRunning(editId);
   if (!edit) {
     return;
@@ -70,35 +82,50 @@ async function runEditJob(editId: string) {
       throw workflowVersionNotFoundError();
     }
 
-    const edited = await editWorkflowScriptWithRepair({
-      currentScript: baseVersion.script,
-      instruction: edit.instruction,
-      agent: edit.agent ?? undefined,
-      model: edit.model ?? undefined,
-      cwd: edit.cwd ?? undefined,
-      onEvent: (event) => {
-        if (event.type === "session_ref" && event.session.agentSessionId) {
-          updateWorkflowEditJobAgentSession({
-            editId,
-            agentSessionId: event.session.agentSessionId,
-          });
-        }
-      },
-    });
+    if (!edit.agent || edit.agent === "mock") {
+      completeWorkflowEditJob({
+        editId,
+        script: baseVersion.script,
+        result: { source: "unchanged-mock" },
+      });
+      return;
+    }
 
-    completeWorkflowEditJob({
+    const workspace = prepareAuthoringWorkspace({
+      jobId: editId,
+      currentScript: baseVersion.script,
+    });
+    const session = await startAgentSession({
+      agent: edit.agent,
+      model: edit.model ?? undefined,
+      cwd: workspace.dir,
+      prompt: buildEditAuthoringPrompt({
+        jobId: editId,
+        instruction: edit.instruction,
+        userCwd: edit.cwd ?? undefined,
+      }),
+    });
+    updateWorkflowEditJobAgentSession({
       editId,
-      script: edited.script,
-      result: {
-        repaired: edited.repaired,
-        repairAttempts: edited.repairAttempts,
-      },
+      agentSessionId: session.agentSessionId,
     });
   } catch (error) {
-    failWorkflowEditJob({
-      editId,
-      error: serializeEditError(error),
-    });
+    try {
+      failWorkflowEditJob({
+        editId,
+        error: serializeEditError(error),
+      });
+    } catch {
+      // Never leave the job stuck in "running" because the error itself
+      // failed to persist.
+      failWorkflowEditJob({
+        editId,
+        error: {
+          code: "WORKFLOW_EDIT_FAILED",
+          message: error instanceof Error ? error.message : "Workflow edit failed",
+        },
+      });
+    }
   }
 }
 
@@ -111,18 +138,20 @@ export async function cancelWorkflowEdit(editId: string): Promise<WorkflowEditJo
     return edit;
   }
 
-  await cancelAgentRun(editId);
+  if (edit.agentSessionId) {
+    await cancelAgentSession(edit.agentSessionId);
+  }
   return cancelWorkflowEditJob({ editId });
 }
 
 function serializeEditError(error: unknown) {
-  const code = getEditErrorCode(error);
+  const diagnostics =
+    error instanceof WorkflowScriptSyntaxError ? error.diagnostics : undefined;
   return {
-    code,
+    code: getEditErrorCode(error),
     message:
       error instanceof Error ? error.message : "Workflow edit failed",
-    diagnostics:
-      error instanceof WorkflowScriptSyntaxError ? error.diagnostics : undefined,
+    ...(diagnostics ? { diagnostics } : {}),
   };
 }
 

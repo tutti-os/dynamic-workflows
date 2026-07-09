@@ -16,12 +16,14 @@ import type {
   RunNodeDetail,
 } from "@/lib/workflow/run-detail";
 import type { InspectorTab } from "@/components/workflow/WorkflowWorkbench.types";
+import { AuthoringPanel } from "@/components/workflow/AuthoringPanel";
 import { DiagnosticsPanel } from "@/components/workflow/DiagnosticsPanel";
 import { EditPanel } from "@/components/workflow/EditPanel";
 import { Metric } from "@/components/workflow/Metric";
 import { RunsPanel } from "@/components/workflow/RunsPanel";
 
 type WorkflowInspectorPaneProps = {
+  workflowId: string;
   activeTab: InspectorTab;
   visibleRuns: WorkflowRunRecord[];
   selectedRun: RunDetail | null;
@@ -73,7 +75,7 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
           ariaLabel="Workflow inspector"
           value={props.activeTab}
           onValueChange={(value) => {
-            if (value !== "edit" && value !== "runs") {
+            if (value !== "edit" && value !== "runs" && value !== "authoring") {
               return;
             }
             props.onTabChange(value);
@@ -85,6 +87,7 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
               label: "Runs",
               count: props.visibleRuns.length || undefined,
             },
+            { value: "authoring", label: "Authoring" },
           ]}
           className="inspector-tabs"
         />
@@ -123,6 +126,12 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
             onPromptChange={props.onPromptChange}
             onAppendPromptChange={props.onAppendPromptChange}
             onSelectLoopStep={props.onSelectLoopStep}
+          />
+        ) : props.activeTab === "authoring" ? (
+          <AuthoringPanel
+            workflowId={props.workflowId}
+            active={props.activeTab === "authoring"}
+            onOpenAgentSession={props.onOpenAgentSession}
           />
         ) : (
           <RunsPanel
