@@ -31,7 +31,7 @@ All commands support `--json` for machine-readable output.
 1. Read the task prompt: job id, create-or-edit, and the user's request.
 2. If the request is ambiguous, ask the user and wait for their reply before drafting.
 3. For edit jobs, read `current.workflow.js` in the workspace root — that is the script you are editing.
-4. Search blueprints for a similar pattern; adapt the closest match instead of drafting from scratch when one fits.
+4. Search blueprints for a similar pattern; adapt the closest match instead of drafting from scratch when one fits. The library is small — if nothing matches after a search or two, draft from scratch per `dsl-reference.md`.
 5. Draft the script into a file, following `dsl-reference.md`.
 6. Validate, fix diagnostics, and repeat until clean.
 7. Submit with the job id. If `accepted: false`, fix the reported diagnostics and submit again until `accepted: true`.

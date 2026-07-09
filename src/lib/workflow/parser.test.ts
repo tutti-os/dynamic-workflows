@@ -114,6 +114,88 @@ const first = await agent({ id: "first", session: "writer", prompt: "one" })
     );
   });
 
+  it("rejects concatenated or interpolated prompts instead of silently emptying them", () => {
+    const concatenated = parseWorkflowScript(`
+const first = await agent({ id: "first", prompt: "part one " + "part two" })
+`);
+    expect(concatenated.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          "agent prompt must be one plain string literal; string concatenation and ${...} interpolation are not supported.",
+      }),
+    );
+
+    const interpolated = parseWorkflowScript(`
+const topic = "x"
+const first = await agent({ id: "first", prompt: \`about \${topic}\` })
+`);
+    expect(interpolated.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          "agent prompt must be one plain string literal; string concatenation and ${...} interpolation are not supported.",
+      }),
+    );
+  });
+
+  it("rejects missing or empty agent prompts", () => {
+    const missing = parseWorkflowScript(`
+const first = await agent({ id: "first" })
+`);
+    expect(missing.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: "agent(...) requires a non-empty prompt string.",
+      }),
+    );
+
+    const empty = parseWorkflowScript(`
+const first = await agent({ id: "first", prompt: "   " })
+`);
+    expect(empty.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: "agent prompt must be non-empty.",
+      }),
+    );
+  });
+
+  it("rejects concatenated prompts and appendPrompts inside loop steps", () => {
+    const parsed = parseWorkflowScript(`
+loop({
+  id: "delivery",
+  maxIterations: 3,
+  steps: [
+    agent({ id: "coder", prompt: "Implement " + "{{requirement}}", appendPrompt: "Round " + "{{iteration}}" }),
+    agent({ id: "reviewer" }),
+  ],
+  until: { source: "reviewer", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          "loop step prompt must be one plain string literal; string concatenation and ${...} interpolation are not supported.",
+      }),
+    );
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message:
+          "loop step appendPrompt must be one plain string literal; string concatenation and ${...} interpolation are not supported.",
+      }),
+    );
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: "loop step agent(...) requires a non-empty prompt string.",
+      }),
+    );
+  });
+
   it("reports undeclared template inputs", () => {
     const parsed = parseWorkflowScript(`
 const plan = await agent({ id: "plan", prompt: "Plan {{requirement}}" })
@@ -565,8 +647,9 @@ const broken = await loop({
 
     expect(parsed.meta.requiresCwd).toBe(true);
     expect(parsed.requiredInputNames).toEqual(["requirement"]);
-    expect(parsed.nodes[0].loop?.onMaxIterations).toBe("fail");
+    expect(parsed.nodes[1].loop?.onMaxIterations).toBe("complete");
     expect(parsed.nodes.map((node) => [node.id, node.cwd])).toEqual([
+      ["baseline", "."],
       ["delivery_loop", "."],
       ["submit_mr", "."],
     ]);

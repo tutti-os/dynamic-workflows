@@ -4,19 +4,19 @@ import type { WorkflowBlueprintDetail } from "./blueprint-types";
 export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
   {
     id: "loop-primitive-rd-acceptance-test-v1",
-    title: "Loop Primitive RD Acceptance Test",
+    title: "RD Acceptance Delivery",
     description:
-      "Bounded RD implementation and acceptance review loop that runs until PASS, then prepares an MR/PR submission.",
+      "Baseline capture, then a bounded RD implementation and acceptance review loop that runs until PASS, followed by an MR/PR submission or a status report when acceptance never passes.",
     category: "coding",
-    tags: ["loop", "rd", "acceptance", "mr", "cwd", "session"],
+    tags: ["loop", "rd", "acceptance", "baseline", "mr", "cwd", "session"],
     difficulty: "advanced",
     requiresCwd: true,
     patternSummary:
-      "A bounded two-role loop where an RD agent iterates on implementation and an acceptance reviewer returns PASS or FAIL on the final line. Each role keeps an inherited session across iterations, and a final submission step runs after acceptance passes.",
+      "A baseline step records the starting git state so later roles can separate this delivery from pre-existing changes. In a bounded two-role loop, an RD agent implements and hands off a structured delivery summary; an independent acceptance reviewer verifies those claims against the actual diff, fails only on blocking issues, and returns PASS or FAIL on the final line. Both roles keep inherited sessions with appendPrompt deltas. A final step submits an MR/PR on PASS, or reports remaining blockers when iterations run out.",
     useCases: [
-      "Implement a requirement in a local repository with acceptance feedback.",
-      "Exercise loop, inherited sessions, appendPrompt, cwd, and until finalStatus primitives.",
-      "Create a reusable RD/reviewer delivery pattern for agentic coding workflows.",
+      "Implement a requirement in a local repository with adversarial acceptance review.",
+      "Demonstrate baseline capture, loop, inherited sessions, appendPrompt, loop-level inputs, and until finalStatus primitives.",
+      "Create a reusable RD/reviewer delivery pattern that degrades to a status report instead of failing silently.",
     ],
     script: readBuiltinBlueprintScript(
       new URL(

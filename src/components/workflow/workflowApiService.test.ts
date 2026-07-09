@@ -58,7 +58,7 @@ describe("apiJson", () => {
           blueprints: [
             {
               id: "loop-primitive-rd-acceptance-test-v1",
-              title: "Loop Primitive RD Acceptance Test",
+              title: "RD Acceptance Delivery",
               description: "Run a bounded RD acceptance loop.",
               category: "coding",
               tags: ["loop", "rd"],
@@ -88,7 +88,7 @@ describe("apiJson", () => {
           blueprints: [
             {
               id: "loop-primitive-rd-acceptance-test-v1",
-              title: "Loop Primitive RD Acceptance Test",
+              title: "RD Acceptance Delivery",
               description: "Run a bounded RD acceptance loop.",
               category: "coding",
               tags: ["loop", "rd"],
@@ -126,7 +126,7 @@ describe("apiJson", () => {
           JSON.stringify({
             blueprint: {
               id: "loop-primitive-rd-acceptance-test-v1",
-              title: "Loop Primitive RD Acceptance Test",
+              title: "RD Acceptance Delivery",
               description: "Run a bounded RD acceptance loop.",
               category: "coding",
               tags: ["loop", "rd"],

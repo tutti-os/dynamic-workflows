@@ -2,6 +2,8 @@
 
 Blueprints are curated, validated workflow scripts that demonstrate proven patterns (bounded loops, inherited sessions, acceptance gates, multi-role delivery). Prefer adapting a blueprint over drafting a structure from scratch when one matches the request.
 
+The library is currently small, so an empty search result is normal. If one or two searches find nothing close, draft from scratch following `dsl-reference.md` instead of retrying more queries.
+
 ## Commands
 
 ```bash

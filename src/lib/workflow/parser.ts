@@ -254,6 +254,7 @@ function addAgentNode(
     `agent_${state.anonymousIndex++}`;
   const label = readObjectString(options, "label") ?? humanize(id);
   const prompt = readObjectString(options, "prompt") ?? "";
+  addPromptPropertyDiagnostics(options, callExpression, "agent", "prompt", state);
   const inputs = readInputs(options, state);
   const templateRefs = extractTemplateRefs(prompt);
   const session = readSessionSpec(options, state, "agent");
@@ -468,6 +469,14 @@ function readLoopAgentStep(
   const label = readObjectString(options, "label") ?? humanize(id);
   const prompt = readObjectString(options, "prompt") ?? "";
   const appendPrompt = readObjectString(options, "appendPrompt");
+  addPromptPropertyDiagnostics(options, callExpression, "loop step", "prompt", state);
+  addPromptPropertyDiagnostics(
+    options,
+    callExpression,
+    "loop step",
+    "appendPrompt",
+    state,
+  );
   const session = readSessionSpec(options, state, "loopStep");
 
   return {
@@ -1596,6 +1605,46 @@ function readObjectString(
   key: string,
 ): string | undefined {
   return readStringLike(readObjectPropertyValue(objectExpression, key));
+}
+
+function addPromptPropertyDiagnostics(
+  options: AnyNode | undefined,
+  callExpression: AnyNode,
+  context: "agent" | "loop step",
+  key: "prompt" | "appendPrompt",
+  state: ParserState,
+): void {
+  const value = readObjectPropertyValue(options, key);
+  if (value === undefined) {
+    if (key === "prompt") {
+      state.diagnostics.push({
+        severity: "error",
+        message:
+          context === "agent"
+            ? "agent(...) requires a non-empty prompt string."
+            : "loop step agent(...) requires a non-empty prompt string.",
+        range: toRange(callExpression),
+      });
+    }
+    return;
+  }
+  const text = readStringLike(value);
+  if (text === undefined) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `${context} ${key} must be one plain string literal; string concatenation and \${...} interpolation are not supported.`,
+      hint: "Write the whole prompt as a single literal and use {{...}} placeholders for dynamic values.",
+      range: toRange(value),
+    });
+    return;
+  }
+  if (!text.trim()) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `${context} ${key} must be non-empty.`,
+      range: toRange(value),
+    });
+  }
 }
 
 function readObjectNumber(
