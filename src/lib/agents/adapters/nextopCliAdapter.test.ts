@@ -443,6 +443,88 @@ describe("nextop cli adapter", () => {
     });
   });
 
+  it("completes on ready when the settled turn returns current assistant text", async () => {
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
+      runner: async (args) => {
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "ready",
+            timedOut: false,
+            hasMore: false,
+            latestVersion: 48,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+              turnLifecycle: {
+                activeTurnId: null,
+                phase: "settled",
+                outcome: "completed",
+              },
+            },
+            messages: [
+              { role: "assistant", text: "working", version: 9 },
+              { role: "assistant", text: "final baseline", version: 48 },
+            ],
+          };
+        }
+        if (args.includes("session-summary")) {
+          return {
+            hasMore: false,
+            latestVersion: 48,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+              turnLifecycle: {
+                activeTurnId: null,
+                phase: "settled",
+                outcome: "completed",
+              },
+            },
+            messages: [
+              { role: "assistant", text: "final baseline", version: 48 },
+            ],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:scan",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "scan",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({
+      type: "text_delta",
+      text: "final baseline",
+    });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
   it("completes when wait times out after the raw session status is completed", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({

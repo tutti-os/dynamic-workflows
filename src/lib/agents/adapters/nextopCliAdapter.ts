@@ -435,6 +435,10 @@ export function createNextopCliAgentAdapter(
           if (nextText) {
             latestText = nextText;
           }
+          const readyWithCurrentAssistantText =
+            reason === "ready" &&
+            wait.session.status === "completed" &&
+            Boolean(nextText);
 
           yield sessionRefEvent(input, target.id, model, {
             ...initialSession,
@@ -445,7 +449,8 @@ export function createNextopCliAgentAdapter(
           if (
             reason === "completed" ||
             reason === "waiting_input" ||
-            rawTerminalStatus === "completed"
+            rawTerminalStatus === "completed" ||
+            readyWithCurrentAssistantText
           ) {
             const finalText =
               (await readLatestAssistantTextFromTail(
