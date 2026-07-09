@@ -429,6 +429,7 @@ export function createNextopCliAgentAdapter(
           );
           const wait = parseSessionSummary(waitOutput, initialSession);
           const reason = readWaitReason(waitOutput);
+          const rawTerminalStatus = readRawSessionTerminalStatus(waitOutput);
           latestVersion = Math.max(latestVersion, wait.latestVersion);
           const nextText = latestAssistantText(wait.messages);
           if (nextText) {
@@ -441,7 +442,11 @@ export function createNextopCliAgentAdapter(
             agentSessionId,
           });
 
-          if (reason === "completed" || reason === "waiting_input") {
+          if (
+            reason === "completed" ||
+            reason === "waiting_input" ||
+            rawTerminalStatus === "completed"
+          ) {
             const finalText =
               (await readLatestAssistantTextFromTail(
                 agentSessionId,
@@ -456,12 +461,12 @@ export function createNextopCliAgentAdapter(
             return;
           }
 
-          if (reason === "canceled") {
+          if (reason === "canceled" || rawTerminalStatus === "canceled") {
             yield { type: "done", status: "canceled", reason: "cancelled" };
             return;
           }
 
-          if (reason === "failed") {
+          if (reason === "failed" || rawTerminalStatus === "failed") {
             const message =
               readOptionalString(wait.session.lastError) ??
               "Nextop agent session failed.";
@@ -665,6 +670,25 @@ export function parseSessionSummary(
 export function readWaitReason(waitOutput: unknown): string | undefined {
   const output = readRecord(waitOutput);
   return readOptionalString(output?.reason);
+}
+
+function readRawSessionTerminalStatus(
+  waitOutput: unknown,
+): AgentSessionStatus | undefined {
+  const output = readRecord(waitOutput);
+  const session = readRecord(output?.session) as NextopSession | undefined;
+  const status = readOptionalString(session?.status);
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "canceled":
+    case "cancelled":
+      return "canceled";
+    default:
+      return undefined;
+  }
 }
 
 export function latestAssistantText(messages: NextopMessage[]): string {

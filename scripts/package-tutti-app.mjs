@@ -3,8 +3,11 @@ import { spawn } from "node:child_process";
 import {
   chmod,
   cp,
+  lstat,
   mkdir,
+  readdir,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -103,6 +106,7 @@ export async function packageTuttiApp(options = {}) {
   await chmod(bootstrapPath, 0o755);
 
   await preparePackageForRuntime();
+  await materializePackageSymlinks();
 
   await rm(buildRoot, { recursive: true, force: true });
   await mkdir(buildRoot, { recursive: true });
@@ -192,20 +196,57 @@ function prepareScript() {
 }
 
 async function preparePackageForRuntime() {
+  const runtime = await resolvePackageBuildRuntime();
   const env = {
     ...process.env,
     NEXT_TELEMETRY_DISABLED: process.env.NEXT_TELEMETRY_DISABLED ?? "1",
+    TUTTI_APP_NODE: runtime.node,
+    TUTTI_APP_NPM: runtime.npm,
+    PATH: `${path.dirname(runtime.node)}${path.delimiter}${process.env.PATH ?? ""}`,
   };
 
-  await runNpm(["ci"], { cwd: packageRoot, env });
-  await run(process.execPath, ["./tools/scripts/ensure-native-modules.mjs", "--fix"], {
+  console.log(`Using package build Node: ${runtime.node}`);
+  console.log(`Using package build npm: ${runtime.npm}`);
+
+  await run(runtime.npm, ["ci"], { cwd: packageRoot, env });
+  await run(runtime.node, ["./tools/scripts/ensure-native-modules.mjs", "--fix"], {
     cwd: packageRoot,
     env,
   });
-  await runNpm(["run", "build"], { cwd: packageRoot, env });
+  await run(runtime.npm, ["run", "build"], { cwd: packageRoot, env });
   await copyStandaloneAssets();
   await removeBuildOnlyStateFromPackage();
   await assertStandaloneServer();
+}
+
+async function resolvePackageBuildRuntime() {
+  const managedRuntimeRoot =
+    process.env.TUTTI_APP_RUNTIME_ROOT ??
+    process.env.TUTTI_RUNTIME_ROOT ??
+    path.join(process.env.HOME ?? "", ".tutti", "app-runtimes", "darwin-arm64");
+  const managedNodeDir = path.join(managedRuntimeRoot, "node", "bin");
+  const node = await firstExistingPath([
+    process.env.TUTTI_APP_NODE,
+    process.env.TUTTI_PACKAGE_NODE,
+    path.join(managedNodeDir, "node"),
+    process.execPath,
+  ]);
+  const npm = await firstExistingPath([
+    process.env.TUTTI_APP_NPM,
+    process.env.TUTTI_PACKAGE_NPM,
+    path.join(path.dirname(node), "npm"),
+    process.env.npm_execpath,
+  ]);
+  return { node, npm };
+}
+
+async function firstExistingPath(candidates) {
+  for (const candidate of candidates) {
+    if (candidate && (await exists(candidate))) {
+      return candidate;
+    }
+  }
+  throw new Error("Could not resolve a package build runtime path.");
 }
 
 async function copyStandaloneAssets() {
@@ -248,6 +289,53 @@ async function removeBuildOnlyStateFromPackage() {
         force: true,
       }),
     ),
+  );
+}
+
+async function materializePackageSymlinks(directory = packageRoot) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    const info = await lstat(entryPath);
+    if (info.isSymbolicLink()) {
+      const targetPath = await realpath(entryPath).catch((error) => {
+        if (error && typeof error === "object" && "code" in error) {
+          const code = error.code;
+          if (code === "ENOENT") {
+            return undefined;
+          }
+        }
+        throw error;
+      });
+      if (!targetPath) {
+        await rm(entryPath, { force: true });
+        continue;
+      }
+      assertPackageInternalPath(targetPath, entryPath);
+      const targetInfo = await stat(targetPath);
+      await rm(entryPath, { recursive: true, force: true });
+      await cp(targetPath, entryPath, {
+        recursive: targetInfo.isDirectory(),
+        dereference: true,
+      });
+      continue;
+    }
+    if (info.isDirectory()) {
+      await materializePackageSymlinks(entryPath);
+    }
+  }
+}
+
+function assertPackageInternalPath(targetPath, sourcePath) {
+  const relativeTarget = path.relative(packageRoot, targetPath);
+  if (
+    relativeTarget === "" ||
+    (!relativeTarget.startsWith("..") && !path.isAbsolute(relativeTarget))
+  ) {
+    return;
+  }
+  throw new Error(
+    `Package symlink ${path.relative(packageRoot, sourcePath)} points outside the package: ${targetPath}`,
   );
 }
 

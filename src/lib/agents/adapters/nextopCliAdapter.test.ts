@@ -443,6 +443,83 @@ describe("nextop cli adapter", () => {
     });
   });
 
+  it("completes when wait times out after the raw session status is completed", async () => {
+    const calls: string[][] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
+      runner: async (args) => {
+        calls.push(args);
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "timeout",
+            timedOut: true,
+            hasMore: false,
+            latestVersion: 12,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "completed",
+            },
+            messages: [],
+          };
+        }
+        if (args.includes("session-summary")) {
+          return {
+            hasMore: false,
+            latestVersion: 12,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "completed",
+            },
+            messages: [{ role: "assistant", text: "done", version: 12 }],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:scan",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "scan",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "wait",
+      "--session-id",
+      "session-1",
+      "--after-version",
+      "0",
+      "--timeout-ms",
+      "1000",
+    ]);
+    expect(events).toContainEqual({ type: "text_delta", text: "done" });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
   it("sends prompts to an existing session when resumeSessionId is provided", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
