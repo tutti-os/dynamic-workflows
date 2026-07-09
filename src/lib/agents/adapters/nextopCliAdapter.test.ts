@@ -443,7 +443,8 @@ describe("nextop cli adapter", () => {
     });
   });
 
-  it("completes on ready when the settled turn returns current assistant text", async () => {
+  it("keeps waiting on ready assistant text until wait reports completed", async () => {
+    let waitCount = 0;
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
@@ -459,8 +460,31 @@ describe("nextop cli adapter", () => {
           };
         }
         if (args.includes("wait")) {
+          waitCount += 1;
+          if (waitCount === 1) {
+            return {
+              reason: "ready",
+              timedOut: false,
+              hasMore: false,
+              latestVersion: 13,
+              session: {
+                agentSessionId: "session-1",
+                provider: "codex",
+                status: "created",
+                submitAvailability: { state: "available" },
+                turnLifecycle: {
+                  activeTurnId: null,
+                  phase: "settled",
+                  outcome: "completed",
+                },
+              },
+              messages: [
+                { role: "assistant", text: "starting work", version: 13 },
+              ],
+            };
+          }
           return {
-            reason: "ready",
+            reason: "completed",
             timedOut: false,
             hasMore: false,
             latestVersion: 48,
@@ -468,6 +492,7 @@ describe("nextop cli adapter", () => {
               agentSessionId: "session-1",
               provider: "codex",
               status: "created",
+              submitAvailability: { state: "available" },
               turnLifecycle: {
                 activeTurnId: null,
                 phase: "settled",
@@ -475,7 +500,6 @@ describe("nextop cli adapter", () => {
               },
             },
             messages: [
-              { role: "assistant", text: "working", version: 9 },
               { role: "assistant", text: "final baseline", version: 48 },
             ],
           };
@@ -488,6 +512,7 @@ describe("nextop cli adapter", () => {
               agentSessionId: "session-1",
               provider: "codex",
               status: "created",
+              submitAvailability: { state: "available" },
               turnLifecycle: {
                 activeTurnId: null,
                 phase: "settled",
@@ -514,6 +539,7 @@ describe("nextop cli adapter", () => {
       events.push(event);
     }
 
+    expect(waitCount).toBe(2);
     expect(events).toContainEqual({
       type: "text_delta",
       text: "final baseline",
@@ -525,8 +551,112 @@ describe("nextop cli adapter", () => {
     });
   });
 
-  it("completes when wait times out after the raw session status is completed", async () => {
+  it("keeps waiting on ready assistant text while submit is blocked", async () => {
+    let waitCount = 0;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
+      runner: async (args) => {
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("wait")) {
+          waitCount += 1;
+          if (waitCount === 1) {
+            return {
+              reason: "ready",
+              timedOut: false,
+              hasMore: false,
+              latestVersion: 13,
+              session: {
+                agentSessionId: "session-1",
+                provider: "codex",
+                status: "created",
+                submitAvailability: {
+                  state: "blocked",
+                  reason: "active_turn",
+                },
+                turnLifecycle: {
+                  activeTurnId: null,
+                  phase: "settled",
+                  outcome: "completed",
+                },
+              },
+              messages: [
+                { role: "assistant", text: "starting work", version: 13 },
+              ],
+            };
+          }
+          return {
+            reason: "completed",
+            timedOut: false,
+            hasMore: false,
+            latestVersion: 48,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+              submitAvailability: { state: "available" },
+              turnLifecycle: {
+                activeTurnId: null,
+                phase: "settled",
+                outcome: "completed",
+              },
+            },
+            messages: [
+              { role: "assistant", text: "final output", version: 48 },
+            ],
+          };
+        }
+        if (args.includes("session-summary")) {
+          return {
+            hasMore: false,
+            latestVersion: 48,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "created",
+              submitAvailability: { state: "available" },
+            },
+            messages: [
+              { role: "assistant", text: "final output", version: 48 },
+            ],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:scan",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "scan",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(waitCount).toBe(2);
+    expect(events).toContainEqual({ type: "text_delta", text: "final output" });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
+  it("keeps waiting when wait times out after the raw session status is completed", async () => {
     const calls: string[][] = [];
+    let waitCount = 0;
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
@@ -543,11 +673,26 @@ describe("nextop cli adapter", () => {
           };
         }
         if (args.includes("wait")) {
+          waitCount += 1;
+          if (waitCount === 1) {
+            return {
+              reason: "timeout",
+              timedOut: true,
+              hasMore: false,
+              latestVersion: 12,
+              session: {
+                agentSessionId: "session-1",
+                provider: "codex",
+                status: "completed",
+              },
+              messages: [],
+            };
+          }
           return {
-            reason: "timeout",
-            timedOut: true,
+            reason: "completed",
+            timedOut: false,
             hasMore: false,
-            latestVersion: 12,
+            latestVersion: 14,
             session: {
               agentSessionId: "session-1",
               provider: "codex",
@@ -559,13 +704,13 @@ describe("nextop cli adapter", () => {
         if (args.includes("session-summary")) {
           return {
             hasMore: false,
-            latestVersion: 12,
+            latestVersion: 14,
             session: {
               agentSessionId: "session-1",
               provider: "codex",
               status: "completed",
             },
-            messages: [{ role: "assistant", text: "done", version: 12 }],
+            messages: [{ role: "assistant", text: "done", version: 14 }],
           };
         }
         throw new Error(`unexpected call: ${args.join(" ")}`);
@@ -594,6 +739,18 @@ describe("nextop cli adapter", () => {
       "--timeout-ms",
       "1000",
     ]);
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "wait",
+      "--session-id",
+      "session-1",
+      "--after-version",
+      "12",
+      "--timeout-ms",
+      "1000",
+    ]);
+    expect(waitCount).toBe(2);
     expect(events).toContainEqual({ type: "text_delta", text: "done" });
     expect(events.at(-1)).toEqual({
       type: "done",

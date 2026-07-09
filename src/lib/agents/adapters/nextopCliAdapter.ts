@@ -429,16 +429,12 @@ export function createNextopCliAgentAdapter(
           );
           const wait = parseSessionSummary(waitOutput, initialSession);
           const reason = readWaitReason(waitOutput);
-          const rawTerminalStatus = readRawSessionTerminalStatus(waitOutput);
+          const rawTerminalStatus = readRawNonSuccessTerminalStatus(waitOutput);
           latestVersion = Math.max(latestVersion, wait.latestVersion);
           const nextText = latestAssistantText(wait.messages);
           if (nextText) {
             latestText = nextText;
           }
-          const readyWithCurrentAssistantText =
-            reason === "ready" &&
-            wait.session.status === "completed" &&
-            Boolean(nextText);
 
           yield sessionRefEvent(input, target.id, model, {
             ...initialSession,
@@ -448,9 +444,7 @@ export function createNextopCliAgentAdapter(
 
           if (
             reason === "completed" ||
-            reason === "waiting_input" ||
-            rawTerminalStatus === "completed" ||
-            readyWithCurrentAssistantText
+            reason === "waiting_input"
           ) {
             const finalText =
               (await readLatestAssistantTextFromTail(
@@ -677,15 +671,13 @@ export function readWaitReason(waitOutput: unknown): string | undefined {
   return readOptionalString(output?.reason);
 }
 
-function readRawSessionTerminalStatus(
+function readRawNonSuccessTerminalStatus(
   waitOutput: unknown,
 ): AgentSessionStatus | undefined {
   const output = readRecord(waitOutput);
   const session = readRecord(output?.session) as NextopSession | undefined;
   const status = readOptionalString(session?.status);
   switch (status) {
-    case "completed":
-      return "completed";
     case "failed":
       return "failed";
     case "canceled":
