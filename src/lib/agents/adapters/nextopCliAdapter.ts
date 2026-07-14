@@ -590,6 +590,7 @@ export function parseLegacyAgentCatalog(value: unknown): NextopAgentCatalog {
     readOptionalString(output.defaultProviderId) ?? "",
   );
   const seen = new Set<string>();
+  const seenProviders = new Set<string>();
   const targets = output.providers.flatMap(
     (item, index): NextopAgentTargetSpec[] => {
       const record = readRecord(item);
@@ -615,7 +616,13 @@ export function parseLegacyAgentCatalog(value: unknown): NextopAgentCatalog {
           `Nextop CLI returned duplicate legacy agent target ${id}.`,
         );
       }
+      if (seenProviders.has(provider)) {
+        throw new Error(
+          `Nextop CLI legacy provider ${provider} maps to multiple agent targets.`,
+        );
+      }
       seen.add(id);
+      seenProviders.add(provider);
       const availability = readRecord(record?.availability);
       const status =
         readOptionalString(availability?.status) ??
@@ -749,11 +756,24 @@ function assertSessionMatchesAgentTarget(
   value: unknown,
   target: NextopAgentTargetSpec,
 ): void {
-  if (target.cliContract !== "agent-id") {
-    return;
-  }
   const output = value as NextopSessionSummaryOutput;
   const session = readRecord(output.session) as NextopSession | undefined;
+  if (target.cliContract === "provider-compat") {
+    const actualProvider = normalizeNextopProvider(
+      readOptionalString(session?.provider) ?? "",
+    );
+    if (!actualProvider) {
+      throw new Error(
+        `Nextop session summary did not return a provider for ${target.id}.`,
+      );
+    }
+    if (actualProvider !== target.provider) {
+      throw new Error(
+        `Nextop session belongs to provider ${actualProvider}, not ${target.provider}.`,
+      );
+    }
+    return;
+  }
   const actualAgentTargetId = readOptionalString(session?.agentTargetId);
   if (!actualAgentTargetId) {
     throw new Error(

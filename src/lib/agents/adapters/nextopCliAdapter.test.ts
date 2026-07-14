@@ -148,6 +148,40 @@ describe("nextop cli adapter", () => {
     ]);
   });
 
+  it("rejects a legacy catalog when one provider maps to multiple targets", async () => {
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      runner: async (args) => {
+        if (isAgentListCall(args)) {
+          throw new Error("unknown command: agent list");
+        }
+        if (args.includes("providers")) {
+          return {
+            schemaVersion: 2,
+            defaultProviderId: "codex",
+            providers: [
+              {
+                providerId: "codex",
+                agentTargetId: "team:builder",
+                availability: { status: "available" },
+              },
+              {
+                providerId: "codex",
+                agentTargetId: "team:reviewer",
+                availability: { status: "available" },
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(adapter.listTargets()).rejects.toThrow(
+      /provider codex maps to multiple agent targets/,
+    );
+  });
+
   it("does not hide ordinary agent list failures behind provider fallback", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
@@ -1100,6 +1134,68 @@ describe("nextop cli adapter", () => {
         type: "done",
         status: "failed",
         reason: "error",
+      });
+      expect(calls.some((args) => args.includes("send"))).toBe(false);
+    },
+  );
+
+  it.each(["attachSessionId", "resumeSessionId"] as const)(
+    "refuses to use a legacy %s from another provider",
+    async (sessionField) => {
+      const calls: string[][] = [];
+      const adapter = createNextopCliAgentAdapter({
+        includeMockTarget: false,
+        runner: async (args) => {
+          calls.push(args);
+          if (isAgentListCall(args)) {
+            throw new Error("unknown command: agent list");
+          }
+          if (args.includes("providers")) {
+            return {
+              defaultProviderId: "codex",
+              providers: [
+                {
+                  providerId: "codex",
+                  displayName: "Codex",
+                  availability: { status: "available" },
+                },
+              ],
+            };
+          }
+          if (args.includes("composer-options")) {
+            return { effectiveSettings: { model: "gpt-5" } };
+          }
+          if (args.includes("session-summary")) {
+            return {
+              latestVersion: 4,
+              session: {
+                agentSessionId: "session-claude",
+                provider: "claude-code",
+                status: "completed",
+              },
+              messages: [],
+            };
+          }
+          throw new Error(`unexpected call: ${args.join(" ")}`);
+        },
+      });
+
+      const events = [];
+      for await (const event of adapter.run({
+        runId: `run-legacy:${sessionField}`,
+        agent: "local:codex",
+        cwd: "/tmp/project",
+        prompt: "continue",
+        [sessionField]: "session-claude",
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual({
+        type: "error",
+        code: "NEXTOP_CLI_ERROR",
+        message: "Nextop session belongs to provider claude-code, not codex.",
+        retryable: true,
       });
       expect(calls.some((args) => args.includes("send"))).toBe(false);
     },
