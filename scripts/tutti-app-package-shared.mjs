@@ -93,7 +93,7 @@ export function cliManifest(options = {}) {
             agent: {
               type: "string",
               description:
-                "Optional agent target id for generation, such as local:codex or local:claude-code.",
+                "Optional exact agent target id for generation. Discover current targets with tutti --json agent list.",
             },
             model: {
               type: "string",
@@ -134,7 +134,7 @@ export function cliManifest(options = {}) {
             agent: {
               type: "string",
               description:
-                "Agent target id for nodes without an explicit agent, such as local:codex. Defaults to mock.",
+                "Exact agent target id for nodes without an explicit agent. Discover current targets with tutti --json agent list. Defaults to mock.",
             },
             model: {
               type: "string",
@@ -186,6 +186,8 @@ export function commandsMarkdown(options = {}) {
     `The ${packageLabel} exposes the \`${scope}\` scope through \`tutti.cli.json\`. Commands return Tutti \`CliCommandOutput\` objects and are routed to the ${routeLabel} under \`/tutti/cli/*\`.`,
     "",
     "Use `--json` for machine-readable output:",
+    "",
+    "Discover exact agent ids with `tutti --json agent list`. The available targets are dynamic and multiple targets may share a provider; the ids below are only examples.",
     "",
     "```bash",
     `tutti --json ${scope} status`,

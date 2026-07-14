@@ -1,6 +1,4 @@
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type {
@@ -20,7 +18,6 @@ type NextopCliAdapterOptions = {
   waitTimeoutMs?: number;
   providerDetectionTimeoutMs?: number;
   providerModelsTimeoutMs?: number;
-  commandDetector?: LocalCommandDetector;
   runner?: NextopCliRunner;
 };
 
@@ -32,16 +29,23 @@ type NextopCliRunner = (
   },
 ) => Promise<unknown>;
 
-type LocalCommandDetector = (command: string) => Promise<string | undefined>;
-
-type NextopProviderStatus = {
-  provider?: unknown;
-  status?: unknown;
-  detail?: unknown;
+type NextopProvidersOutput = {
+  schemaVersion?: unknown;
+  defaultProviderId?: unknown;
+  providers?: unknown;
 };
 
-type NextopProvidersOutput = {
-  providers?: unknown;
+type NextopAgentsOutput = {
+  schemaVersion?: unknown;
+  defaultAgentTargetId?: unknown;
+  agents?: unknown;
+};
+
+type NextopAgentCatalogEntry = {
+  id?: unknown;
+  name?: unknown;
+  provider?: unknown;
+  availability?: unknown;
 };
 
 type NextopSessionOutput = {
@@ -93,7 +97,6 @@ const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 360_000;
 const DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS = 3_000;
 const DEFAULT_PROVIDER_MODELS_TIMEOUT_MS = 1_500;
-const DEFAULT_LOCAL_COMMAND_TIMEOUT_MS = 2_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const TAIL_SUMMARY_LIMIT = 50;
 
@@ -101,31 +104,14 @@ type NextopAgentTargetSpec = {
   id: string;
   name: string;
   provider: string;
-  startPath: string[];
-};
-
-// Daemon-owned system Agent Targets. Session creation is target-aware in
-// tuttid: only the per-target start commands can launch sessions, so every
-// launchable target needs an explicit CLI start path here.
-const NEXTOP_AGENT_TARGETS: NextopAgentTargetSpec[] = [
-  {
-    id: "local:codex",
-    name: "Codex",
-    provider: "codex",
-    startPath: ["codex", "start"],
-  },
-  {
-    id: "local:claude-code",
-    name: "Claude Code",
-    provider: "claude-code",
-    startPath: ["claude", "start"],
-  },
-];
-
-export type NextopProviderAvailability = {
-  provider: string;
   supported: boolean;
   reason?: string;
+  isDefault: boolean;
+  cliContract: "agent-id" | "provider-compat";
+};
+
+type NextopAgentCatalog = {
+  targets: NextopAgentTargetSpec[];
 };
 
 export function createNextopCliAgentAdapter(
@@ -157,42 +143,37 @@ export function createNextopCliAgentAdapter(
     options.providerModelsTimeoutMs ??
     readPositiveIntegerEnv("NEXTOP_PROVIDER_MODELS_TIMEOUT_MS") ??
     DEFAULT_PROVIDER_MODELS_TIMEOUT_MS;
-  const commandDetector = options.commandDetector ?? detectLocalCommand;
+  let catalogPromise: Promise<NextopAgentCatalog> | undefined;
+  const loadCatalog = (refresh = false): Promise<NextopAgentCatalog> => {
+    if (refresh || !catalogPromise) {
+      catalogPromise = readNextopAgentCatalog(
+        runner,
+        providerDetectionTimeoutMs,
+      ).catch((error) => {
+        catalogPromise = undefined;
+        throw error;
+      });
+    }
+    return catalogPromise;
+  };
 
   const adapter: AgentRuntimeAdapter = {
     id: "nextop-cli",
     label: "Nextop CLI agent adapter",
     async listTargets(): Promise<AgentTargetOption[]> {
-      const availability = await readNextopProviderAvailability(
-        runner,
-        providerDetectionTimeoutMs,
-      );
-      const codexPath = await commandDetector("codex");
-      if (codexPath && !availability.get("codex")?.supported) {
-        availability.set("codex", {
-          provider: "codex",
-          supported: true,
-          reason: codexPath,
-        });
-      }
-
+      const catalog = await loadCatalog(true);
       const targets = await Promise.all(
-        NEXTOP_AGENT_TARGETS.map(async (spec): Promise<AgentTargetOption> => {
-          const status = availability.get(spec.provider);
-          const supported = status?.supported === true;
+        catalog.targets.map(async (spec): Promise<AgentTargetOption> => {
           return {
             id: spec.id,
             name: spec.name,
             provider: spec.provider,
-            supported,
-            models: supported
-              ? await readProviderModels(
-                  spec.provider,
-                  runner,
-                  providerModelsTimeoutMs,
-                )
+            supported: spec.supported,
+            models: spec.supported
+              ? await readAgentModels(spec, runner, providerModelsTimeoutMs)
               : [],
-            reason: status?.reason,
+            isDefault: spec.isDefault,
+            reason: spec.reason,
           };
         }),
       );
@@ -209,18 +190,16 @@ export function createNextopCliAgentAdapter(
       cwd: string;
       prompt: string;
     }): Promise<AgentSessionRef> {
-      const target = findNextopAgentTarget(input.agent);
+      const target = findNextopAgentTarget(await loadCatalog(), input.agent);
       if (!target) {
         throw new Error(
-          `Unknown agent target "${input.agent}". Known agent targets: ${knownAgentTargetIds().join(", ")}.`,
+          `Unknown agent target "${input.agent}". Run tutti --json agent list to discover available agents.`,
         );
       }
 
-      const model =
-        input.model || (await resolveDefaultModel(target.provider, runner));
+      const model = input.model || (await resolveDefaultModel(target, runner));
       const startOutput = await runner([
-        "--json",
-        ...target.startPath,
+        ...startCommand(target),
         "--model",
         model,
         "--prompt",
@@ -228,7 +207,7 @@ export function createNextopCliAgentAdapter(
         "--cwd",
         input.cwd,
       ]);
-      const session = parseSessionFromOutput(startOutput);
+      const session = parseSessionFromOutput(startOutput, target.id);
       return {
         ...session,
         agent: target.id,
@@ -252,20 +231,19 @@ export function createNextopCliAgentAdapter(
         return;
       }
 
-      const target = findNextopAgentTarget(input.agent);
+      const target = findNextopAgentTarget(await loadCatalog(), input.agent);
       if (!target) {
         yield {
           type: "error",
           code: "UNKNOWN_AGENT_TARGET",
-          message: `Unknown agent target "${input.agent}". Known agent targets: ${knownAgentTargetIds().join(", ")}.`,
+          message: `Unknown agent target "${input.agent}". Run tutti --json agent list to discover available agents.`,
           retryable: false,
         };
         yield { type: "done", status: "failed", reason: "error" };
         return;
       }
 
-      const model =
-        input.model || (await resolveDefaultModel(target.provider, runner));
+      const model = input.model || (await resolveDefaultModel(target, runner));
       let cancelPromise: Promise<void> | undefined;
       const requestCancel = () => {
         const agentSessionId = activeSessions.get(input.runId);
@@ -300,21 +278,20 @@ export function createNextopCliAgentAdapter(
             model,
             status: "running",
           };
-          const baseline = parseSessionSummary(
-            await runner(
-              [
-                "--json",
-                "agent",
-                "session-summary",
-                "--session-id",
-                attachSessionId,
-                "--limit",
-                "1",
-              ],
-              { signal: input.signal },
-            ),
-            fallbackSession,
+          const summaryOutput = await runner(
+            [
+              "--json",
+              "agent",
+              "session-summary",
+              "--session-id",
+              attachSessionId,
+              "--limit",
+              "1",
+            ],
+            { signal: input.signal },
           );
+          assertSessionMatchesAgentTarget(summaryOutput, target);
+          const baseline = parseSessionSummary(summaryOutput, fallbackSession);
           latestVersion = baseline.latestVersion;
           initialSession = {
             ...fallbackSession,
@@ -335,21 +312,20 @@ export function createNextopCliAgentAdapter(
             model,
             status: "running",
           };
-          const baseline = parseSessionSummary(
-            await runner(
-              [
-                "--json",
-                "agent",
-                "session-summary",
-                "--session-id",
-                resumeSessionId,
-                "--limit",
-                "1",
-              ],
-              { signal: input.signal },
-            ),
-            fallbackSession,
+          const summaryOutput = await runner(
+            [
+              "--json",
+              "agent",
+              "session-summary",
+              "--session-id",
+              resumeSessionId,
+              "--limit",
+              "1",
+            ],
+            { signal: input.signal },
           );
+          assertSessionMatchesAgentTarget(summaryOutput, target);
+          const baseline = parseSessionSummary(summaryOutput, fallbackSession);
           latestVersion = baseline.latestVersion;
 
           const sendOutput = await runner(
@@ -364,10 +340,7 @@ export function createNextopCliAgentAdapter(
             ],
             { signal: input.signal },
           );
-          initialSession = createResumedSession(
-            sendOutput,
-            fallbackSession,
-          );
+          initialSession = createResumedSession(sendOutput, fallbackSession);
         } else {
           yield {
             type: "status",
@@ -377,8 +350,7 @@ export function createNextopCliAgentAdapter(
 
           const startOutput = await runner(
             [
-              "--json",
-              ...target.startPath,
+              ...startCommand(target),
               "--model",
               model,
               "--prompt",
@@ -388,7 +360,7 @@ export function createNextopCliAgentAdapter(
             ],
             { signal: input.signal },
           );
-          initialSession = parseSessionFromOutput(startOutput);
+          initialSession = parseSessionFromOutput(startOutput, target.id);
         }
 
         const agentSessionId = initialSession.agentSessionId;
@@ -442,10 +414,7 @@ export function createNextopCliAgentAdapter(
             agentSessionId,
           });
 
-          if (
-            reason === "completed" ||
-            reason === "waiting_input"
-          ) {
+          if (reason === "completed" || reason === "waiting_input") {
             const finalText =
               (await readLatestAssistantTextFromTail(
                 agentSessionId,
@@ -495,7 +464,8 @@ export function createNextopCliAgentAdapter(
         yield {
           type: "error",
           code: "NEXTOP_CLI_ERROR",
-          message: error instanceof Error ? error.message : "Nextop CLI failed.",
+          message:
+            error instanceof Error ? error.message : "Nextop CLI failed.",
           retryable: true,
         };
         yield { type: "done", status: "failed", reason: "error" };
@@ -523,7 +493,9 @@ export function createNextopCliAgentAdapter(
   return adapter;
 }
 
-export function resolveNextopCliPath(options: { cliPath?: string } = {}): string {
+export function resolveNextopCliPath(
+  options: { cliPath?: string } = {},
+): string {
   const configuredPath = readOptionalString(options.cliPath);
   if (configuredPath) {
     return configuredPath;
@@ -567,48 +539,153 @@ export function parseNextopJson(stdout: string): unknown {
   }
 }
 
-export function parseProviderAvailability(
-  value: unknown,
-): Map<string, NextopProviderAvailability> {
-  const output = value as NextopProvidersOutput;
-  const providers = Array.isArray(output.providers) ? output.providers : [];
-  const availability = new Map<string, NextopProviderAvailability>();
-  for (const item of providers) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
+export function parseAgentCatalog(value: unknown): NextopAgentCatalog {
+  const output = value as NextopAgentsOutput;
+  if (output.schemaVersion !== 1 || !Array.isArray(output.agents)) {
+    throw new Error("Nextop CLI returned an unsupported agent catalog.");
+  }
+  const defaultAgentTargetId =
+    readOptionalString(output.defaultAgentTargetId) ?? "";
+  const seen = new Set<string>();
+  const targets = output.agents.map((item, index) => {
+    const entry = readRecord(item) as NextopAgentCatalogEntry | undefined;
+    const id = readOptionalString(entry?.id);
+    const name = readOptionalString(entry?.name);
     const provider = normalizeNextopProvider(
-      String((item as NextopProviderStatus).provider ?? ""),
+      readOptionalString(entry?.provider) ?? "",
     );
-    if (!provider) {
-      continue;
+    if (!id || !name || !provider || seen.has(id)) {
+      throw new Error(
+        `Nextop CLI returned an invalid agent catalog entry at index ${index}.`,
+      );
     }
-    const status = readOptionalString((item as NextopProviderStatus).status);
-    availability.set(provider, {
+    seen.add(id);
+    const availability = readRecord(entry?.availability);
+    const status = readOptionalString(availability?.status);
+    return {
+      id,
+      name,
       provider,
       supported: status === "available",
-      reason: readOptionalString((item as NextopProviderStatus).detail),
-    });
+      reason: readOptionalString(availability?.detail),
+      isDefault: id === defaultAgentTargetId,
+      cliContract: "agent-id" as const,
+    };
+  });
+  if (
+    (targets.length === 0 && defaultAgentTargetId) ||
+    (targets.length > 0 && !targets.some((target) => target.isDefault))
+  ) {
+    throw new Error("Nextop CLI returned an invalid default agent target.");
   }
-  return availability;
+  return { targets };
 }
 
-async function readNextopProviderAvailability(
+export function parseLegacyAgentCatalog(value: unknown): NextopAgentCatalog {
+  const output = value as NextopProvidersOutput;
+  if (!Array.isArray(output.providers)) {
+    throw new Error("Nextop CLI returned an invalid legacy provider catalog.");
+  }
+  const defaultProvider = normalizeNextopProvider(
+    readOptionalString(output.defaultProviderId) ?? "",
+  );
+  const seen = new Set<string>();
+  const targets = output.providers.flatMap(
+    (item, index): NextopAgentTargetSpec[] => {
+      const record = readRecord(item);
+      const provider = normalizeNextopProvider(
+        readOptionalString(record?.providerId) ??
+          readOptionalString(record?.provider) ??
+          "",
+      );
+      if (!provider) {
+        throw new Error(
+          `Nextop CLI returned an invalid legacy provider at index ${index}.`,
+        );
+      }
+      const explicitAgentTargetId = readOptionalString(record?.agentTargetId);
+      if (output.schemaVersion === 2 && !explicitAgentTargetId) {
+        throw new Error(
+          `Nextop CLI legacy provider ${provider} does not resolve to one agent target.`,
+        );
+      }
+      const id = explicitAgentTargetId ?? `local:${provider}`;
+      if (seen.has(id)) {
+        throw new Error(
+          `Nextop CLI returned duplicate legacy agent target ${id}.`,
+        );
+      }
+      seen.add(id);
+      const availability = readRecord(record?.availability);
+      const status =
+        readOptionalString(availability?.status) ??
+        readOptionalString(record?.status);
+      const legacyPath = legacyStartPath(provider);
+      const detail =
+        readOptionalString(availability?.detail) ??
+        readOptionalString(record?.detail);
+      return [
+        {
+          id,
+          name:
+            readOptionalString(record?.displayName) ??
+            readOptionalString(record?.name) ??
+            provider,
+          provider,
+          supported: status === "available" && Boolean(legacyPath),
+          reason:
+            detail ??
+            (legacyPath
+              ? undefined
+              : "This legacy daemon cannot start this agent runtime."),
+          isDefault: provider === defaultProvider,
+          cliContract: "provider-compat" as const,
+        },
+      ];
+    },
+  );
+  if (!targets.some((target) => target.isDefault)) {
+    const fallback = targets.find((target) => target.supported) ?? targets[0];
+    if (fallback) fallback.isDefault = true;
+  }
+  return { targets };
+}
+
+async function readNextopAgentCatalog(
   runner: NextopCliRunner,
   timeoutMs: number,
-): Promise<Map<string, NextopProviderAvailability>> {
+): Promise<NextopAgentCatalog> {
   try {
-    return parseProviderAvailability(
-      await runner(["--json", "agent", "providers"], { timeoutMs }),
+    return parseAgentCatalog(
+      await runner(["--json", "agent", "list"], { timeoutMs }),
     );
-  } catch {
-    return new Map();
+  } catch (error) {
+    if (!isUnknownAgentListCommand(error)) {
+      throw error;
+    }
   }
+  return parseLegacyAgentCatalog(
+    await runner(["--json", "agent", "providers"], { timeoutMs }),
+  );
 }
 
-export function parseSessionFromOutput(value: unknown): RequiredSessionRef {
+export function isUnknownAgentListCommand(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.trim() : "";
+  const detail = message.startsWith("Nextop CLI failed: ")
+    ? message.slice("Nextop CLI failed: ".length).trim()
+    : message;
+  return detail === "unknown command: agent list";
+}
+
+export function parseSessionFromOutput(
+  value: unknown,
+  fallbackAgentTargetId?: string,
+): RequiredSessionRef {
   const output = value as NextopSessionOutput;
-  const session = normalizeSession(output.session);
+  const session = {
+    ...(fallbackAgentTargetId ? { agent: fallbackAgentTargetId } : {}),
+    ...normalizeSession(output.session),
+  };
   if (!session.agentSessionId) {
     throw new Error("Nextop CLI did not return agentSessionId.");
   }
@@ -654,7 +731,9 @@ export function parseSessionSummary(
   const latestVersion = readNumber(output.latestVersion) ?? 0;
   const messages = Array.isArray(output.messages)
     ? output.messages.flatMap((message): NextopMessage[] =>
-        message && typeof message === "object" ? [message as NextopMessage] : [],
+        message && typeof message === "object"
+          ? [message as NextopMessage]
+          : [],
       )
     : [];
 
@@ -664,6 +743,28 @@ export function parseSessionSummary(
     messages,
     session,
   };
+}
+
+function assertSessionMatchesAgentTarget(
+  value: unknown,
+  target: NextopAgentTargetSpec,
+): void {
+  if (target.cliContract !== "agent-id") {
+    return;
+  }
+  const output = value as NextopSessionSummaryOutput;
+  const session = readRecord(output.session) as NextopSession | undefined;
+  const actualAgentTargetId = readOptionalString(session?.agentTargetId);
+  if (!actualAgentTargetId) {
+    throw new Error(
+      `Nextop session summary did not return an agent target for ${target.id}.`,
+    );
+  }
+  if (actualAgentTargetId !== target.id) {
+    throw new Error(
+      `Nextop session belongs to agent target ${actualAgentTargetId}, not ${target.id}.`,
+    );
+  }
 }
 
 export function readWaitReason(waitOutput: unknown): string | undefined {
@@ -722,52 +823,6 @@ type RequiredSessionRef = AgentSessionRef & {
   agent: string;
   lastError?: string;
 };
-
-async function detectLocalCommand(command: string): Promise<string | undefined> {
-  const commandPath = await findExecutablePath(command);
-  if (!commandPath) {
-    return undefined;
-  }
-
-  try {
-    await runNextop(commandPath, ["--version"], {
-      timeoutMs: DEFAULT_LOCAL_COMMAND_TIMEOUT_MS,
-    });
-    return commandPath;
-  } catch {
-    return undefined;
-  }
-}
-
-async function findExecutablePath(command: string): Promise<string | undefined> {
-  if (command.includes("/")) {
-    return (await isExecutable(command)) ? command : undefined;
-  }
-
-  const pathValue = createCliEnv().PATH ?? "";
-  const seen = new Set<string>();
-  for (const directory of pathValue.split(delimiter)) {
-    if (!directory || seen.has(directory)) {
-      continue;
-    }
-    seen.add(directory);
-    const candidate = join(directory, command);
-    if (await isExecutable(candidate)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
-
-async function isExecutable(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function createCliEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -831,9 +886,7 @@ function runNextop(
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
-    const settle = (
-      callback: () => void,
-    ) => {
+    const settle = (callback: () => void) => {
       if (settled) {
         return;
       }
@@ -853,7 +906,9 @@ function runNextop(
       timeout = setTimeout(() => {
         child.kill("SIGTERM");
         settle(() =>
-          reject(new Error(`Nextop CLI timed out after ${options.timeoutMs}ms.`)),
+          reject(
+            new Error(`Nextop CLI timed out after ${options.timeoutMs}ms.`),
+          ),
         );
       }, options.timeoutMs);
     }
@@ -882,29 +937,23 @@ function runNextop(
           resolve({ stdout, stderr });
           return;
         }
-        const suffix = stderr.trim() || stdout.trim() || signal || `exit ${code}`;
+        const suffix =
+          stderr.trim() || stdout.trim() || signal || `exit ${code}`;
         reject(new Error(`Nextop CLI failed: ${suffix}`));
       });
     });
   });
 }
 
-async function readProviderModels(
-  provider: string,
+async function readAgentModels(
+  target: NextopAgentTargetSpec,
   runner: NextopCliRunner,
   timeoutMs: number,
 ): Promise<string[]> {
   try {
-    const output = (await runner(
-      [
-        "--json",
-        "agent",
-        "composer-options",
-        "--provider",
-        provider,
-      ],
-      { timeoutMs },
-    )) as NextopComposerOptionsOutput;
+    const output = (await runner(composerOptionsCommand(target), {
+      timeoutMs,
+    })) as NextopComposerOptionsOutput;
     return parseComposerModels(output);
   } catch {
     return [];
@@ -925,10 +974,13 @@ function parseComposerModels(output: NextopComposerOptionsOutput): string[] {
     }
   }
 
-  const options = Array.isArray(modelConfig?.options) ? modelConfig.options : [];
+  const options = Array.isArray(modelConfig?.options)
+    ? modelConfig.options
+    : [];
   for (const option of options) {
     const record = readRecord(option);
-    const value = readOptionalString(record?.value) ?? readOptionalString(record?.id);
+    const value =
+      readOptionalString(record?.value) ?? readOptionalString(record?.id);
     if (value) {
       models.add(value);
     }
@@ -938,22 +990,48 @@ function parseComposerModels(output: NextopComposerOptionsOutput): string[] {
 }
 
 async function resolveDefaultModel(
-  provider: string,
+  target: NextopAgentTargetSpec,
   runner: NextopCliRunner,
 ): Promise<string> {
-  const output = (await runner([
-    "--json",
-    "agent",
-    "composer-options",
-    "--provider",
-    provider,
-  ])) as NextopComposerOptionsOutput;
+  const output = (await runner(
+    composerOptionsCommand(target),
+  )) as NextopComposerOptionsOutput;
   const models = parseComposerModels(output);
   const model = models[0];
   if (!model) {
-    throw new Error(`No default model is available for ${provider}.`);
+    throw new Error(`No default model is available for ${target.id}.`);
   }
   return model;
+}
+
+function composerOptionsCommand(target: NextopAgentTargetSpec): string[] {
+  return target.cliContract === "agent-id"
+    ? ["--json", "agent", "composer-options", "--agent-id", target.id]
+    : ["--json", "agent", "composer-options", "--provider", target.provider];
+}
+
+function startCommand(target: NextopAgentTargetSpec): string[] {
+  if (target.cliContract === "agent-id") {
+    return ["--json", "agent", "start", "--agent-id", target.id];
+  }
+  const path = legacyStartPath(target.provider);
+  if (!path) {
+    throw new Error(
+      `The legacy daemon cannot start agent target ${target.id}.`,
+    );
+  }
+  return ["--json", ...path];
+}
+
+function legacyStartPath(provider: string): string[] | undefined {
+  switch (normalizeNextopProvider(provider)) {
+    case "codex":
+      return ["codex", "start"];
+    case "claude-code":
+      return ["claude", "start"];
+    default:
+      return undefined;
+  }
 }
 
 async function readLatestAssistantTextFromTail(
@@ -1016,28 +1094,11 @@ function oldestMessageVersion(messages: NextopMessage[]): number | undefined {
 }
 
 function findNextopAgentTarget(
+  catalog: NextopAgentCatalog,
   agent: string,
 ): NextopAgentTargetSpec | undefined {
   const value = agent.trim();
-  return NEXTOP_AGENT_TARGETS.find((target) => target.id === value);
-}
-
-function knownAgentTargetIds(): string[] {
-  return [
-    MOCK_AGENT_TARGET_ID,
-    ...NEXTOP_AGENT_TARGETS.map((target) => target.id),
-  ];
-}
-
-function agentTargetIdForProvider(
-  provider: string | undefined,
-): string | undefined {
-  if (!provider) {
-    return undefined;
-  }
-  const normalized = normalizeNextopProvider(provider);
-  return NEXTOP_AGENT_TARGETS.find((target) => target.provider === normalized)
-    ?.id;
+  return catalog.targets.find((target) => target.id === value);
 }
 
 function normalizeNextopProvider(provider: string): string {
@@ -1079,13 +1140,10 @@ function normalizeSession(value: unknown): Partial<RequiredSessionRef> {
   }
   const agentSessionId = readOptionalString(session.agentSessionId);
   const providerSessionId = readOptionalString(session.providerSessionId);
-  const agent =
-    readOptionalString(session.agentTargetId) ??
-    agentTargetIdForProvider(readOptionalString(session.provider));
+  const agent = readOptionalString(session.agentTargetId);
   const settings = readRecord(session.settings);
   const model =
-    readOptionalString(session.model) ??
-    readOptionalString(settings?.model);
+    readOptionalString(session.model) ?? readOptionalString(settings?.model);
   const status = normalizeSessionStatus(session.status, session.turnLifecycle);
   const title = readOptionalString(session.title);
   const lastError = readOptionalString(session.lastError);
@@ -1209,9 +1267,8 @@ function readPositiveIntegerEnv(name: string): number | undefined {
 
 function isAbortError(error: unknown): boolean {
   return (
-    error instanceof DOMException && error.name === "AbortError"
-  ) || (
-    error instanceof Error && error.name === "AbortError"
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "AbortError")
   );
 }
 
