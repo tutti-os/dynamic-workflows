@@ -2,6 +2,11 @@
 
 Workflow scripts can set `agent` and `model` on normal `agent({...})` nodes, `loop({...})` defaults, and loop step `agent({...})` calls.
 
+Agent values are exact target ids from `tutti --json agent list`. The catalog is
+daemon-owned and may include multiple targets backed by the same provider, so do
+not derive an agent id from a provider name or assume a fixed product list. The
+examples below use `local:codex` only as an example target id.
+
 Resolution order:
 
 1. Loop step `agent` / `model`

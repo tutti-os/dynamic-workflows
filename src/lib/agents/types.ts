@@ -4,6 +4,7 @@ export type AgentTargetOption = {
   provider: string;
   supported: boolean;
   models: string[];
+  isDefault?: boolean;
   reason?: string;
 };
 

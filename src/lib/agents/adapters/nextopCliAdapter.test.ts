@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createNextopCliAgentAdapter,
+  isUnknownAgentListCommand,
   latestAssistantText,
   newestAssistantText,
   parseNextopJson,
-  parseProviderAvailability,
   parseSessionFromOutput,
   resolveNextopCliPath,
 } from "./nextopCliAdapter";
@@ -33,42 +33,30 @@ describe("nextop cli adapter", () => {
     expect(() => parseNextopJson("not json")).toThrow(/invalid JSON/);
   });
 
-  it("maps provider availability by provider id", () => {
-    expect(
-      parseProviderAvailability({
-        providers: [
-          { provider: "claude-code", status: "unavailable", detail: "login" },
-          { provider: "codex", status: "available" },
-        ],
-      }),
-    ).toEqual(
-      new Map([
-        [
-          "claude-code",
-          { provider: "claude-code", supported: false, reason: "login" },
-        ],
-        ["codex", { provider: "codex", supported: true, reason: undefined }],
-      ]),
-    );
-  });
-
-  it("lists agent targets using local Codex detection when Nextop reports Codex unavailable", async () => {
+  it("lists every agent target and preserves the daemon default when providers repeat", async () => {
     const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       providerDetectionTimeoutMs: 123,
       providerModelsTimeoutMs: 456,
-      commandDetector: async (command) =>
-        command === "codex" ? "/Users/me/.local/bin/codex" : undefined,
       runner: async (args, options) => {
         calls.push({ args, timeoutMs: options?.timeoutMs });
-        if (args.includes("providers")) {
+        if (args.includes("list")) {
           return {
-            providers: [
+            schemaVersion: 1,
+            defaultAgentTargetId: "team:reviewer",
+            agents: [
               {
+                id: "team:builder",
+                name: "Builder",
                 provider: "codex",
-                status: "unavailable",
-                detail: "not found",
+                availability: { status: "available", detail: "" },
+              },
+              {
+                id: "team:reviewer",
+                name: "Reviewer",
+                provider: "codex",
+                availability: { status: "available", detail: "" },
               },
             ],
           };
@@ -85,40 +73,59 @@ describe("nextop cli adapter", () => {
 
     await expect(adapter.listTargets()).resolves.toEqual([
       {
-        id: "local:codex",
-        name: "Codex",
+        id: "team:builder",
+        name: "Builder",
         provider: "codex",
         supported: true,
         models: ["gpt-5.5"],
-        reason: "/Users/me/.local/bin/codex",
+        isDefault: false,
+        reason: undefined,
       },
       {
-        id: "local:claude-code",
-        name: "Claude Code",
-        provider: "claude-code",
-        supported: false,
-        models: [],
+        id: "team:reviewer",
+        name: "Reviewer",
+        provider: "codex",
+        supported: true,
+        models: ["gpt-5.5"],
+        isDefault: true,
         reason: undefined,
       },
     ]);
     expect(calls).toContainEqual({
-      args: ["--json", "agent", "providers"],
+      args: ["--json", "agent", "list"],
       timeoutMs: 123,
     });
     expect(calls).toContainEqual({
-      args: ["--json", "agent", "composer-options", "--provider", "codex"],
+      args: [
+        "--json",
+        "agent",
+        "composer-options",
+        "--agent-id",
+        "team:reviewer",
+      ],
       timeoutMs: 456,
     });
   });
 
-  it("falls back to local Codex when provider discovery fails", async () => {
+  it("falls back to the legacy catalog only for the exact unsupported command", async () => {
+    const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
-      commandDetector: async (command) =>
-        command === "codex" ? "/Users/me/.local/bin/codex" : undefined,
       runner: async (args) => {
+        calls.push(args);
+        if (args.includes("list")) {
+          throw new Error("Nextop CLI failed: unknown command: agent list");
+        }
         if (args.includes("providers")) {
-          throw new Error("provider discovery timed out");
+          return {
+            defaultProviderId: "codex",
+            providers: [
+              { provider: "codex", displayName: "Codex", status: "available" },
+            ],
+          };
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
         }
         throw new Error(`unexpected call: ${args.join(" ")}`);
       },
@@ -130,17 +137,182 @@ describe("nextop cli adapter", () => {
         name: "Codex",
         provider: "codex",
         supported: true,
-        models: [],
-        reason: "/Users/me/.local/bin/codex",
-      },
-      {
-        id: "local:claude-code",
-        name: "Claude Code",
-        provider: "claude-code",
-        supported: false,
-        models: [],
+        models: ["gpt-5"],
+        isDefault: true,
         reason: undefined,
       },
+    ]);
+    expect(calls.slice(0, 2)).toEqual([
+      ["--json", "agent", "list"],
+      ["--json", "agent", "providers"],
+    ]);
+  });
+
+  it("rejects a legacy catalog when one provider maps to multiple targets", async () => {
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      runner: async (args) => {
+        if (isAgentListCall(args)) {
+          throw new Error("unknown command: agent list");
+        }
+        if (args.includes("providers")) {
+          return {
+            schemaVersion: 2,
+            defaultProviderId: "codex",
+            providers: [
+              {
+                providerId: "codex",
+                agentTargetId: "team:builder",
+                availability: { status: "available" },
+              },
+              {
+                providerId: "codex",
+                agentTargetId: "team:reviewer",
+                availability: { status: "available" },
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(adapter.listTargets()).rejects.toThrow(
+      /provider codex maps to multiple agent targets/,
+    );
+  });
+
+  it("does not hide ordinary agent list failures behind provider fallback", async () => {
+    const calls: string[][] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      runner: async (args) => {
+        calls.push(args);
+        throw new Error("Nextop CLI timed out after 3000ms.");
+      },
+    });
+
+    await expect(adapter.listTargets()).rejects.toThrow(/timed out/);
+    expect(calls).toEqual([["--json", "agent", "list"]]);
+    expect(
+      isUnknownAgentListCommand(new Error("unknown command: agent list")),
+    ).toBe(true);
+    expect(
+      isUnknownAgentListCommand(new Error("unknown command: agent list now")),
+    ).toBe(false);
+  });
+
+  it("starts the exact selected target through the agent-id contract", async () => {
+    const calls: string[][] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      runner: async (args) => {
+        calls.push(args);
+        if (isAgentListCall(args)) {
+          return {
+            schemaVersion: 1,
+            defaultAgentTargetId: "team:builder",
+            agents: [
+              {
+                id: "team:builder",
+                name: "Builder",
+                provider: "codex",
+                availability: { status: "available" },
+              },
+              {
+                id: "team:reviewer",
+                name: "Reviewer",
+                provider: "codex",
+                availability: { status: "available" },
+              },
+            ],
+          };
+        }
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-reviewer",
+              provider: "codex",
+            },
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(
+      adapter.startSession?.({
+        agent: "team:reviewer",
+        model: "gpt-5",
+        cwd: "/tmp/project",
+        prompt: "review",
+      }),
+    ).resolves.toMatchObject({
+      agentSessionId: "session-reviewer",
+      agent: "team:reviewer",
+    });
+    expect(calls).toContainEqual([
+      "--json",
+      "agent",
+      "start",
+      "--agent-id",
+      "team:reviewer",
+      "--model",
+      "gpt-5",
+      "--prompt",
+      "review",
+      "--cwd",
+      "/tmp/project",
+    ]);
+  });
+
+  it("uses the old provider launcher only after exact agent-list fallback", async () => {
+    const calls: string[][] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      runner: async (args) => {
+        calls.push(args);
+        if (isAgentListCall(args)) {
+          throw new Error("unknown command: agent list");
+        }
+        if (args.includes("providers")) {
+          return {
+            defaultProviderId: "codex",
+            providers: [
+              {
+                providerId: "codex",
+                displayName: "Codex",
+                agentTargetId: "local:codex",
+                availability: { status: "available" },
+              },
+            ],
+          };
+        }
+        if (args.includes("start")) {
+          return { session: { agentSessionId: "legacy-1", provider: "codex" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(
+      adapter.startSession?.({
+        agent: "local:codex",
+        model: "gpt-5",
+        cwd: "/tmp/project",
+        prompt: "work",
+      }),
+    ).resolves.toMatchObject({ agent: "local:codex" });
+    expect(calls).toContainEqual([
+      "--json",
+      "codex",
+      "start",
+      "--model",
+      "gpt-5",
+      "--prompt",
+      "work",
+      "--cwd",
+      "/tmp/project",
     ]);
   });
 
@@ -148,6 +320,11 @@ describe("nextop cli adapter", () => {
     expect(() =>
       parseSessionFromOutput({ session: { provider: "codex" } }),
     ).toThrow(/agentSessionId/);
+    expect(() =>
+      parseSessionFromOutput({
+        session: { agentSessionId: "session-1", provider: "codex" },
+      }),
+    ).toThrow(/resolvable agent target/);
   });
 
   it("extracts the latest assistant text", () => {
@@ -178,6 +355,7 @@ describe("nextop cli adapter", () => {
       waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -228,10 +406,12 @@ describe("nextop cli adapter", () => {
       events.push(event);
     }
 
-    expect(calls[0]).toEqual([
+    expect(calls).toContainEqual([
       "--json",
-      "codex",
+      "agent",
       "start",
+      "--agent-id",
+      "local:codex",
       "--model",
       "gpt-5",
       "--prompt",
@@ -264,6 +444,7 @@ describe("nextop cli adapter", () => {
       waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -371,6 +552,7 @@ describe("nextop cli adapter", () => {
       waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -450,6 +632,7 @@ describe("nextop cli adapter", () => {
       pollIntervalMs: 1,
       waitTimeoutMs: 1_000,
       runner: async (args) => {
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -558,6 +741,7 @@ describe("nextop cli adapter", () => {
       pollIntervalMs: 1,
       waitTimeoutMs: 1_000,
       runner: async (args) => {
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -663,6 +847,7 @@ describe("nextop cli adapter", () => {
       waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -682,6 +867,7 @@ describe("nextop cli adapter", () => {
               latestVersion: 12,
               session: {
                 agentSessionId: "session-1",
+                agentTargetId: "local:codex",
                 provider: "codex",
                 status: "completed",
               },
@@ -766,6 +952,7 @@ describe("nextop cli adapter", () => {
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("composer-options")) {
           return {
             effectiveSettings: { model: "gpt-5" },
@@ -787,6 +974,7 @@ describe("nextop cli adapter", () => {
               latestVersion: 4,
               session: {
                 agentSessionId: "session-1",
+                agentTargetId: "local:codex",
                 provider: "codex",
                 status: "completed",
               },
@@ -802,7 +990,9 @@ describe("nextop cli adapter", () => {
                 provider: "codex",
                 status: "completed",
               },
-              messages: [{ role: "assistant", text: "second done", version: 6 }],
+              messages: [
+                { role: "assistant", text: "second done", version: 6 },
+              ],
             };
           }
         }
@@ -872,6 +1062,145 @@ describe("nextop cli adapter", () => {
     });
   });
 
+  it.each(["attachSessionId", "resumeSessionId"] as const)(
+    "refuses to use a %s that belongs to another target with the same provider",
+    async (sessionField) => {
+      const calls: string[][] = [];
+      const adapter = createNextopCliAgentAdapter({
+        includeMockTarget: false,
+        runner: async (args) => {
+          calls.push(args);
+          if (isAgentListCall(args)) {
+            return {
+              schemaVersion: 1,
+              defaultAgentTargetId: "team:builder",
+              agents: [
+                {
+                  id: "team:builder",
+                  name: "Builder",
+                  provider: "codex",
+                  availability: { status: "available" },
+                },
+                {
+                  id: "team:reviewer",
+                  name: "Reviewer",
+                  provider: "codex",
+                  availability: { status: "available" },
+                },
+              ],
+            };
+          }
+          if (args.includes("composer-options")) {
+            return {
+              effectiveSettings: { model: "gpt-5" },
+              modelConfig: { options: [] },
+            };
+          }
+          if (args.includes("session-summary")) {
+            return {
+              latestVersion: 4,
+              session: {
+                agentSessionId: "session-reviewer",
+                agentTargetId: "team:reviewer",
+                provider: "codex",
+                status: "completed",
+              },
+              messages: [],
+            };
+          }
+          throw new Error(`unexpected call: ${args.join(" ")}`);
+        },
+      });
+
+      const events = [];
+      for await (const event of adapter.run({
+        runId: `run-1:${sessionField}`,
+        agent: "team:builder",
+        cwd: "/tmp/project",
+        prompt: "continue",
+        [sessionField]: "session-reviewer",
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual({
+        type: "error",
+        code: "NEXTOP_CLI_ERROR",
+        message:
+          "Nextop session belongs to agent target team:reviewer, not team:builder.",
+        retryable: true,
+      });
+      expect(events.at(-1)).toEqual({
+        type: "done",
+        status: "failed",
+        reason: "error",
+      });
+      expect(calls.some((args) => args.includes("send"))).toBe(false);
+    },
+  );
+
+  it.each(["attachSessionId", "resumeSessionId"] as const)(
+    "refuses to use a legacy %s from another provider",
+    async (sessionField) => {
+      const calls: string[][] = [];
+      const adapter = createNextopCliAgentAdapter({
+        includeMockTarget: false,
+        runner: async (args) => {
+          calls.push(args);
+          if (isAgentListCall(args)) {
+            throw new Error("unknown command: agent list");
+          }
+          if (args.includes("providers")) {
+            return {
+              defaultProviderId: "codex",
+              providers: [
+                {
+                  providerId: "codex",
+                  displayName: "Codex",
+                  availability: { status: "available" },
+                },
+              ],
+            };
+          }
+          if (args.includes("composer-options")) {
+            return { effectiveSettings: { model: "gpt-5" } };
+          }
+          if (args.includes("session-summary")) {
+            return {
+              latestVersion: 4,
+              session: {
+                agentSessionId: "session-claude",
+                provider: "claude-code",
+                status: "completed",
+              },
+              messages: [],
+            };
+          }
+          throw new Error(`unexpected call: ${args.join(" ")}`);
+        },
+      });
+
+      const events = [];
+      for await (const event of adapter.run({
+        runId: `run-legacy:${sessionField}`,
+        agent: "local:codex",
+        cwd: "/tmp/project",
+        prompt: "continue",
+        [sessionField]: "session-claude",
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual({
+        type: "error",
+        code: "NEXTOP_CLI_ERROR",
+        message: "Nextop session belongs to provider claude-code, not codex.",
+        retryable: true,
+      });
+      expect(calls.some((args) => args.includes("send"))).toBe(false);
+    },
+  );
+
   it("reads final text from descending tail pages after completion", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
@@ -879,6 +1208,7 @@ describe("nextop cli adapter", () => {
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -993,6 +1323,7 @@ describe("nextop cli adapter", () => {
       pollIntervalMs: 1,
       runner: async (args) => {
         calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
           return {
             session: {
@@ -1074,4 +1405,23 @@ function restoreEnv(name: string, value: string | undefined) {
     return;
   }
   process.env[name] = value;
+}
+
+function isAgentListCall(args: string[]): boolean {
+  return args.join(" ") === "--json agent list";
+}
+
+function currentAgentCatalog() {
+  return {
+    schemaVersion: 1,
+    defaultAgentTargetId: "local:codex",
+    agents: [
+      {
+        id: "local:codex",
+        name: "Codex",
+        provider: "codex",
+        availability: { status: "available", reasonCode: "", detail: "" },
+      },
+    ],
+  };
 }

@@ -4,6 +4,10 @@ The dev package exposes the `dynamic-workflows` scope through `tutti.cli.json`. 
 
 Use `--json` for machine-readable output:
 
+Discover exact agent ids with `tutti --json agent list`. The available targets
+are dynamic and multiple targets may share a provider; the ids below are only
+examples.
+
 ```bash
 tutti --json dynamic-workflows status
 tutti --json dynamic-workflows agents

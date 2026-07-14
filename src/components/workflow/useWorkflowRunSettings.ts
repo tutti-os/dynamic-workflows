@@ -37,12 +37,7 @@ export function useWorkflowRunSettings(): {
             ? targets
             : FALLBACK_AGENTS;
         setAgents(nextAgents);
-        const preferredAgent =
-          nextAgents.find(
-            (item) => item.supported && item.id === "local:codex",
-          ) ??
-          nextAgents.find((item) => item.supported && item.id !== "mock") ??
-          nextAgents.find((item) => item.supported);
+        const preferredAgent = selectDefaultAgentTarget(nextAgents);
         if (preferredAgent) {
           setAgentState(preferredAgent.id);
         }
@@ -75,4 +70,14 @@ export function useWorkflowRunSettings(): {
     setModel,
     setCwd,
   };
+}
+
+export function selectDefaultAgentTarget(
+  agents: AgentTargetOption[],
+): AgentTargetOption | undefined {
+  return (
+    agents.find((item) => item.isDefault && item.supported) ??
+    agents.find((item) => item.supported && item.id !== "mock") ??
+    agents.find((item) => item.supported)
+  );
 }

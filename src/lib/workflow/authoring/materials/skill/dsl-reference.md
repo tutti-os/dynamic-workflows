@@ -75,7 +75,7 @@ agent({
 - Put upstream values in `inputs` (for example `inputs: { inventory }`) and reference them in the prompt as `{{inventory}}`.
 - Use `{{workflow.cwd}}` when an agent needs the actual run cwd; never declare a normal `{{cwd}}` input for this.
 - Optional per-node fields: `agent`, `model`, `cwd`, `session`.
-  - `agent` must be an agent target id such as `"local:codex"` or `"local:claude-code"`.
+  - `agent` must be an exact agent target id discovered through `tutti --json agent list`; never derive it from provider metadata. `"local:codex"` is only an example and the available catalog is dynamic.
   - `cwd: "relative/path"` runs the agent in a directory relative to the run cwd.
 - `appendPrompt` is only meaningful on loop steps (see below); it does nothing on a standalone agent node.
 
