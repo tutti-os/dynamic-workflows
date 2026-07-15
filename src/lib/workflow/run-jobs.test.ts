@@ -34,6 +34,315 @@ afterEach(() => {
 });
 
 describe("workflow run jobs recovery", () => {
+  it("persists a waiting run and resumes after a human response", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(SCRIPT);
+    let invocation = 0;
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      invocation += 1;
+      const runId = request.runId ?? "run";
+      yield { type: "run_started", runId, parsed };
+      if (invocation === 1) {
+        const task = await request.onHumanTask?.({
+          runId,
+          nodeId: "approval",
+          executionKey: "human:approval",
+          spec: {
+            context: [],
+            actions: [{
+              id: "pass",
+              label: "Pass",
+              intent: "primary",
+              fields: [],
+            }],
+          },
+        });
+        if (!task) {
+          throw new Error("task missing");
+        }
+        yield {
+          type: "human_task_requested",
+          runId,
+          nodeId: "first",
+          task,
+        };
+        yield {
+          type: "run_waiting",
+          runId,
+          pendingTaskIds: [task.id],
+          outputs: {},
+        };
+        return;
+      }
+      yield {
+        type: "run_completed",
+        runId,
+        status: "completed",
+        outputs: {},
+      };
+    });
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const {
+      getWorkflowHumanTask,
+      listWorkflowHumanTasks,
+      resolveWorkflowHumanTask,
+    } = await import("@/lib/db/workflows/human-tasks");
+    const { getWorkflowRun } = await import("@/lib/db/workflows/runs");
+    const {
+      isWorkflowRunJobActive,
+      resumeWorkflowRunAfterHumanTask,
+      startWorkflowRunJob,
+      subscribeWorkflowRunJob,
+    } = await import("@/lib/workflow/run-jobs");
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: process.cwd(),
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+    const waitingStatuses: string[] = [];
+    subscribeWorkflowRunJob(run.id, (event) => {
+      if (event.type === "run_waiting") {
+        waitingStatuses.push(getWorkflowRun(run.id)?.status ?? "missing");
+      }
+    });
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    expect(getWorkflowRun(run.id)?.status).toBe("waiting_for_human");
+    expect(waitingStatuses).toEqual(["waiting_for_human"]);
+    const [task] = listWorkflowHumanTasks(run.id, "pending");
+    expect(getWorkflowHumanTask(task.id)?.status).toBe("pending");
+    resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: task.id,
+      action: "pass",
+      values: {},
+      revision: task.revision,
+    });
+    await resumeWorkflowRunAfterHumanTask({
+      workflowId: detail.workflow.id,
+      runId: run.id,
+    });
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    expect(getWorkflowRun(run.id)?.status).toBe("completed");
+    expect(listWorkflowHumanTasks(run.id, "pending")).toEqual([]);
+  });
+
+  it("keeps completed nodes in recovery when another human task wakes an active run", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const script = `
+export const meta = { name: "multi-human", description: "Multi human" }
+const first = await human({ id: "first", actions: [{ id: "pass", label: "Pass" }] })
+const second = await human({ id: "second", actions: [{ id: "pass", label: "Pass" }] })
+const afterFirst = await agent({ id: "after-first", prompt: "{{first.action}}" })
+`;
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(script);
+    const afterFirstNode = parsed.nodes.find((node) => node.id === "after-first");
+    if (!afterFirstNode) {
+      throw new Error("after-first node missing");
+    }
+    let invocation = 0;
+    let releaseSecondWait: (() => void) | undefined;
+    const secondWaitAllowed = new Promise<void>((resolve) => {
+      releaseSecondWait = resolve;
+    });
+    let markAfterFirstCompleted: (() => void) | undefined;
+    const afterFirstCompleted = new Promise<void>((resolve) => {
+      markAfterFirstCompleted = resolve;
+    });
+    let finalRecovery: WorkflowRunRequest["recovery"];
+
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      invocation += 1;
+      const runId = request.runId ?? "run";
+      yield { type: "run_started", runId, parsed };
+      if (invocation === 1) {
+        const tasks = [];
+        for (const nodeId of ["first", "second"]) {
+          const task = await request.onHumanTask?.({
+            runId,
+            nodeId,
+            executionKey: `human:${nodeId}`,
+            spec: {
+              context: [],
+              actions: [{ id: "pass", label: "Pass", intent: "primary", fields: [] }],
+            },
+          });
+          if (!task) {
+            throw new Error("task missing");
+          }
+          tasks.push(task);
+          yield { type: "human_task_requested", runId, nodeId, task };
+        }
+        yield {
+          type: "run_waiting",
+          runId,
+          pendingTaskIds: tasks.map((task) => task.id),
+          outputs: {},
+        };
+        return;
+      }
+      if (invocation === 2) {
+        yield {
+          type: "human_task_resolved",
+          runId,
+          nodeId: "first",
+          taskId: "first-task",
+          response: { action: "pass", values: {} },
+        };
+        yield {
+          type: "node_completed",
+          runId,
+          nodeId: "first",
+          output: { action: "pass", values: {} },
+        };
+        yield {
+          type: "node_started",
+          runId,
+          nodeId: "after-first",
+          node: afterFirstNode,
+          agent: "mock",
+        };
+        yield {
+          type: "node_completed",
+          runId,
+          nodeId: "after-first",
+          output: "side effect completed once",
+        };
+        markAfterFirstCompleted?.();
+        await secondWaitAllowed;
+        const pending = request.onHumanTask
+          ? await request.onHumanTask({
+              runId,
+              nodeId: "second",
+              executionKey: "human:second",
+              spec: {
+                context: [],
+                actions: [{ id: "pass", label: "Pass", intent: "primary", fields: [] }],
+              },
+            })
+          : undefined;
+        if (!pending) {
+          throw new Error("second task missing");
+        }
+        yield {
+          type: "run_waiting",
+          runId,
+          pendingTaskIds: [pending.id],
+          outputs: { "after-first": "side effect completed once" },
+        };
+        return;
+      }
+      finalRecovery = request.recovery;
+      yield {
+        type: "human_task_resolved",
+        runId,
+        nodeId: "second",
+        taskId: "second-task",
+        response: { action: "pass", values: {} },
+      };
+      yield {
+        type: "node_completed",
+        runId,
+        nodeId: "second",
+        output: { action: "pass", values: {} },
+      };
+      yield {
+        type: "run_completed",
+        runId,
+        status: "completed",
+        outputs: { "after-first": "side effect completed once" },
+      };
+    });
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { listWorkflowHumanTasks, resolveWorkflowHumanTask } = await import(
+      "@/lib/db/workflows/human-tasks"
+    );
+    const { getWorkflowRun } = await import("@/lib/db/workflows/runs");
+    const {
+      isWorkflowRunJobActive,
+      resumeWorkflowRunAfterHumanTask,
+      startWorkflowRunJob,
+    } = await import("@/lib/workflow/run-jobs");
+    const detail = createWorkflowFromScript(script);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: process.cwd(),
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+    const tasks = listWorkflowHumanTasks(run.id);
+    const first = tasks.find((task) => task.nodeId === "first");
+    const second = tasks.find((task) => task.nodeId === "second");
+    if (!first || !second) {
+      throw new Error("human tasks missing");
+    }
+    resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: first.id,
+      action: "pass",
+      values: {},
+      revision: first.revision,
+    });
+    await resumeWorkflowRunAfterHumanTask({
+      workflowId: detail.workflow.id,
+      runId: run.id,
+    });
+    await afterFirstCompleted;
+    resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: second.id,
+      action: "pass",
+      values: {},
+      revision: second.revision,
+    });
+    await resumeWorkflowRunAfterHumanTask({
+      workflowId: detail.workflow.id,
+      runId: run.id,
+    });
+    releaseSecondWait?.();
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    expect(invocation).toBe(3);
+    expect(finalRecovery?.completedNodeIds).toEqual(
+      expect.arrayContaining(["first", "after-first"]),
+    );
+    expect(getWorkflowRun(run.id)?.status).toBe("completed");
+  });
+
   it("reconciles a stale running run from a terminal log event", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
@@ -165,3 +474,13 @@ describe("workflow run jobs recovery", () => {
     });
   });
 });
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let index = 0; index < 50; index += 1) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error("Timed out waiting for workflow job.");
+}

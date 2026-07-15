@@ -29,6 +29,12 @@ export function EditPanel(props: EditPanelProps) {
     (step) => step.id === props.selectedLoopStepId,
   );
   const editTarget = selectedLoopStep ?? selectedNode;
+  const human =
+    selectedLoopStep?.kind === "human"
+      ? selectedLoopStep.human
+      : selectedNode?.kind === "human"
+        ? selectedNode.human
+        : undefined;
 
   return (
     <div className="edit-panel">
@@ -68,20 +74,35 @@ export function EditPanel(props: EditPanelProps) {
             </div>
           ) : null}
 
-          <div className="field">
-            <label htmlFor="node-prompt">
-              {selectedLoopStep ? "Step prompt" : "Prompt"}
-            </label>
-            <Textarea
-              id="node-prompt"
-              rows={8}
-              value={props.promptDraft}
-              disabled={!editTarget?.promptRange}
-              onChange={(event) => props.onPromptChange(event.target.value)}
-            />
-          </div>
+          {human ? (
+            <div className="field">
+              <label>Human task</label>
+              {human.description ? <div className="field-hint">{human.description}</div> : null}
+              <div className="node-refs">
+                {human.actions.map((action) => (
+                  <Badge variant="default" key={action.id}>
+                    {action.label} · {action.fields.length} fields
+                  </Badge>
+                ))}
+              </div>
+              <div className="field-hint">Edit Human Task configuration in the workflow script.</div>
+            </div>
+          ) : (
+            <div className="field">
+              <label htmlFor="node-prompt">
+                {selectedLoopStep ? "Step prompt" : "Prompt"}
+              </label>
+              <Textarea
+                id="node-prompt"
+                rows={8}
+                value={props.promptDraft}
+                disabled={!editTarget?.promptRange}
+                onChange={(event) => props.onPromptChange(event.target.value)}
+              />
+            </div>
+          )}
 
-          {selectedLoopStep ? (
+          {selectedLoopStep?.kind === "agent" ? (
             <div className="field">
               <label htmlFor="node-append-prompt">Append prompt</label>
               {selectedLoopStep.appendPromptRange ? (

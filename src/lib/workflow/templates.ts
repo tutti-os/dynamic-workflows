@@ -1,4 +1,8 @@
-import type { WorkflowInputValue, WorkflowNode } from "./types";
+import type {
+  WorkflowInputValue,
+  WorkflowNode,
+  WorkflowValue,
+} from "./types";
 
 const TEMPLATE_REF_PATTERN =
   /\{\{\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\}\}/g;
@@ -121,7 +125,7 @@ export function validateRuntimeOptionTemplate(
 
 export function renderPrompt(
   node: WorkflowNode,
-  outputs: Record<string, string>,
+  outputs: Record<string, WorkflowValue>,
   workflowInputs: Record<string, WorkflowInputValue> = {},
   context: { cwd?: string } = {},
 ): string {
@@ -137,17 +141,56 @@ export function renderPrompt(
     if (!sourceNodeId) {
       return stringifyTemplateValue(workflowInputs[name]);
     }
-    return outputs[sourceNodeId] ?? "";
+    return resolveBoundOutput(outputs[sourceNodeId], name, node, sourceNodeId);
   });
 }
 
 export function renderTemplate(
   template: string,
-  resolveValue: (name: string) => string | undefined,
+  resolveValue: (name: string) => WorkflowValue | undefined,
 ): string {
   return template.replace(TEMPLATE_REF_PATTERN, (_match, name: string) => {
-    return resolveValue(name) ?? "";
+    return stringifyWorkflowValue(resolveValue(name));
   });
+}
+
+export function renderTemplateValue(
+  template: string,
+  resolveValue: (name: string) => WorkflowValue | undefined,
+): WorkflowValue {
+  const match = template.match(WHOLE_VALUE_TEMPLATE_PATTERN);
+  if (match && match[2] === undefined) {
+    return resolveValue(match[1]) ?? "";
+  }
+  return renderTemplate(template, resolveValue);
+}
+
+export function resolveWorkflowValuePath(
+  value: WorkflowValue | undefined,
+  path: string[],
+): WorkflowValue | undefined {
+  let current = value;
+  for (const segment of path) {
+    if (
+      current === null ||
+      typeof current !== "object" ||
+      Array.isArray(current)
+    ) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+export function stringifyWorkflowValue(value: WorkflowValue | undefined): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
 }
 
 export function renderValueTemplate(
@@ -168,6 +211,22 @@ export function renderValueTemplate(
 
 function stringifyTemplateValue(value: WorkflowInputValue | undefined): string {
   return value === undefined ? "" : String(value);
+}
+
+function resolveBoundOutput(
+  value: WorkflowValue | undefined,
+  reference: string,
+  node: WorkflowNode,
+  sourceNodeId: string,
+): WorkflowValue | undefined {
+  const binding = node.inputs.find(
+    (input) => input.name === reference && input.sourceNodeId === sourceNodeId,
+  );
+  if (!binding) {
+    return value;
+  }
+  const segments = reference.split(".");
+  return resolveWorkflowValuePath(value, segments.slice(1));
 }
 
 export function quoteTemplateLiteral(value: string): string {

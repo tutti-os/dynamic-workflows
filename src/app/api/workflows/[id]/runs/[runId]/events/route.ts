@@ -5,6 +5,7 @@ import {
 } from "@/lib/db/workflows/workflow-repository";
 import {
   getWorkflowRun,
+  isWorkflowRunExecutionClaimed,
 } from "@/lib/db/workflows/runs";
 import { readRunLog } from "@/lib/workflow/run-log";
 import {
@@ -32,17 +33,22 @@ export async function GET(
 
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   const stream = new ReadableStream({
     async start(controller) {
       const seenEvents = new Set<string>();
       let closed = false;
+      let replaying = true;
 
       const close = () => {
         if (closed) {
           return;
         }
         closed = true;
+        if (pollTimer) {
+          clearInterval(pollTimer);
+        }
         unsubscribe?.();
         try {
           controller.close();
@@ -61,7 +67,10 @@ export async function GET(
         }
         seenEvents.add(payload);
         controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
-        if (event.type === "run_completed") {
+        if (
+          !replaying &&
+          (event.type === "run_completed" || event.type === "run_waiting")
+        ) {
           close();
         }
       };
@@ -72,13 +81,45 @@ export async function GET(
       for (const event of parseRunLogEvents(log)) {
         enqueue(event);
       }
+      replaying = false;
 
       const currentRun = getWorkflowRun(runId);
-      if (!isWorkflowRunJobActive(runId) || currentRun?.status !== "running") {
+      if (currentRun?.status !== "running") {
+        close();
+      } else if (
+        !isWorkflowRunJobActive(runId) &&
+        isWorkflowRunExecutionClaimed(runId)
+      ) {
+        let polling = false;
+        pollTimer = setInterval(() => {
+          if (polling || closed) {
+            return;
+          }
+          polling = true;
+          void (async () => {
+            try {
+              const nextLog = await readRunLog(run.logPath);
+              for (const event of parseRunLogEvents(nextLog)) {
+                enqueue(event);
+              }
+              if (getWorkflowRun(runId)?.status !== "running") {
+                close();
+              }
+            } catch {
+              close();
+            } finally {
+              polling = false;
+            }
+          })();
+        }, 500);
+      } else if (!isWorkflowRunJobActive(runId)) {
         close();
       }
     },
     cancel() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+      }
       unsubscribe?.();
     },
   });

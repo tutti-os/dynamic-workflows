@@ -6,6 +6,7 @@ import {
   type RunDetail,
 } from "@/lib/workflow/run-state";
 import { renderPrompt } from "@/lib/workflow/templates";
+import { stringifyWorkflowValue } from "@/lib/workflow/templates";
 import type {
   ParsedWorkflow,
   WorkflowInputValue,
@@ -58,7 +59,10 @@ export function buildRunNodeDetail(
       "idle",
     session: result.nodeSessions[node.id] ?? eventResult.nodeSessions[node.id],
     input: input.trim() ? input : "No input captured.",
-    output: result.outputs[node.id] ?? eventOutput ?? "No output captured.",
+    output:
+      result.outputs[node.id] !== undefined || eventOutput !== undefined
+        ? stringifyWorkflowValue(result.outputs[node.id] ?? eventOutput)
+        : "No output captured.",
     log: log.trim() ? log : "No node log events.",
   };
 }

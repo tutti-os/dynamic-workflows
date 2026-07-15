@@ -11,12 +11,14 @@ import type {
   WorkflowNodeSessionStatus,
   WorkflowNodeStatus,
   WorkflowRunEvent,
+  WorkflowHumanTask,
+  WorkflowValue,
 } from "./types";
 
 export { RUN_TEXT_PREVIEW_CHARS };
 
 export type WorkflowRunResult = {
-  outputs: Record<string, string>;
+  outputs: Record<string, WorkflowValue>;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   nodeSessions: Record<string, WorkflowNodeSessionRef>;
   error?: string;
@@ -30,6 +32,7 @@ export type WorkflowRunSummary = WorkflowRunResult & {
 export type RunDetail = {
   run: WorkflowRunRecord;
   log: string;
+  humanTasks?: WorkflowHumanTask[];
   logSizeBytes?: number;
   logReturnedBytes?: number;
   logTruncated?: boolean;
@@ -91,14 +94,16 @@ export function applyWorkflowRunEvent(
       session?: unknown;
     };
     if (agentEvent.type === "text_delta" && agentEvent.text) {
+      const previous = next.outputs[event.nodeId];
       next.outputs[event.nodeId] =
-        `${next.outputs[event.nodeId] ?? ""}${agentEvent.text}`;
+        `${typeof previous === "string" ? previous : ""}${agentEvent.text}`;
       if (next.nodeSessions[event.nodeId]) {
+        const outputText = next.outputs[event.nodeId];
         next.nodeSessions[event.nodeId] = withNodeSessionPatch(
           next.nodeSessions[event.nodeId],
           {
             nodeId: event.nodeId,
-            lastText: next.outputs[event.nodeId],
+            lastText: typeof outputText === "string" ? outputText : undefined,
           },
         );
       }
@@ -134,7 +139,8 @@ export function applyWorkflowRunEvent(
         {
           nodeId: event.nodeId,
           status: "completed",
-          lastText: event.output,
+          lastText:
+            typeof event.output === "string" ? event.output : undefined,
         },
       );
     }
@@ -156,6 +162,24 @@ export function applyWorkflowRunEvent(
         },
       );
     }
+    return next;
+  }
+
+  if (event.type === "human_task_requested") {
+    next.nodeStatuses[event.nodeId] = "waiting";
+    return next;
+  }
+
+  if (event.type === "human_task_resolved") {
+    next.nodeStatuses[event.nodeId] = "running";
+    return next;
+  }
+
+  if (event.type === "run_waiting") {
+    next.status = "waiting_for_human";
+    next.outputs = { ...next.outputs, ...event.outputs };
+    next.error = undefined;
+    next.errorCode = undefined;
     return next;
   }
 
@@ -209,7 +233,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
   };
 
   return {
-    outputs: isStringRecord(raw.outputs) ? raw.outputs : {},
+    outputs: isWorkflowValueRecord(raw.outputs) ? raw.outputs : {},
     nodeStatuses: isWorkflowNodeStatusRecord(raw.nodeStatuses)
       ? raw.nodeStatuses
       : {},
@@ -254,6 +278,7 @@ export function createRunDetailFromStartedEvent(input: {
       finishedAt: null,
     },
     log: limitRunText(initialLog),
+    humanTasks: [],
     logSizeBytes: 0,
     logReturnedBytes: 0,
     logTruncated: initialLog.length > RUN_TEXT_PREVIEW_CHARS,
@@ -273,11 +298,15 @@ export function applyRunEventToDetail(
     event,
   );
   const nextLog = appendRunLog(detail.log, event);
+  const humanTasks = applyHumanTaskEvent(detail.humanTasks ?? [], event);
 
   return {
     run: {
       ...detail.run,
       status: summary.status,
+      pendingHumanTaskCount: humanTasks.filter(
+        (task) => task.status === "pending",
+      ).length,
       finishedAt:
         event.type === "run_completed"
           ? new Date().toISOString()
@@ -285,10 +314,37 @@ export function applyRunEventToDetail(
       result: toWorkflowRunResult(summary),
     },
     log: nextLog.log,
+    humanTasks,
     logSizeBytes: detail.logSizeBytes,
     logReturnedBytes: detail.logReturnedBytes,
     logTruncated: detail.logTruncated || nextLog.truncated,
   };
+}
+
+function applyHumanTaskEvent(
+  tasks: WorkflowHumanTask[],
+  event: WorkflowRunEvent,
+): WorkflowHumanTask[] {
+  if (event.type === "human_task_requested") {
+    return [
+      ...tasks.filter((task) => task.id !== event.task.id),
+      event.task,
+    ].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+  if (event.type === "human_task_resolved") {
+    return tasks.map((task) =>
+      task.id === event.taskId
+        ? {
+            ...task,
+            status: "resolved" as const,
+            response: event.response,
+            revision: task.status === "pending" ? task.revision + 1 : task.revision,
+            resolvedAt: task.resolvedAt ?? new Date().toISOString(),
+          }
+        : task,
+    );
+  }
+  return tasks;
 }
 
 export function readNodeStatusesFromRunLog(
@@ -344,11 +400,32 @@ function appendRunLog(
   };
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
+function isWorkflowValueRecord(
+  value: unknown,
+): value is Record<string, WorkflowValue> {
   return (
     value !== null &&
     typeof value === "object" &&
-    Object.values(value).every((item) => typeof item === "string")
+    !Array.isArray(value) &&
+    Object.values(value).every(isWorkflowValue)
+  );
+}
+
+function isWorkflowValue(value: unknown): value is WorkflowValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isWorkflowValue);
+  }
+  return (
+    typeof value === "object" &&
+    Object.values(value).every(isWorkflowValue)
   );
 }
 
@@ -367,6 +444,7 @@ function isWorkflowNodeStatus(value: unknown): value is WorkflowNodeStatus {
     value === "idle" ||
     value === "queued" ||
     value === "running" ||
+    value === "waiting" ||
     value === "completed" ||
     value === "failed" ||
     value === "skipped"
@@ -499,7 +577,10 @@ function isWorkflowRunEvent(value: unknown): value is WorkflowRunEvent {
     type === "node_started" ||
     type === "node_event" ||
     type === "node_completed" ||
+    type === "human_task_requested" ||
+    type === "human_task_resolved" ||
     type === "node_failed" ||
+    type === "run_waiting" ||
     type === "run_completed"
   );
 }

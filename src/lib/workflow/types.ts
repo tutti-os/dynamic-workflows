@@ -1,11 +1,18 @@
 import type { ApiErrorCode } from "@/lib/api/errors";
 
-export type WorkflowNodeKind = "agent" | "log" | "pipeline" | "dynamic" | "loop";
+export type WorkflowNodeKind =
+  | "agent"
+  | "human"
+  | "log"
+  | "pipeline"
+  | "dynamic"
+  | "loop";
 
 export type WorkflowNodeStatus =
   | "idle"
   | "queued"
   | "running"
+  | "waiting"
   | "completed"
   | "failed"
   | "skipped";
@@ -31,7 +38,7 @@ export type WorkflowSessionSpec =
       scope?: "loop" | "step";
     };
 
-export type WorkflowLoopStep = {
+export type WorkflowAgentLoopStep = {
   id: string;
   kind: "agent";
   label: string;
@@ -48,10 +55,73 @@ export type WorkflowLoopStep = {
   labelRange?: EditableRange;
 };
 
-export type WorkflowLoopUntil = {
-  source: string;
-  finalStatus: string;
+export type WorkflowHumanContextDisplay = "text" | "markdown" | "json";
+
+export type WorkflowHumanContextItem = {
+  label: string;
+  value: string;
+  display: WorkflowHumanContextDisplay;
 };
+
+export type WorkflowHumanFieldOption = {
+  label: string;
+  value: string;
+};
+
+export type WorkflowHumanField = {
+  id: string;
+  type: "text" | "textarea" | "select";
+  label: string;
+  required: boolean;
+  placeholder?: string;
+  defaultValue?: string;
+  options?: WorkflowHumanFieldOption[];
+};
+
+export type WorkflowHumanAction = {
+  id: string;
+  label: string;
+  intent: "primary" | "default" | "danger";
+  fields: WorkflowHumanField[];
+};
+
+export type WorkflowHumanSpec = {
+  description?: string;
+  context: WorkflowHumanContextItem[];
+  actions: WorkflowHumanAction[];
+};
+
+export type WorkflowHumanLoopStep = {
+  id: string;
+  kind: "human";
+  label: string;
+  human: WorkflowHumanSpec;
+  prompt?: undefined;
+  appendPrompt?: undefined;
+  agent?: undefined;
+  model?: undefined;
+  cwd?: undefined;
+  session?: undefined;
+  templateRefs: string[];
+  sourceRange?: EditableRange;
+  promptRange?: undefined;
+  appendPromptRange?: undefined;
+  labelRange?: EditableRange;
+};
+
+export type WorkflowLoopStep = WorkflowAgentLoopStep | WorkflowHumanLoopStep;
+
+export type WorkflowLoopUntil =
+  | {
+      source: string;
+      finalStatus: string;
+      equals?: never;
+    }
+  | {
+      source: string;
+      equals: WorkflowScalarValue;
+      finalStatus?: never;
+    };
 
 export type WorkflowLoopSpec = {
   maxIterations: number;
@@ -73,6 +143,7 @@ export type WorkflowNode = {
   model?: string;
   cwd?: string;
   session?: WorkflowSessionSpec;
+  human?: WorkflowHumanSpec;
   loop?: WorkflowLoopSpec;
   inputs: WorkflowInputBinding[];
   templateRefs: string[];
@@ -101,7 +172,56 @@ export type WorkflowMeta = {
   requiresCwd?: boolean;
 };
 
-export type WorkflowInputValue = string | number | boolean;
+export type WorkflowScalarValue = string | number | boolean | null;
+
+export type WorkflowValue =
+  | WorkflowScalarValue
+  | WorkflowValue[]
+  | { [key: string]: WorkflowValue };
+
+export type WorkflowInputValue = Exclude<WorkflowScalarValue, null>;
+
+export type WorkflowHumanTaskResponse = {
+  action: string;
+  values: Record<string, WorkflowValue>;
+};
+
+export type RenderedWorkflowHumanContextItem = {
+  label: string;
+  value: WorkflowValue;
+  display: WorkflowHumanContextDisplay;
+};
+
+export type RenderedWorkflowHumanSpec = Omit<WorkflowHumanSpec, "context"> & {
+  context: RenderedWorkflowHumanContextItem[];
+};
+
+export type WorkflowHumanTaskStatus = "pending" | "resolved" | "canceled";
+
+export type WorkflowHumanTask = {
+  id: string;
+  runId: string;
+  nodeId: string;
+  parentNodeId?: string;
+  iteration?: number;
+  executionKey: string;
+  status: WorkflowHumanTaskStatus;
+  spec: RenderedWorkflowHumanSpec;
+  response?: WorkflowHumanTaskResponse;
+  revision: number;
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+};
+
+export type WorkflowHumanTaskRequest = {
+  runId: string;
+  nodeId: string;
+  parentNodeId?: string;
+  iteration?: number;
+  executionKey: string;
+  spec: RenderedWorkflowHumanSpec;
+};
 
 export type WorkflowInputCommon = {
   required?: boolean;
@@ -182,11 +302,14 @@ export type WorkflowRunRequest = {
   inputs?: Record<string, WorkflowInputValue>;
   recovery?: WorkflowRunRecoveryState;
   onCheckpoint?: (checkpoint: WorkflowRunCheckpoint) => void | Promise<void>;
+  onHumanTask?: (
+    request: WorkflowHumanTaskRequest,
+  ) => WorkflowHumanTask | Promise<WorkflowHumanTask>;
   signal?: AbortSignal;
 };
 
 export type WorkflowRunRecoveryState = {
-  outputs?: Record<string, string>;
+  outputs?: Record<string, WorkflowValue>;
   completedNodeIds?: string[];
   sessionIdsByKey?: Record<string, string>;
   sessionCwdsByKey?: Record<string, string>;
@@ -196,12 +319,12 @@ export type WorkflowRunRecoveryState = {
 
 export type WorkflowLoopRecoveryState = {
   nextIteration: number;
-  previousStepOutputs: Record<string, string>;
+  previousStepOutputs: Record<string, WorkflowValue>;
   currentIteration?: number;
-  currentStepOutputs?: Record<string, string>;
+  currentStepOutputs?: Record<string, WorkflowValue>;
   iterations: Array<{
     index: number;
-    outputs: Record<string, string>;
+    outputs: Record<string, WorkflowValue>;
     untilOutput: string;
     untilMatched: boolean;
   }>;
@@ -236,6 +359,7 @@ export type WorkflowRunEvent =
   | {
       type: "run_started";
       runId: string;
+      executionId?: string;
       parsed: ParsedWorkflow;
     }
   | {
@@ -256,7 +380,20 @@ export type WorkflowRunEvent =
       type: "node_completed";
       runId: string;
       nodeId: string;
-      output: string;
+      output: WorkflowValue;
+    }
+  | {
+      type: "human_task_requested";
+      runId: string;
+      nodeId: string;
+      task: WorkflowHumanTask;
+    }
+  | {
+      type: "human_task_resolved";
+      runId: string;
+      nodeId: string;
+      taskId: string;
+      response: WorkflowHumanTaskResponse;
     }
   | {
       type: "node_failed";
@@ -265,10 +402,16 @@ export type WorkflowRunEvent =
       error: string;
     }
   | {
+      type: "run_waiting";
+      runId: string;
+      pendingTaskIds: string[];
+      outputs: Record<string, WorkflowValue>;
+    }
+  | {
       type: "run_completed";
       runId: string;
       status: "completed" | "failed" | "canceled";
-      outputs: Record<string, string>;
+      outputs: Record<string, WorkflowValue>;
       error?: string;
       errorCode?: ApiErrorCode;
     };

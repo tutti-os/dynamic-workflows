@@ -202,6 +202,9 @@ function runStatusBadge(status: WorkflowRunStatus) {
   if (status === "running") {
     return "pending" as const;
   }
+  if (status === "waiting_for_human") {
+    return "warning" as const;
+  }
   if (status === "interrupted") {
     return "warning" as const;
   }

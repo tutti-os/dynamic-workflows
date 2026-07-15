@@ -2,6 +2,7 @@ import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
 import type { RunDetail, RunNodeDetail } from "@/lib/workflow/run-detail";
+import type { WorkflowValue } from "@/lib/workflow/types";
 import { RunDetailPanel } from "@/components/workflow/RunDetailPanel";
 import { RunList } from "@/components/workflow/RunList";
 import { RunDetailSkeleton } from "@/components/workflow/WorkflowStates";
@@ -18,8 +19,15 @@ type RunsPanelProps = {
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onResumeRun: (runId: string) => void;
+  onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
+  onRespondHumanTask: (input: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) => Promise<void>;
 };
 
 export function RunsPanel(props: RunsPanelProps) {
@@ -49,8 +57,10 @@ export function RunsPanel(props: RunsPanelProps) {
           copiedRunField={props.copiedRunField}
           onRetryRun={props.onRetryRun}
           onResumeRun={props.onResumeRun}
+          onCancelRun={props.onCancelRun}
           onCopyRunText={props.onCopyRunText}
           onOpenAgentSession={props.onOpenAgentSession}
+          onRespondHumanTask={props.onRespondHumanTask}
         />
       ) : null}
     </div>

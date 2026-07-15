@@ -10,9 +10,20 @@ import {
   createLoopStepSessionNodeId,
   resolveSessionKey,
 } from "./session";
-import { renderPrompt, renderTemplate, renderValueTemplate } from "./templates";
+import {
+  renderPrompt,
+  renderTemplate,
+  renderTemplateValue,
+  renderValueTemplate,
+  resolveWorkflowValuePath,
+  stringifyWorkflowValue,
+} from "./templates";
 import type {
   ParsedWorkflow,
+  RenderedWorkflowHumanSpec,
+  WorkflowAgentLoopStep,
+  WorkflowHumanSpec,
+  WorkflowHumanTask,
   WorkflowInputValue,
   WorkflowLoopRecoveryState,
   WorkflowLoopStep,
@@ -21,12 +32,14 @@ import type {
   WorkflowRunEvent,
   WorkflowRunRequest,
   WorkflowSessionSpec,
+  WorkflowValue,
 } from "./types";
 
 export async function* runWorkflow(
   request: WorkflowRunRequest,
 ): AsyncGenerator<WorkflowRunEvent> {
   const runId = request.runId ?? randomUUID();
+  const executionId = randomUUID();
   const parsed = assertWorkflowScriptValid(request.script);
   assertRequiredWorkflowCwd(parsed, request.cwd);
   const inputs = normalizeWorkflowInputsForSchema(
@@ -48,7 +61,7 @@ export async function* runWorkflow(
     }),
   );
   const recovery = normalizeRecoveryState(request.recovery);
-  const outputs: Record<string, string> = { ...recovery.outputs };
+  const outputs: Record<string, WorkflowValue> = { ...recovery.outputs };
   const sessionIdsByKey: Record<string, string> = {
     ...recovery.sessionIdsByKey,
   };
@@ -62,10 +75,12 @@ export async function* runWorkflow(
     ),
   );
   const running = new Set<string>();
+  const waiting = new Set<string>();
+  const pendingTaskIds = new Map<string, string>();
   let canceled = false;
   let failureError: string | undefined;
 
-  yield { type: "run_started", runId, parsed };
+  yield { type: "run_started", runId, executionId, parsed };
 
   while (completed.size + failed.size < executableNodes.length) {
     if (isSignalAborted(normalizedRequest.signal)) {
@@ -74,7 +89,12 @@ export async function* runWorkflow(
     }
 
     const ready = executableNodes.filter((node) => {
-      if (completed.has(node.id) || failed.has(node.id) || running.has(node.id)) {
+      if (
+        completed.has(node.id) ||
+        failed.has(node.id) ||
+        running.has(node.id) ||
+        waiting.has(node.id)
+      ) {
         return false;
       }
       return node.inputs.every((input) =>
@@ -83,8 +103,17 @@ export async function* runWorkflow(
     });
 
     if (ready.length === 0) {
+      if (failed.size === 0 && waiting.size > 0) {
+        yield {
+          type: "run_waiting",
+          runId,
+          pendingTaskIds: [...pendingTaskIds.values()],
+          outputs,
+        };
+        return;
+      }
       for (const node of executableNodes) {
-        if (!completed.has(node.id) && !failed.has(node.id)) {
+        if (!completed.has(node.id) && !failed.has(node.id) && !waiting.has(node.id)) {
           failed.add(node.id);
           yield {
             type: "node_failed",
@@ -135,6 +164,8 @@ export async function* runWorkflow(
 
       if (event.type === "node_completed") {
         running.delete(event.nodeId);
+        waiting.delete(event.nodeId);
+        pendingTaskIds.delete(event.nodeId);
         completed.add(event.nodeId);
         outputs[event.nodeId] = event.output;
       }
@@ -143,6 +174,17 @@ export async function* runWorkflow(
         running.delete(event.nodeId);
         failed.add(event.nodeId);
         failureError ??= event.error;
+      }
+
+      if (event.type === "human_task_requested") {
+        running.delete(event.nodeId);
+        waiting.add(event.nodeId);
+        pendingTaskIds.set(event.nodeId, event.task.id);
+      }
+
+      if (event.type === "human_task_resolved") {
+        waiting.delete(event.nodeId);
+        pendingTaskIds.delete(event.nodeId);
       }
 
       if (isSignalAborted(normalizedRequest.signal)) {
@@ -171,7 +213,7 @@ async function* streamNodeBatch(input: {
   runId: string;
   nodes: WorkflowNode[];
   request: WorkflowRunRequest;
-  outputs: Record<string, string>;
+  outputs: Record<string, WorkflowValue>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
@@ -247,7 +289,7 @@ async function* runNode(input: {
   runId: string;
   node: WorkflowNode;
   request: WorkflowRunRequest;
-  outputs: Record<string, string>;
+  outputs: Record<string, WorkflowValue>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
@@ -257,6 +299,10 @@ async function* runNode(input: {
     yield* runLoopNode(input);
     return;
   }
+  if (input.node.kind === "human") {
+    yield* runHumanNode(input);
+    return;
+  }
   yield* runAgentNode(input);
 }
 
@@ -264,7 +310,7 @@ async function* runAgentNode(input: {
   runId: string;
   node: WorkflowNode;
   request: WorkflowRunRequest;
-  outputs: Record<string, string>;
+  outputs: Record<string, WorkflowValue>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
@@ -379,11 +425,74 @@ async function* runAgentNode(input: {
   }
 }
 
+async function* runHumanNode(input: {
+  runId: string;
+  node: WorkflowNode;
+  request: WorkflowRunRequest;
+  outputs: Record<string, WorkflowValue>;
+}): AsyncGenerator<WorkflowRunEvent> {
+  yield {
+    type: "node_started",
+    runId: input.runId,
+    nodeId: input.node.id,
+    node: input.node,
+    agent: "human",
+  };
+
+  try {
+    const human = input.node.human;
+    if (!human) {
+      throw new Error("Human node is missing configuration.");
+    }
+    const task = await requestHumanTask({
+      request: input.request,
+      runId: input.runId,
+      nodeId: input.node.id,
+      executionKey: `human:${input.node.id}`,
+      spec: renderHumanSpec(human, (name) =>
+        resolveNodeTemplateValue(input.node, name, input.outputs, input.request.inputs),
+      ),
+    });
+    if (task.status === "pending") {
+      yield {
+        type: "human_task_requested",
+        runId: input.runId,
+        nodeId: input.node.id,
+        task,
+      };
+      return;
+    }
+    if (task.status === "canceled" || !task.response) {
+      throw new Error("Human task was canceled.");
+    }
+    yield {
+      type: "human_task_resolved",
+      runId: input.runId,
+      nodeId: input.node.id,
+      taskId: task.id,
+      response: task.response,
+    };
+    yield {
+      type: "node_completed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      output: task.response,
+    };
+  } catch (error) {
+    yield {
+      type: "node_failed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      error: toRunErrorMessage(error),
+    };
+  }
+}
+
 async function* runLoopNode(input: {
   runId: string;
   node: WorkflowNode;
   request: WorkflowRunRequest;
-  outputs: Record<string, string>;
+  outputs: Record<string, WorkflowValue>;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
@@ -423,7 +532,7 @@ async function* runLoopNode(input: {
   }
 
   const recoveredLoop = input.loopStatesByNodeId[input.node.id];
-  const previousStepOutputs: Record<string, string> = {
+  const previousStepOutputs: Record<string, WorkflowValue> = {
     ...(recoveredLoop?.previousStepOutputs ?? {}),
   };
   const iterations = [...(recoveredLoop?.iterations ?? [])];
@@ -473,7 +582,7 @@ async function* runLoopNode(input: {
     ) {
       throwIfAborted(input.request.signal);
 
-      const currentStepOutputs: Record<string, string> =
+      const currentStepOutputs: Record<string, WorkflowValue> =
         recoveredLoop?.currentIteration === iteration
           ? { ...(recoveredLoop.currentStepOutputs ?? {}) }
           : {};
@@ -496,47 +605,86 @@ async function* runLoopNode(input: {
 
         const syntheticId = createLoopStepId(input.node.id, iteration, step.id);
         const stepCwd = resolveEffectiveNodeCwd(loopCwd, step.cwd);
-        const prompt = renderLoopStepPrompt({
-          template: step.prompt,
-          step,
-          iteration,
-          loopNode: input.node,
-          workflowOutputs: input.outputs,
-          workflowInputs: input.request.inputs,
-          workflowCwd: stepCwd,
-          previousStepOutputs,
-          currentStepOutputs,
-        });
-        const appendPrompt = step.appendPrompt
-          ? renderLoopStepPrompt({
-              template: step.appendPrompt,
-              step,
-              iteration,
-              loopNode: input.node,
-              workflowOutputs: input.outputs,
-              workflowInputs: input.request.inputs,
-              workflowCwd: stepCwd,
-              previousStepOutputs,
-              currentStepOutputs,
-            })
-          : undefined;
-        const stepOutput = yield* runLoopAgentStep({
-          runId: input.runId,
-          nodeId: input.node.id,
-          syntheticId,
-          step,
-          prompt,
-          appendPrompt,
-          defaultAgent: agent,
-          defaultModel: model,
-          defaultSession: loop.session,
-          cwd: stepCwd,
-          workflowInputs: input.request.inputs,
-          signal: input.request.signal,
-          sessionIdsByKey: input.sessionIdsByKey,
-          sessionCwdsByKey: input.sessionCwdsByKey,
-          attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
-        });
+        let stepOutput: WorkflowValue;
+        if (step.kind === "human") {
+          await saveLoopCheckpoint(input.request, {
+            runId: input.runId,
+            nodeId: input.node.id,
+            state: {
+              nextIteration: iteration,
+              currentIteration: iteration,
+              currentStepOutputs: { ...currentStepOutputs },
+              previousStepOutputs: { ...previousStepOutputs },
+              iterations: [...iterations],
+            },
+          });
+          const humanOutput = yield* runLoopHumanStep({
+            runId: input.runId,
+            nodeId: input.node.id,
+            syntheticId,
+            step,
+            iteration,
+            request: input.request,
+            spec: renderHumanSpec(step.human, (name) =>
+              resolveLoopTemplateValue({
+                name,
+                iteration,
+                loopNode: input.node,
+                workflowOutputs: input.outputs,
+                workflowInputs: input.request.inputs,
+                workflowCwd: stepCwd,
+                previousStepOutputs,
+                currentStepOutputs,
+              }),
+            ),
+          });
+          if (humanOutput === undefined) {
+            return;
+          }
+          stepOutput = humanOutput;
+        } else {
+          const prompt = renderLoopStepPrompt({
+            template: step.prompt,
+            step,
+            iteration,
+            loopNode: input.node,
+            workflowOutputs: input.outputs,
+            workflowInputs: input.request.inputs,
+            workflowCwd: stepCwd,
+            previousStepOutputs,
+            currentStepOutputs,
+          });
+          const appendPrompt = step.appendPrompt
+            ? renderLoopStepPrompt({
+                template: step.appendPrompt,
+                step,
+                iteration,
+                loopNode: input.node,
+                workflowOutputs: input.outputs,
+                workflowInputs: input.request.inputs,
+                workflowCwd: stepCwd,
+                previousStepOutputs,
+                currentStepOutputs,
+              })
+            : undefined;
+          stepOutput = yield* runLoopAgentStep({
+            runId: input.runId,
+            nodeId: input.node.id,
+            syntheticId,
+            step,
+            prompt,
+            appendPrompt,
+            defaultAgent: agent,
+            defaultModel: model,
+            defaultSession: loop.session,
+            cwd: stepCwd,
+            workflowInputs: input.request.inputs,
+            signal: input.request.signal,
+            sessionIdsByKey: input.sessionIdsByKey,
+            sessionCwdsByKey: input.sessionCwdsByKey,
+            attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
+          });
+        }
         currentStepOutputs[step.id] = stepOutput;
         previousStepOutputs[step.id] = stepOutput;
         await saveLoopCheckpoint(input.request, {
@@ -557,11 +705,13 @@ async function* runLoopNode(input: {
         });
       }
 
-      const untilOutput =
-        currentStepOutputs[loop.until.source] ??
-        previousStepOutputs[loop.until.source] ??
-        "";
-      const untilMatched = matchesLoopUntil(untilOutput, loop.until);
+      const untilValue = resolveLoopStepOutput(
+        loop.until.source,
+        currentStepOutputs,
+        previousStepOutputs,
+      );
+      const untilOutput = stringifyWorkflowValue(untilValue);
+      const untilMatched = matchesLoopUntil(untilValue ?? "", loop.until);
       iterations.push({
         index: iteration,
         outputs: { ...currentStepOutputs },
@@ -625,11 +775,61 @@ async function* runLoopNode(input: {
   }
 }
 
+async function* runLoopHumanStep(input: {
+  runId: string;
+  nodeId: string;
+  syntheticId: string;
+  step: Extract<WorkflowLoopStep, { kind: "human" }>;
+  iteration: number;
+  request: WorkflowRunRequest;
+  spec: RenderedWorkflowHumanSpec;
+}): AsyncGenerator<WorkflowRunEvent, WorkflowValue | undefined> {
+  yield loopStatusEvent({
+    runId: input.runId,
+    nodeId: input.nodeId,
+    message: `Loop human step ${input.syntheticId} requested input.`,
+  });
+  const task = await requestHumanTask({
+    request: input.request,
+    runId: input.runId,
+    nodeId: input.step.id,
+    parentNodeId: input.nodeId,
+    iteration: input.iteration,
+    executionKey: `loop:${input.nodeId}:${input.iteration}:human:${input.step.id}`,
+    spec: input.spec,
+  });
+  if (task.status === "pending") {
+    yield {
+      type: "human_task_requested",
+      runId: input.runId,
+      nodeId: input.nodeId,
+      task,
+    };
+    return undefined;
+  }
+  if (task.status === "canceled" || !task.response) {
+    throw new Error(`Human task ${task.id} was canceled.`);
+  }
+  yield {
+    type: "human_task_resolved",
+    runId: input.runId,
+    nodeId: input.nodeId,
+    taskId: task.id,
+    response: task.response,
+  };
+  yield loopStatusEvent({
+    runId: input.runId,
+    nodeId: input.nodeId,
+    message: `Loop human step ${input.syntheticId} completed with action ${task.response.action}.`,
+  });
+  return task.response;
+}
+
 async function* runLoopAgentStep(input: {
   runId: string;
   nodeId: string;
   syntheticId: string;
-  step: WorkflowLoopStep;
+  step: WorkflowAgentLoopStep;
   prompt: string;
   appendPrompt?: string;
   defaultAgent: string;
@@ -798,7 +998,7 @@ function normalizeRecoveryState(
   recovery: WorkflowRunRecoveryState | undefined,
 ): Required<WorkflowRunRecoveryState> {
   return {
-    outputs: sanitizeStringRecord(recovery?.outputs),
+    outputs: sanitizeWorkflowValueRecord(recovery?.outputs),
     completedNodeIds: Array.isArray(recovery?.completedNodeIds)
       ? recovery.completedNodeIds.filter(
           (nodeId): nodeId is string =>
@@ -831,6 +1031,37 @@ function sanitizeStringRecord(
   );
 }
 
+function sanitizeWorkflowValueRecord(
+  value: Record<string, WorkflowValue> | undefined,
+): Record<string, WorkflowValue> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key, item]) => Boolean(key.trim()) && isWorkflowValue(item),
+    ),
+  );
+}
+
+function isWorkflowValue(value: unknown): value is WorkflowValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isWorkflowValue);
+  }
+  return (
+    typeof value === "object" &&
+    Object.values(value).every(isWorkflowValue)
+  );
+}
+
 function sanitizeLoopRecoveryStates(
   value: Record<string, WorkflowLoopRecoveryState> | undefined,
 ): Record<string, WorkflowLoopRecoveryState> {
@@ -850,11 +1081,15 @@ function sanitizeLoopRecoveryStates(
           nodeId,
           {
             nextIteration,
-            previousStepOutputs: sanitizeStringRecord(state.previousStepOutputs),
+            previousStepOutputs: sanitizeWorkflowValueRecord(
+              state.previousStepOutputs,
+            ),
             ...(Number.isInteger(state.currentIteration)
               ? { currentIteration: state.currentIteration }
               : {}),
-            currentStepOutputs: sanitizeStringRecord(state.currentStepOutputs),
+            currentStepOutputs: sanitizeWorkflowValueRecord(
+              state.currentStepOutputs,
+            ),
             iterations: Array.isArray(state.iterations)
               ? state.iterations.flatMap((iteration) =>
                   sanitizeLoopIterationCheckpoint(iteration),
@@ -883,7 +1118,7 @@ function sanitizeLoopIterationCheckpoint(
   return [
     {
       index: value.index,
-      outputs: sanitizeStringRecord(value.outputs),
+      outputs: sanitizeWorkflowValueRecord(value.outputs),
       untilOutput: value.untilOutput,
       untilMatched: value.untilMatched,
     },
@@ -1020,40 +1255,124 @@ function createLoopStepId(
 
 function renderLoopStepPrompt(input: {
   template: string;
-  step: WorkflowLoopStep;
+  step: WorkflowAgentLoopStep;
   iteration: number;
   loopNode: WorkflowNode;
-  workflowOutputs: Record<string, string>;
+  workflowOutputs: Record<string, WorkflowValue>;
   workflowInputs: Record<string, WorkflowInputValue> | undefined;
   workflowCwd: string;
-  previousStepOutputs: Record<string, string>;
-  currentStepOutputs: Record<string, string>;
+  previousStepOutputs: Record<string, WorkflowValue>;
+  currentStepOutputs: Record<string, WorkflowValue>;
 }): string {
-  const bindings = new Map(
-    input.loopNode.inputs.map((binding) => [binding.name, binding.sourceNodeId]),
+  return renderTemplate(input.template, (name) =>
+    resolveLoopTemplateValue({ ...input, name }),
   );
+}
 
-  return renderTemplate(input.template, (name) => {
-    if (name === "iteration") {
-      return String(input.iteration);
-    }
-    if (name === "workflow.cwd") {
-      return input.workflowCwd;
-    }
-    if (input.currentStepOutputs[name] !== undefined) {
-      return input.currentStepOutputs[name];
-    }
-    if (input.previousStepOutputs[name] !== undefined) {
-      return input.previousStepOutputs[name];
-    }
+function resolveLoopTemplateValue(input: {
+  name: string;
+  iteration: number;
+  loopNode: WorkflowNode;
+  workflowOutputs: Record<string, WorkflowValue>;
+  workflowInputs: Record<string, WorkflowInputValue> | undefined;
+  workflowCwd: string;
+  previousStepOutputs: Record<string, WorkflowValue>;
+  currentStepOutputs: Record<string, WorkflowValue>;
+}): WorkflowValue | undefined {
+  if (input.name === "iteration") {
+    return input.iteration;
+  }
+  if (input.name === "workflow.cwd") {
+    return input.workflowCwd;
+  }
+  const [root, ...path] = input.name.split(".");
+  if (input.currentStepOutputs[root] !== undefined) {
+    return resolveWorkflowValuePath(input.currentStepOutputs[root], path);
+  }
+  if (input.previousStepOutputs[root] !== undefined) {
+    return resolveWorkflowValuePath(input.previousStepOutputs[root], path);
+  }
+  const binding = input.loopNode.inputs.find(
+    (item) => item.name === input.name || item.name === root,
+  );
+  if (binding?.sourceNodeId) {
+    return resolveWorkflowValuePath(
+      input.workflowOutputs[binding.sourceNodeId],
+      path,
+    );
+  }
+  return input.workflowInputs?.[input.name] ?? input.workflowInputs?.[root];
+}
 
-    const sourceNodeId = bindings.get(name);
-    if (sourceNodeId) {
-      return input.workflowOutputs[sourceNodeId] ?? "";
-    }
-    const value = input.workflowInputs?.[name];
-    return value === undefined ? "" : String(value);
+function resolveNodeTemplateValue(
+  node: WorkflowNode,
+  name: string,
+  outputs: Record<string, WorkflowValue>,
+  workflowInputs: Record<string, WorkflowInputValue> | undefined,
+): WorkflowValue | undefined {
+  const [root, ...path] = name.split(".");
+  const binding = node.inputs.find(
+    (item) => item.name === name || item.name === root,
+  );
+  if (binding?.sourceNodeId) {
+    return resolveWorkflowValuePath(outputs[binding.sourceNodeId], path);
+  }
+  return workflowInputs?.[name] ?? workflowInputs?.[root];
+}
+
+function renderHumanSpec(
+  human: WorkflowHumanSpec,
+  resolveValue: (name: string) => WorkflowValue | undefined,
+): RenderedWorkflowHumanSpec {
+  return {
+    ...(human.description !== undefined ? { description: human.description } : {}),
+    context: human.context.map((item) => ({
+      label: item.label,
+      display: item.display,
+      value: renderTemplateValue(item.value, resolveValue),
+    })),
+    actions: human.actions.map((action) => ({
+      ...action,
+      fields: action.fields.map((field) => ({
+        ...field,
+        ...(field.defaultValue !== undefined
+          ? { defaultValue: renderTemplate(field.defaultValue, resolveValue) }
+          : {}),
+      })),
+    })),
+  };
+}
+
+async function requestHumanTask(input: {
+  request: WorkflowRunRequest;
+  runId: string;
+  nodeId: string;
+  parentNodeId?: string;
+  iteration?: number;
+  executionKey: string;
+  spec: RenderedWorkflowHumanSpec;
+}): Promise<WorkflowHumanTask> {
+  if (!input.request.onHumanTask) {
+    throw new Error("Human task persistence is not configured.");
+  }
+  return input.request.onHumanTask({
+    runId: input.runId,
+    nodeId: input.nodeId,
+    ...(input.parentNodeId ? { parentNodeId: input.parentNodeId } : {}),
+    ...(input.iteration !== undefined ? { iteration: input.iteration } : {}),
+    executionKey: input.executionKey,
+    spec: input.spec,
   });
+}
+
+function resolveLoopStepOutput(
+  source: string,
+  currentStepOutputs: Record<string, WorkflowValue>,
+  previousStepOutputs: Record<string, WorkflowValue>,
+): WorkflowValue | undefined {
+  const [root, ...path] = source.split(".");
+  const value = currentStepOutputs[root] ?? previousStepOutputs[root];
+  return resolveWorkflowValuePath(value, path);
 }
 
 function formatLoopOutput(input: {
@@ -1061,11 +1380,11 @@ function formatLoopOutput(input: {
   stopReason: "until_matched" | "max_iterations_reached";
   iterations: Array<{
     index: number;
-    outputs: Record<string, string>;
+    outputs: Record<string, WorkflowValue>;
     untilOutput: string;
     untilMatched: boolean;
   }>;
-  latestStepOutputs: Record<string, string>;
+  latestStepOutputs: Record<string, WorkflowValue>;
 }): string {
   const loop = input.node.loop;
   const lines = [
@@ -1080,7 +1399,7 @@ function formatLoopOutput(input: {
 
   lines.push("", "Final step outputs:");
   for (const [stepId, output] of Object.entries(input.latestStepOutputs)) {
-    lines.push("", `[${stepId}]`, output.trim());
+    lines.push("", `[${stepId}]`, stringifyWorkflowValue(output).trim());
   }
 
   lines.push("", "Iteration summary:");

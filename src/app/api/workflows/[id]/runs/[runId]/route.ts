@@ -11,6 +11,7 @@ import {
   readRunLogPreview,
 } from "@/lib/workflow/run-log";
 import { markWorkflowRunInterruptedIfStale } from "@/lib/workflow/run-jobs";
+import { listWorkflowHumanTasks } from "@/lib/db/workflows/human-tasks";
 
 export async function GET(
   _request: Request,
@@ -31,5 +32,9 @@ export async function GET(
     ? await readRunLogPreview(run.logPath)
     : EMPTY_LOG_PREVIEW;
 
-  return NextResponse.json({ run, ...logPreview });
+  return NextResponse.json({
+    run,
+    humanTasks: listWorkflowHumanTasks(run.id),
+    ...logPreview,
+  });
 }

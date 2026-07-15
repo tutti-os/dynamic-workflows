@@ -62,3 +62,15 @@ const delivery = loop({
   until: { source: "reviewer", finalStatus: "PASS" },
 });
 ```
+
+## Human Tasks
+
+Use `human({...})` as a top-level node or loop step to persist a request for user input. The dependent branch waits without keeping the runner process alive; unrelated branches may continue and a run can contain multiple pending tasks.
+
+Human responses are structured as `{ action, values }` and support dotted template paths such as `{{review.action}}` and `{{review.values.comment}}`. In loops, prefer an exact condition:
+
+```js
+until: { source: "review.action", equals: "pass" }
+```
+
+The v1 form controls are text, textarea, and select. Context can be displayed as text, Markdown, or JSON. Submitted responses are immutable and remain attached to the run history.

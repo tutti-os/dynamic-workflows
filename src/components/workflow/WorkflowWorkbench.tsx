@@ -185,9 +185,11 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     retryRun,
     resumeRun,
     cancelCurrentRun,
+    cancelRun,
     selectRun,
     copyRunText,
     openAgentSession,
+    respondHumanTask,
   } = useWorkflowRunController({
     workflowId,
     detail,
@@ -433,10 +435,12 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         onSelectRun={selectRun}
         onRetryRun={(runId) => void retryRun(runId)}
         onResumeRun={(runId) => void resumeRun(runId)}
+        onCancelRun={(runId) => void cancelRun(runId)}
         onCopyRunText={(key, text) => void copyRunText(key, text)}
         onOpenAgentSession={(agentSessionId) =>
           void openAgentSession(agentSessionId)
         }
+        onRespondHumanTask={respondHumanTask}
       />
     </main>
   );

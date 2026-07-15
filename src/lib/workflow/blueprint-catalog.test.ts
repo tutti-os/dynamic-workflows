@@ -22,6 +22,7 @@ describe("workflow blueprint catalog", () => {
     const ids = blueprints.map((blueprint) => blueprint.id);
 
     expect(ids).toEqual([
+      "human-feedback-loop-v1",
       "loop-primitive-rd-acceptance-test-v1",
     ]);
     expect(new Set(ids).size).toBe(ids.length);

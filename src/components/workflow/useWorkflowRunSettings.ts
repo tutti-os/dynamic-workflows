@@ -134,8 +134,10 @@ export function useWorkflowRunSettings(): {
             "AGENT_TARGET_DETECTION_FAILED",
           );
           setAgents(FALLBACK_AGENTS);
-          setAgentsWarning(undefined);
-          setAgentsError(apiError.message);
+          setAgentsError(undefined);
+          setAgentsWarning(
+            `${apiError.message} Using the Mock local agent fallback.`,
+          );
         },
         onSettled: () => setAgentsLoading(false),
       }),

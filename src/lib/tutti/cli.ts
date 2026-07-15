@@ -502,6 +502,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
       model: node.model,
       cwd: node.cwd,
       session: node.session,
+      human: node.human,
       inputs: node.inputs,
       loop: node.loop
         ? {
@@ -519,6 +520,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
               cwd: step.cwd,
               session: step.session,
               hasAppendPrompt: Boolean(step.appendPrompt),
+              human: step.kind === "human" ? step.human : undefined,
             })),
           }
         : undefined,

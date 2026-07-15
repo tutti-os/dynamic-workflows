@@ -26,6 +26,7 @@ export function createWorkflowRun(input: {
   model?: string;
   cwd?: string;
   request: unknown;
+  executionToken?: string;
 }): WorkflowRunRecord {
   const now = new Date().toISOString();
   const runId = randomUUID();
@@ -39,8 +40,8 @@ export function createWorkflowRun(input: {
         INSERT INTO workflow_runs (
           id, workflow_id, workflow_version_id, executor_kind, external_run_id,
           status, agent, model, cwd, input_json, result_json, log_path,
-          started_at, finished_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          started_at, finished_at, resume_token, resume_claimed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .run(
@@ -62,6 +63,8 @@ export function createWorkflowRun(input: {
         logPath,
         now,
         null,
+        input.executionToken ?? null,
+        input.executionToken ? now : null,
       );
 
     const run = getWorkflowRun(runId);
@@ -70,6 +73,163 @@ export function createWorkflowRun(input: {
     }
     return run;
   })();
+}
+
+export function isWorkflowRunExecutionClaimed(runId: string): boolean {
+  const freshAfter = new Date(Date.now() - 60_000).toISOString();
+  const row = getDb().prepare(`
+    SELECT 1 AS claimed
+    FROM workflow_runs
+    WHERE id = ? AND status = 'running' AND resume_token IS NOT NULL
+      AND resume_claimed_at >= ?
+  `).get(runId, freshAfter) as { claimed: number } | undefined;
+  return Boolean(row?.claimed);
+}
+
+export function touchWorkflowRunExecutionClaim(input: {
+  runId: string;
+  executionToken: string;
+}): boolean {
+  const result = getDb().prepare(`
+    UPDATE workflow_runs
+    SET resume_claimed_at = ?
+    WHERE id = ? AND resume_token = ? AND status = 'running'
+  `).run(new Date().toISOString(), input.runId, input.executionToken);
+  return result.changes === 1;
+}
+
+export function markWorkflowRunWaitingOwned(input: {
+  runId: string;
+  executionToken: string;
+  result: unknown;
+  pendingTaskIds: string[];
+}): { run: WorkflowRunRecord | null; transitioned: boolean } {
+  if (input.pendingTaskIds.length === 0) {
+    return { run: getWorkflowRun(input.runId), transitioned: false };
+  }
+  const database = getDb();
+  return database.transaction(() => {
+    const placeholders = input.pendingTaskIds.map(() => "?").join(", ");
+    const result = database.prepare(`
+      UPDATE workflow_runs
+      SET status = 'waiting_for_human',
+        result_json = ?,
+        finished_at = NULL,
+        resume_token = NULL,
+        resume_claimed_at = NULL
+      WHERE id = ?
+        AND status = 'running'
+        AND resume_token = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM workflow_run_human_tasks tasks
+          WHERE tasks.run_id = workflow_runs.id
+            AND tasks.id IN (${placeholders})
+            AND tasks.status <> 'pending'
+        )
+        AND (
+          SELECT COUNT(*) FROM workflow_run_human_tasks tasks
+          WHERE tasks.run_id = workflow_runs.id
+            AND tasks.id IN (${placeholders})
+        ) = ?
+    `).run(
+      stringifyJsonObjectColumn(input.result, {
+        table: "workflow_runs",
+        column: "result_json",
+        id: input.runId,
+      }),
+      input.runId,
+      input.executionToken,
+      ...input.pendingTaskIds,
+      ...input.pendingTaskIds,
+      input.pendingTaskIds.length,
+    );
+    return {
+      run: getWorkflowRun(input.runId),
+      transitioned: result.changes === 1,
+    };
+  })();
+}
+
+export function finalizeWorkflowRunExecution(input: {
+  runId: string;
+  executionToken: string;
+  status: Extract<WorkflowRunStatus, "completed" | "failed" | "canceled">;
+  result: unknown;
+}): { run: WorkflowRunRecord | null; transitioned: boolean } {
+  const database = getDb();
+  return database.transaction(() => {
+    const result = database.prepare(`
+      UPDATE workflow_runs
+      SET status = ?, result_json = ?, finished_at = ?,
+        resume_token = NULL, resume_claimed_at = NULL
+      WHERE id = ?
+        AND resume_token = ?
+        AND (
+          status = 'running'
+          OR (status = 'canceled' AND ? = 'canceled')
+        )
+    `).run(
+      input.status,
+      stringifyJsonObjectColumn(input.result, {
+        table: "workflow_runs",
+        column: "result_json",
+        id: input.runId,
+      }),
+      new Date().toISOString(),
+      input.runId,
+      input.executionToken,
+      input.status,
+    );
+    if (result.changes === 1) {
+      cancelPendingHumanTasks(database, input.runId);
+    }
+    return {
+      run: getWorkflowRun(input.runId),
+      transitioned: result.changes === 1,
+    };
+  })();
+}
+
+export function cancelWorkflowRunAndHumanTasks(input: {
+  runId: string;
+  result: unknown;
+}): { run: WorkflowRunRecord | null; transitioned: boolean } {
+  const database = getDb();
+  return database.transaction(() => {
+    const result = database.prepare(`
+      UPDATE workflow_runs
+      SET status = 'canceled', result_json = ?, finished_at = ?
+      WHERE id = ?
+        AND status NOT IN ('completed', 'failed', 'canceled')
+    `).run(
+      stringifyJsonObjectColumn(input.result, {
+        table: "workflow_runs",
+        column: "result_json",
+        id: input.runId,
+      }),
+      new Date().toISOString(),
+      input.runId,
+    );
+    if (result.changes === 1) {
+      cancelPendingHumanTasks(database, input.runId);
+    }
+    return {
+      run: getWorkflowRun(input.runId),
+      transitioned: result.changes === 1,
+    };
+  })();
+}
+
+function cancelPendingHumanTasks(
+  database: ReturnType<typeof getDb>,
+  runId: string,
+): void {
+  database.prepare(`
+    UPDATE workflow_run_human_tasks
+    SET status = 'canceled', revision = revision + 1,
+      resolved_at = COALESCE(resolved_at, ?)
+    WHERE run_id = ? AND status = 'pending'
+  `).run(new Date().toISOString(), runId);
 }
 
 export function updateWorkflowRun(input: {
@@ -142,6 +302,34 @@ export function markWorkflowRunRunning(input: {
   })();
 }
 
+export function markWorkflowRunWaiting(input: {
+  runId: string;
+  result?: unknown;
+}): WorkflowRunRecord | null {
+  const database = getDb();
+  return database.transaction(() => {
+    database.prepare(`
+      UPDATE workflow_runs
+      SET status = 'waiting_for_human',
+        result_json = COALESCE(?, result_json),
+        finished_at = NULL,
+        resume_token = NULL,
+        resume_claimed_at = NULL
+      WHERE id = ?
+    `).run(
+      input.result === undefined
+        ? null
+        : stringifyJsonObjectColumn(input.result, {
+            table: "workflow_runs",
+            column: "result_json",
+            id: input.runId,
+          }),
+      input.runId,
+    );
+    return getWorkflowRun(input.runId);
+  })();
+}
+
 export function markWorkflowRunInterrupted(input: {
   runId: string;
   result?: unknown;
@@ -199,7 +387,7 @@ export function claimWorkflowRunForResume(input: {
           resume_claimed_at = ?
         WHERE id = ?
           AND workflow_id = ?
-          AND status IN ('running', 'interrupted')
+          AND status IN ('running', 'interrupted', 'waiting_for_human')
           AND resume_token IS NULL
       `,
       )
@@ -253,7 +441,13 @@ export function releaseWorkflowRunResumeClaim(input: {
 
 export function getWorkflowRun(runId: string): WorkflowRunRecord | null {
   const row = getDb()
-    .prepare("SELECT * FROM workflow_runs WHERE id = ?")
+    .prepare(`
+      SELECT workflow_runs.*,
+        (SELECT COUNT(*) FROM workflow_run_human_tasks tasks
+          WHERE tasks.run_id = workflow_runs.id AND tasks.status = 'pending')
+          AS pending_human_task_count
+      FROM workflow_runs WHERE id = ?
+    `)
     .get(runId) as RunRow | undefined;
   return row ? mapRun(row) : null;
 }
@@ -330,7 +524,11 @@ export function listWorkflowRuns(workflowId: string): WorkflowRunRecord[] {
   const rows = getDb()
     .prepare(
       `
-      SELECT * FROM workflow_runs
+      SELECT workflow_runs.*,
+        (SELECT COUNT(*) FROM workflow_run_human_tasks tasks
+          WHERE tasks.run_id = workflow_runs.id AND tasks.status = 'pending')
+          AS pending_human_task_count
+      FROM workflow_runs
       WHERE workflow_id = ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 50
@@ -351,7 +549,11 @@ export function getLatestWorkflowRun(workflowId: string): WorkflowRunRecord | nu
   const row = getDb()
     .prepare(
       `
-      SELECT * FROM workflow_runs
+      SELECT workflow_runs.*,
+        (SELECT COUNT(*) FROM workflow_run_human_tasks tasks
+          WHERE tasks.run_id = workflow_runs.id AND tasks.status = 'pending')
+          AS pending_human_task_count
+      FROM workflow_runs
       WHERE workflow_id = ?
       ORDER BY started_at DESC, rowid DESC
       LIMIT 1

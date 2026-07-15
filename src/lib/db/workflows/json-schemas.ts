@@ -147,7 +147,7 @@ export function isWorkflowLoopRecoveryState(
   }
   if (
     !Number.isInteger(value.nextIteration) ||
-    !isStringRecord(value.previousStepOutputs)
+    !isWorkflowValueRecord(value.previousStepOutputs)
   ) {
     return false;
   }
@@ -159,12 +159,16 @@ export function isWorkflowLoopRecoveryState(
   }
   if (
     value.currentStepOutputs !== undefined &&
-    !isStringRecord(value.currentStepOutputs)
+    !isWorkflowValueRecord(value.currentStepOutputs)
   ) {
     return false;
   }
   return Array.isArray(value.iterations) &&
     value.iterations.every(isWorkflowLoopRecoveryIteration);
+}
+
+function isWorkflowValueRecord(value: unknown): boolean {
+  return isJsonObject(value) && Object.values(value).every(isJsonValue);
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
@@ -287,7 +291,7 @@ function isEditableRange(value: unknown): boolean {
 function isWorkflowLoopRecoveryIteration(value: unknown): boolean {
   return isJsonObject(value) &&
     Number.isInteger(value.index) &&
-    isStringRecord(value.outputs) &&
+    isWorkflowValueRecord(value.outputs) &&
     typeof value.untilOutput === "string" &&
     typeof value.untilMatched === "boolean";
 }

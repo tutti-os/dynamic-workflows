@@ -36,6 +36,7 @@ export type RunRow = {
   finished_at: string | null;
   resume_token?: string | null;
   resume_claimed_at?: string | null;
+  pending_human_task_count?: number;
 };
 
 export type GenerationRow = {
@@ -156,6 +157,7 @@ export function mapRun(row: RunRow): WorkflowRunRecord {
     logPath: row.log_path,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    pendingHumanTaskCount: row.pending_human_task_count ?? 0,
   };
 }
 

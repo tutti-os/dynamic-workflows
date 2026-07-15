@@ -34,7 +34,7 @@ export function nodeStatusBadge(status: WorkflowNodeStatus) {
   if (status === "failed") {
     return "destructive" as const;
   }
-  if (status === "queued" || status === "skipped") {
+  if (status === "queued" || status === "waiting" || status === "skipped") {
     return "warning" as const;
   }
   return "default" as const;
@@ -46,6 +46,9 @@ export function runStatusTone(status: WorkflowRunRecord["status"]) {
   }
   if (status === "running") {
     return "blue" as const;
+  }
+  if (status === "waiting_for_human") {
+    return "amber" as const;
   }
   if (status === "interrupted") {
     return "amber" as const;
@@ -65,6 +68,9 @@ export function runStatusBadge(status: WorkflowRunRecord["status"]) {
   }
   if (status === "running") {
     return "pending" as const;
+  }
+  if (status === "waiting_for_human") {
+    return "warning" as const;
   }
   if (status === "interrupted") {
     return "warning" as const;

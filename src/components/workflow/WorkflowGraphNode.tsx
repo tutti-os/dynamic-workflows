@@ -5,6 +5,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import clsx from "clsx";
+import { UserRound } from "lucide-react";
 import {
   AgentSessionsIcon,
   Badge,
@@ -45,7 +46,11 @@ function WorkflowNodeCard(props: NodeProps<Node<FlowNodeData>>) {
       <div className="workflow-node-inner">
         <div className="node-topline">
           <span className="node-kind">
-            <AgentSessionsIcon size={13} />
+            {workflowNode.kind === "human" ? (
+              <UserRound size={13} />
+            ) : (
+              <AgentSessionsIcon size={13} />
+            )}
             {workflowNode.kind}
           </span>
           <span className={clsx("node-status", status)}>
@@ -102,6 +107,9 @@ function nodeStatusTone(status: WorkflowNodeStatus) {
     return "red" as const;
   }
   if (status === "queued") {
+    return "amber" as const;
+  }
+  if (status === "waiting") {
     return "amber" as const;
   }
   if (status === "skipped") {

@@ -1,6 +1,11 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunInput, AgentRuntimeEvent } from "@/lib/agents/types";
+import type {
+  WorkflowHumanTask,
+  WorkflowHumanTaskRequest,
+  WorkflowLoopRecoveryState,
+} from "./types";
 
 const runAgentMock = vi.hoisted(() => vi.fn());
 
@@ -10,9 +15,179 @@ vi.mock("@/lib/agents/runtime", () => ({
 
 import { runWorkflow } from "./executor";
 
+function humanTask(
+  request: WorkflowHumanTaskRequest,
+  status: WorkflowHumanTask["status"],
+  response?: WorkflowHumanTask["response"],
+): WorkflowHumanTask {
+  return {
+    id: request.executionKey,
+    runId: request.runId,
+    nodeId: request.nodeId,
+    ...(request.parentNodeId ? { parentNodeId: request.parentNodeId } : {}),
+    ...(request.iteration !== undefined ? { iteration: request.iteration } : {}),
+    executionKey: request.executionKey,
+    status,
+    spec: request.spec,
+    ...(response ? { response } : {}),
+    revision: status === "pending" ? 1 : 2,
+    createdAt: new Date(0).toISOString(),
+  };
+}
+
 describe("runWorkflow", () => {
   beforeEach(() => {
     runAgentMock.mockReset();
+  });
+
+  it("waits for a top-level human task and resumes with structured output", async () => {
+    const requests: WorkflowHumanTaskRequest[] = [];
+    const pendingEvents = [];
+    const script = `
+const decision = await human({
+  id: "decision",
+  description: "Choose the next step",
+  context: [{ label: "Draft", value: "hello", display: "text" }],
+  actions: [
+    { id: "pass", label: "Pass", intent: "primary" },
+    { id: "revise", label: "Revise", fields: [{ id: "comment", type: "textarea", label: "Comment", required: true }] },
+  ],
+})
+const next = await agent({ id: "next", prompt: "action={{decision.action}} comment={{decision.values.comment}}" })
+`;
+
+    for await (const event of runWorkflow({
+      script,
+      cwd: process.cwd(),
+      onHumanTask: (request) => {
+        requests.push(request);
+        return humanTask(request, "pending");
+      },
+    })) {
+      pendingEvents.push(event);
+    }
+
+    expect(requests).toHaveLength(1);
+    expect(pendingEvents.at(-1)).toEqual(expect.objectContaining({
+      type: "run_waiting",
+      pendingTaskIds: [requests[0].executionKey],
+    }));
+    expect(runAgentMock).not.toHaveBeenCalled();
+
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      yield { type: "text_delta", text: input.prompt };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+    const resumedEvents = [];
+    for await (const event of runWorkflow({
+      script,
+      cwd: process.cwd(),
+      onHumanTask: (request) => humanTask(request, "resolved", {
+        action: "revise",
+        values: { comment: "fix it" },
+      }),
+    })) {
+      resumedEvents.push(event);
+    }
+    expect(runAgentMock.mock.calls[0][0].prompt).toBe(
+      "action=revise comment=fix it",
+    );
+    expect(resumedEvents.at(-1)).toEqual(expect.objectContaining({
+      type: "run_completed",
+      status: "completed",
+    }));
+  });
+
+  it("allows multiple independent human tasks to wait in one run", async () => {
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const first = await human({ id: "first", actions: [{ id: "submit", label: "Submit" }] })
+const second = await human({ id: "second", actions: [{ id: "submit", label: "Submit" }] })
+`,
+      cwd: process.cwd(),
+      onHumanTask: (request) => humanTask(request, "pending"),
+    })) {
+      events.push(event);
+    }
+    expect(events.filter((event) => event.type === "human_task_requested")).toHaveLength(2);
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      type: "run_waiting",
+      pendingTaskIds: expect.arrayContaining(["human:first", "human:second"]),
+    }));
+  });
+
+  it("resumes a loop human task without rerunning checkpointed steps", async () => {
+    let checkpoint: WorkflowLoopRecoveryState | undefined;
+    const responses = new Map<string, { action: string; values: Record<string, string> }>();
+    const prompts: string[] = [];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      prompts.push(input.prompt);
+      yield { type: "text_delta", text: `draft ${prompts.length}` };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+    const script = `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 3,
+  steps: [
+    agent({ id: "draft", prompt: "iteration={{iteration}} feedback={{review.values.comment}}" }),
+    human({ id: "review", actions: [
+      { id: "pass", label: "Pass" },
+      { id: "revise", label: "Revise", fields: [{ id: "comment", type: "textarea", label: "Comment", required: true }] },
+    ] }),
+  ],
+  until: { source: "review.action", equals: "pass" },
+})
+`;
+    const execute = async () => {
+      const events = [];
+      for await (const event of runWorkflow({
+        script,
+        cwd: process.cwd(),
+        recovery: checkpoint ? { loopStates: { delivery: checkpoint } } : undefined,
+        onCheckpoint: (saved) => {
+          checkpoint = saved.state;
+        },
+        onHumanTask: (request) => {
+          const response = responses.get(request.executionKey);
+          return humanTask(
+            request,
+            response ? "resolved" : "pending",
+            response,
+          );
+        },
+      })) {
+        events.push(event);
+      }
+      return events;
+    };
+
+    await execute();
+    expect(prompts).toEqual(["iteration=1 feedback="]);
+    responses.set("loop:delivery:1:human:review", {
+      action: "revise",
+      values: { comment: "fix it" },
+    });
+    await execute();
+    expect(prompts).toEqual([
+      "iteration=1 feedback=",
+      "iteration=2 feedback=fix it",
+    ]);
+    responses.set("loop:delivery:2:human:review", {
+      action: "pass",
+      values: {},
+    });
+    const completed = await execute();
+    expect(prompts).toHaveLength(2);
+    expect(completed.at(-1)).toEqual(expect.objectContaining({
+      type: "run_completed",
+      status: "completed",
+    }));
   });
 
   it("normalizes schema defaults for direct workflow execution", async () => {

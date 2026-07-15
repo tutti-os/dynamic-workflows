@@ -1,8 +1,11 @@
 import type {
+  WorkflowHumanTask,
   WorkflowLoopRecoveryState,
   WorkflowDiagnostic,
   WorkflowMeta,
 } from "@/lib/workflow/types";
+
+export type WorkflowHumanTaskRecord = WorkflowHumanTask;
 
 export type WorkflowRecord = {
   id: string;
@@ -27,6 +30,7 @@ export type WorkflowVersionRecord = {
 
 export type WorkflowRunStatus =
   | "running"
+  | "waiting_for_human"
   | "completed"
   | "failed"
   | "canceled"
@@ -106,6 +110,7 @@ export type WorkflowRunRecord = {
   logPath: string | null;
   startedAt: string;
   finishedAt: string | null;
+  pendingHumanTaskCount?: number;
 };
 
 export type WorkflowRunCheckpointRecord = {

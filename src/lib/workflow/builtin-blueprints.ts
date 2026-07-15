@@ -3,6 +3,26 @@ import type { WorkflowBlueprintDetail } from "./blueprint-types";
 
 export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
   {
+    id: "human-feedback-loop-v1",
+    title: "Human Feedback Loop",
+    description:
+      "Pause after each agent result so a person can accept it or send structured feedback into the next iteration.",
+    category: "coding",
+    tags: ["human", "feedback", "loop", "approval", "structured-output"],
+    difficulty: "advanced",
+    requiresCwd: false,
+    patternSummary:
+      "An agent produces a result, a Human Task captures accept or revise, and the structured response controls loop convergence while preserving feedback for the next iteration.",
+    useCases: [
+      "Review generated content before downstream automation continues.",
+      "Collect revision feedback without encoding decisions in agent text.",
+      "Demonstrate persistent Human Tasks and structured loop conditions.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL("./blueprints/human-feedback-loop-v1.workflow.js", import.meta.url),
+    ),
+  },
+  {
     id: "loop-primitive-rd-acceptance-test-v1",
     title: "RD Acceptance Delivery",
     description:

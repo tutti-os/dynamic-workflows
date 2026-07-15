@@ -39,6 +39,68 @@ log("done")
 `;
 
 describe("parseWorkflowScript", () => {
+  it("parses top-level and loop human tasks with structured references", () => {
+    const parsed = parseWorkflowScript(`
+const approval = await human({
+  id: "approval",
+  label: "Approve",
+  context: [{ label: "Draft", value: "{{draft}}", display: "markdown" }],
+  actions: [
+    { id: "pass", label: "Pass", intent: "primary" },
+    { id: "revise", label: "Revise", fields: [{ id: "comment", type: "textarea", label: "Comment", required: true }] },
+  ],
+})
+const draft = await agent({ id: "draft", prompt: "Create" })
+const next = await agent({ id: "next", prompt: "{{approval.action}} {{approval.values.comment}}" })
+const looped = await loop({
+  id: "looped",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "worker", prompt: "{{review.values.comment}}" }),
+    human({ id: "review", actions: [{ id: "pass", label: "Pass" }] }),
+  ],
+  until: { source: "review.action", equals: "pass" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes.find((node) => node.id === "approval")).toEqual(
+      expect.objectContaining({ kind: "human" }),
+    );
+    expect(parsed.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "approval", target: "next" }),
+      expect.objectContaining({ source: "draft", target: "approval" }),
+    ]));
+    const loop = parsed.nodes.find((node) => node.id === "looped")?.loop;
+    expect(loop?.steps[1]).toEqual(expect.objectContaining({
+      id: "review",
+      kind: "human",
+    }));
+    expect(loop?.until).toEqual({ source: "review.action", equals: "pass" });
+  });
+
+  it("validates human task actions and fields", () => {
+    const parsed = parseWorkflowScript(`
+const invalid = human({
+  id: "invalid",
+  actions: [
+    { id: "same", label: "One" },
+    { id: "same", label: "Two", fields: [
+      { id: "choice", type: "select", label: "Choice" },
+      { id: "choice", type: "unknown", label: "Duplicate" },
+    ] },
+  ],
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        'Duplicate human action id "same".',
+        "human select fields require at least one option.",
+        'Duplicate human field id "choice".',
+        'human field type must be "text", "textarea", or "select".',
+      ]),
+    );
+  });
   it("parses workflow nodes, edges, and input schema", () => {
     const parsed = parseWorkflowScript(VALID_SCRIPT);
 

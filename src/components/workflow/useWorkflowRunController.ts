@@ -16,6 +16,7 @@ import type {
   ParsedWorkflow,
   WorkflowInputValue,
   WorkflowNodeStatus,
+  WorkflowValue,
 } from "@/lib/workflow/types";
 import type { InspectorTab } from "@/components/workflow/WorkflowWorkbench.types";
 import {
@@ -67,9 +68,16 @@ export function useWorkflowRunController(input: {
   retryRun: (runId: string) => Promise<void>;
   resumeRun: (runId: string) => Promise<void>;
   cancelCurrentRun: () => void;
+  cancelRun: (runId: string) => Promise<void>;
   selectRun: (runId: string) => void;
   copyRunText: (key: string, text: string) => Promise<void>;
   openAgentSession: (agentSessionId: string) => Promise<void>;
+  respondHumanTask: (input: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) => Promise<void>;
 } {
   const [isRunning, setIsRunning] = useState(false);
   const [isCancellingRun, setIsCancellingRun] = useState(false);
@@ -109,6 +117,8 @@ export function useWorkflowRunController(input: {
     resetScriptAfterRun?: string;
     retryRunId?: string;
     failureLogPrefix?: string;
+    initialDetail?: RunDetail;
+    propagateFailure?: boolean;
   }) {
     if (runInput.retryRunId) {
       setRetryingRunId(runInput.retryRunId);
@@ -126,6 +136,7 @@ export function useWorkflowRunController(input: {
       startRunEvents({
         initialLog: runInput.initialLog,
         initialRun: startResponse.run,
+        initialDetail: runInput.initialDetail,
         runId: startResponse.run.id,
         runContext: {
           ...runInput.runContext,
@@ -166,6 +177,9 @@ export function useWorkflowRunController(input: {
         appendEventLog(
           `${runInput.failureLogPrefix ?? "run failed"}: ${apiError.message}`,
         );
+        if (runInput.propagateFailure) {
+          throw error;
+        }
       }
     } finally {
       setIsRunning(false);
@@ -353,6 +367,23 @@ export function useWorkflowRunController(input: {
     });
   }
 
+  async function cancelRun(runId: string) {
+    if (isCancellingRun) {
+      return;
+    }
+    setIsCancellingRun(true);
+    try {
+      await requestRunCancel(runId);
+      await input.loadWorkflow();
+      await loadRun(runId);
+    } catch (error) {
+      const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
+      appendEventLog(`cancel failed: ${apiError.message}`);
+    } finally {
+      setIsCancellingRun(false);
+    }
+  }
+
   async function loadRun(runId: string) {
     setIsLoadingRunDetail(true);
     try {
@@ -405,6 +436,56 @@ export function useWorkflowRunController(input: {
     }
   }
 
+  async function respondHumanTask(response: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) {
+    const sourceRun = selectedRun?.run;
+    if (!sourceRun) {
+      return;
+    }
+    const endpoint = `/api/workflows/${input.workflowId}/runs/${sourceRun.id}/human-tasks/${response.taskId}/respond`;
+    const body = {
+      action: response.action,
+      values: response.values,
+      revision: response.revision,
+    };
+    if (isRunning && getActiveRunId() === sourceRun.id) {
+      try {
+        await startWorkflowRun({ endpoint, body });
+        appendEventLog(`human task ${response.taskId}: ${response.action}`);
+        await loadRun(sourceRun.id);
+      } catch (error) {
+        const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
+        appendEventLog(`human task response failed: ${apiError.message}`);
+        throw error;
+      }
+      return;
+    }
+    if (isRunning) {
+      throw new Error("Another workflow run is currently streaming.");
+    }
+    await executeRunJob({
+      endpoint,
+      body,
+      initialLog: `human task ${response.taskId}: ${response.action}`,
+      activeTab: "runs",
+      runContext: {
+        workflowVersionId: sourceRun.workflowVersionId,
+        executorKind: sourceRun.executorKind,
+        agent: sourceRun.agent ?? undefined,
+        model: sourceRun.model ?? undefined,
+        cwd: sourceRun.cwd ?? undefined,
+        input: sourceRun.input,
+      },
+      failureLogPrefix: "human task response failed",
+      initialDetail: selectedRun,
+      propagateFailure: true,
+    });
+  }
+
   return {
     selectedRun,
     visibleRuns,
@@ -424,8 +505,10 @@ export function useWorkflowRunController(input: {
     retryRun,
     resumeRun,
     cancelCurrentRun,
+    cancelRun,
     selectRun,
     copyRunText,
     openAgentSession,
+    respondHumanTask,
   };
 }

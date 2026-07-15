@@ -13,7 +13,9 @@ import type {
 import type { RunDetail } from "@/lib/workflow/run-detail";
 import type {
   ParsedWorkflow,
+  WorkflowHumanTask,
   WorkflowRunEvent,
+  WorkflowValue,
 } from "@/lib/workflow/types";
 import type {
   WorkflowBlueprintDetail,
@@ -577,6 +579,29 @@ export function loadWorkflowRun(input: {
     `/api/workflows/${input.workflowId}/runs/${input.runId}`,
     undefined,
     "RUN_NOT_FOUND",
+  );
+}
+
+export function respondToWorkflowHumanTask(input: {
+  workflowId: string;
+  runId: string;
+  taskId: string;
+  action: string;
+  values: Record<string, WorkflowValue>;
+  revision: number;
+}): Promise<{ task: WorkflowHumanTask; run: WorkflowRunRecord }> {
+  return apiJson<{ task: WorkflowHumanTask; run: WorkflowRunRecord }>(
+    `/api/workflows/${input.workflowId}/runs/${input.runId}/human-tasks/${input.taskId}/respond`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: input.action,
+        values: input.values,
+        revision: input.revision,
+      }),
+    },
+    "HUMAN_TASK_INVALID",
   );
 }
 

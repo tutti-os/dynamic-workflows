@@ -17,6 +17,7 @@ import type {
   WorkflowNodeStatus,
   WorkflowRunEvent,
 } from "@/lib/workflow/types";
+import { stringifyWorkflowValue } from "@/lib/workflow/templates";
 
 export type PendingRunContext = {
   workflowVersionId: string;
@@ -47,6 +48,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
   startRunEvents: (options: {
     initialLog: string;
     initialRun?: WorkflowRunRecord;
+    initialDetail?: RunDetail;
     runId?: string;
     runContext: PendingRunContext;
   }) => void;
@@ -97,19 +99,22 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     (options: {
       initialLog: string;
       initialRun?: WorkflowRunRecord;
+      initialDetail?: RunDetail;
       runId?: string;
       runContext: PendingRunContext;
     }) => {
       activeRunIdRef.current = options.runId ?? options.initialRun?.id;
       pendingRunContextRef.current = options.runContext;
       const initialLiveRun = options.initialRun
-        ? {
-            run: options.initialRun,
-            log: "",
-            logSizeBytes: 0,
-            logReturnedBytes: 0,
-            logTruncated: false,
-          }
+        ? options.initialDetail?.run.id === options.initialRun.id
+          ? { ...options.initialDetail, run: options.initialRun }
+          : {
+              run: options.initialRun,
+              log: "",
+              logSizeBytes: 0,
+              logReturnedBytes: 0,
+              logTruncated: false,
+            }
         : null;
       setLiveRun(initialLiveRun);
       setSelectedRun(initialLiveRun);
@@ -209,6 +214,30 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
       return;
     }
 
+    if (event.type === "human_task_requested") {
+      setEventLog((events) => [
+        ...events,
+        `${event.nodeId}: waiting for human input (${event.task.id})`,
+      ]);
+      return;
+    }
+
+    if (event.type === "human_task_resolved") {
+      setEventLog((events) => [
+        ...events,
+        `${event.nodeId}: human action ${event.response.action}`,
+      ]);
+      return;
+    }
+
+    if (event.type === "run_waiting") {
+      setEventLog((events) => [
+        ...events,
+        `run: waiting for ${event.pendingTaskIds.length} human task${event.pendingTaskIds.length === 1 ? "" : "s"}`,
+      ]);
+      return;
+    }
+
     if (event.type === "run_completed") {
       setEventLog((events) => {
         if (event.status === "completed") {
@@ -237,7 +266,14 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     if (event.type === "run_started") {
       const initialSummary = createInitialRunSummary(event.parsed);
       setNodeStatuses(initialSummary.nodeStatuses);
-      setNodeOutputs(initialSummary.outputs);
+      setNodeOutputs(
+        Object.fromEntries(
+          Object.entries(initialSummary.outputs).map(([nodeId, value]) => [
+            nodeId,
+            stringifyWorkflowValue(value),
+          ]),
+        ),
+      );
       return;
     }
 
@@ -252,8 +288,8 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
         event,
       ).nodeStatuses,
     );
-    setNodeOutputs((outputs) =>
-      applyWorkflowRunEvent(
+    setNodeOutputs((outputs) => {
+      const nextOutputs = applyWorkflowRunEvent(
         {
           status: "running",
           outputs,
@@ -261,30 +297,41 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
           nodeSessions: {},
         },
         event,
-      ).outputs,
-    );
+      ).outputs;
+      return Object.fromEntries(
+        Object.entries(nextOutputs).map(([nodeId, value]) => [
+          nodeId,
+          stringifyWorkflowValue(value),
+        ]),
+      );
+    });
   }
 
   function syncLiveRunEvent(event: WorkflowRunEvent) {
     if (event.type === "run_started") {
       activeRunIdRef.current = event.runId;
       const context = pendingRunContextRef.current;
-      const nextLiveRun = createRunDetailFromStartedEvent({
-        event,
-        workflowId: input.workflowId,
-        workflowVersionId:
-          context?.workflowVersionId ??
-          input.selectedVersion?.id ??
-          input.detail?.currentVersion?.id ??
-          "",
-        executorKind: context?.executorKind ?? "local-agent",
-        agent: context?.agent,
-        model: context?.model,
-        cwd: context?.cwd,
-        runInput: context?.input ?? {},
-      });
-      setLiveRun(nextLiveRun);
-      setSelectedRun(nextLiveRun);
+      const createStartedDetail = () =>
+        createRunDetailFromStartedEvent({
+          event,
+          workflowId: input.workflowId,
+          workflowVersionId:
+            context?.workflowVersionId ??
+            input.selectedVersion?.id ??
+            input.detail?.currentVersion?.id ??
+            "",
+          executorKind: context?.executorKind ?? "local-agent",
+          agent: context?.agent,
+          model: context?.model,
+          cwd: context?.cwd,
+          runInput: context?.input ?? {},
+        });
+      const applyStartedEvent = (current: RunDetail | null) =>
+        current?.run.id === event.runId
+          ? applyRunEventToDetail(current, event)
+          : createStartedDetail();
+      setLiveRun(applyStartedEvent);
+      setSelectedRun(applyStartedEvent);
       return;
     }
 

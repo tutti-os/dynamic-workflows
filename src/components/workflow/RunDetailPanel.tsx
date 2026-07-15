@@ -1,10 +1,14 @@
+import { useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   Badge,
   Button,
+  Input,
   LaunchIcon,
   PlayIcon,
   RefreshIcon,
   Spinner,
+  Textarea,
   WarningLinedIcon,
 } from "@tutti-os/ui-system";
 import type {
@@ -22,6 +26,11 @@ import {
   runStatusBadge,
 } from "@/components/workflow/runPanelUtils";
 import { CopyToClipboardButton } from "@/components/workflow/CopyToClipboardButton";
+import type {
+  WorkflowHumanAction,
+  WorkflowHumanTask,
+  WorkflowValue,
+} from "@/lib/workflow/types";
 
 export function RunDetailPanel(props: {
   detail: RunDetail;
@@ -32,8 +41,15 @@ export function RunDetailPanel(props: {
   copiedRunField?: string;
   onRetryRun: (runId: string) => void;
   onResumeRun: (runId: string) => void;
+  onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
+  onRespondHumanTask: (input: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) => Promise<void>;
 }) {
   const { detail } = props;
   const { run } = detail;
@@ -49,10 +65,16 @@ export function RunDetailPanel(props: {
         copied={props.copiedRunField === `id:${run.id}`}
         onRetryRun={props.onRetryRun}
         onResumeRun={props.onResumeRun}
+        onCancelRun={props.onCancelRun}
         onCopyRunText={props.onCopyRunText}
       />
 
       {run.status === "interrupted" ? <InterruptedRunNotice /> : null}
+
+      <HumanTasksSection
+        tasks={detail.humanTasks ?? []}
+        onRespond={props.onRespondHumanTask}
+      />
 
       <div className="run-facts">
         <RunFact label="Run ID" value={run.id} />
@@ -100,6 +122,208 @@ export function RunDetailPanel(props: {
   );
 }
 
+function HumanTasksSection(props: {
+  tasks: WorkflowHumanTask[];
+  onRespond: (input: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) => Promise<void>;
+}) {
+  if (props.tasks.length === 0) {
+    return null;
+  }
+  const pending = props.tasks.filter((task) => task.status === "pending");
+  const history = props.tasks.filter((task) => task.status !== "pending");
+  return (
+    <section className="human-task-section">
+      <div className="field-heading">
+        <label>Human tasks</label>
+        <Badge variant={pending.length > 0 ? "warning" : "success"}>
+          {pending.length > 0 ? `${pending.length} needs input` : "complete"}
+        </Badge>
+      </div>
+      {pending.map((task) => (
+        <HumanTaskCard
+          key={task.id}
+          task={task}
+          onRespond={props.onRespond}
+        />
+      ))}
+      {history.length > 0 ? (
+        <div className="human-task-history">
+          <label>History</label>
+          {history.map((task) => (
+            <div className="human-task-history-item" key={task.id}>
+              <span>{task.nodeId}{task.iteration ? ` · iteration ${task.iteration}` : ""}</span>
+              <Badge variant={task.status === "resolved" ? "success" : "warning"}>
+                {task.response?.action ?? task.status}
+              </Badge>
+              {task.response && Object.keys(task.response.values).length > 0 ? (
+                <pre className="output-box">{formatJson(task.response.values)}</pre>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function HumanTaskCard(props: {
+  task: WorkflowHumanTask;
+  onRespond: (input: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) => Promise<void>;
+}) {
+  const initialValues = useMemo(
+    () => Object.fromEntries(
+      props.task.spec.actions.flatMap((action) =>
+        action.fields.map((field) => [
+          `${action.id}:${field.id}`,
+          field.defaultValue ?? "",
+        ]),
+      ),
+    ),
+    [props.task],
+  );
+  const [values, setValues] = useState<Record<string, string>>(initialValues);
+  const [error, setError] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (action: WorkflowHumanAction) => {
+    const actionValues = Object.fromEntries(
+      action.fields.map((field) => [field.id, values[`${action.id}:${field.id}`] ?? ""]),
+    );
+    const missing = action.fields.find(
+      (field) => field.required && !String(actionValues[field.id] ?? "").trim(),
+    );
+    if (missing) {
+      setError(`${missing.label} is required.`);
+      return;
+    }
+    setError(undefined);
+    setSubmitting(true);
+    try {
+      await props.onRespond({
+        taskId: props.task.id,
+        action: action.id,
+        values: actionValues,
+        revision: props.task.revision,
+      });
+    } catch (submitError) {
+      setSubmitting(false);
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Human task response failed.",
+      );
+    }
+  };
+
+  return (
+    <div className="human-task-card">
+      <div className="human-task-card-heading">
+        <div>
+          <strong>{props.task.nodeId}</strong>
+          {props.task.iteration ? <span>Iteration {props.task.iteration}</span> : null}
+        </div>
+        <Badge variant="warning">waiting</Badge>
+      </div>
+      {props.task.spec.description ? <p>{props.task.spec.description}</p> : null}
+      {props.task.spec.context.map((item, index) => (
+        <div className="human-task-context" key={`${item.label}:${index}`}>
+          <label>{item.label}</label>
+          {item.display === "markdown" ? (
+            <div className="output-box human-task-markdown">
+              <ReactMarkdown>{String(item.value ?? "")}</ReactMarkdown>
+            </div>
+          ) : (
+            <pre className="output-box">
+              {item.display === "json" ? formatJson(item.value) : String(item.value ?? "")}
+            </pre>
+          )}
+        </div>
+      ))}
+      <div className="human-task-actions">
+        {props.task.spec.actions.map((action) => (
+          <div className="human-task-action" key={action.id}>
+            {action.fields.map((field) => {
+              const key = `${action.id}:${field.id}`;
+              return (
+                <div className="field" key={field.id}>
+                  <label htmlFor={`${props.task.id}-${key}`}>{field.label}</label>
+                  {field.type === "textarea" ? (
+                    <Textarea
+                      id={`${props.task.id}-${key}`}
+                      rows={4}
+                      value={values[key] ?? ""}
+                      placeholder={field.placeholder}
+                      disabled={submitting}
+                      onChange={(event) => setValues((current) => ({
+                        ...current,
+                        [key]: event.target.value,
+                      }))}
+                    />
+                  ) : field.type === "select" ? (
+                    <select
+                      id={`${props.task.id}-${key}`}
+                      className="control-select"
+                      value={values[key] ?? ""}
+                      disabled={submitting}
+                      onChange={(event) => setValues((current) => ({
+                        ...current,
+                        [key]: event.target.value,
+                      }))}
+                    >
+                      <option value="">Select {field.label}</option>
+                      {(field.options ?? []).map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      id={`${props.task.id}-${key}`}
+                      value={values[key] ?? ""}
+                      placeholder={field.placeholder}
+                      disabled={submitting}
+                      onChange={(event) => setValues((current) => ({
+                        ...current,
+                        [key]: event.target.value,
+                      }))}
+                    />
+                  )}
+                </div>
+              );
+            })}
+            <Button
+              type="button"
+              size="sm"
+              variant={
+                action.intent === "danger"
+                  ? "destructive"
+                  : action.intent === "default"
+                    ? "outline"
+                    : undefined
+              }
+              disabled={submitting}
+              onClick={() => void submit(action)}
+            >
+              {submitting ? <Spinner size={14} /> : null}
+              {action.label}
+            </Button>
+          </div>
+        ))}
+      </div>
+      {error ? <div className="diagnostic error">{error}</div> : null}
+    </div>
+  );
+}
+
 function RunDetailHeader(props: {
   run: WorkflowRunRecord;
   versionLabel: string;
@@ -108,6 +332,7 @@ function RunDetailHeader(props: {
   copied: boolean;
   onRetryRun: (runId: string) => void;
   onResumeRun: (runId: string) => void;
+  onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
 }) {
   const { run } = props;
@@ -151,6 +376,17 @@ function RunDetailHeader(props: {
               <PlayIcon data-icon="inline-start" />
             )}
             Resume
+          </Button>
+        ) : null}
+        {run.status === "waiting_for_human" ? (
+          <Button
+            size="sm"
+            variant="destructive"
+            type="button"
+            disabled={props.isRunning}
+            onClick={() => props.onCancelRun(run.id)}
+          >
+            Cancel
           </Button>
         ) : null}
         {canRetryRun(run.status) ? (

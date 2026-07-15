@@ -105,6 +105,9 @@ export function listWorkflows(): WorkflowListItem[] {
       SELECT *
       FROM (
         SELECT workflow_runs.*,
+          (SELECT COUNT(*) FROM workflow_run_human_tasks tasks
+            WHERE tasks.run_id = workflow_runs.id AND tasks.status = 'pending')
+            AS pending_human_task_count,
           ROW_NUMBER() OVER (
             PARTITION BY workflow_id
             ORDER BY started_at DESC, workflow_runs.rowid DESC

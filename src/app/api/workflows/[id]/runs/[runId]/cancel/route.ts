@@ -6,7 +6,10 @@ import {
 import {
   getWorkflowRun,
 } from "@/lib/db/workflows/runs";
-import { cancelWorkflowRunJob } from "@/lib/workflow/run-jobs";
+import {
+  cancelWorkflowRun,
+  isWorkflowRunJobActive,
+} from "@/lib/workflow/run-jobs";
 
 export async function POST(
   _request: Request,
@@ -22,6 +25,11 @@ export async function POST(
     return NextResponse.json(apiError("RUN_NOT_FOUND"), { status: 404 });
   }
 
-  const canceled = cancelWorkflowRunJob(runId);
-  return NextResponse.json({ ok: true, canceled });
+  const wasActive = isWorkflowRunJobActive(runId);
+  const updated = cancelWorkflowRun(runId);
+  return NextResponse.json({
+    ok: true,
+    canceled: wasActive || updated?.status === "canceled",
+    run: updated,
+  });
 }

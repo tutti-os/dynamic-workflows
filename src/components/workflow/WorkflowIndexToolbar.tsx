@@ -53,6 +53,7 @@ function RunStatusFilterSelect(props: {
       <SelectContent align="start">
         <SelectItem value="all">All statuses</SelectItem>
         <SelectItem value="running">running</SelectItem>
+        <SelectItem value="waiting_for_human">waiting for human</SelectItem>
         <SelectItem value="interrupted">interrupted</SelectItem>
         <SelectItem value="completed">completed</SelectItem>
         <SelectItem value="failed">failed</SelectItem>

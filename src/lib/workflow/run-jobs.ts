@@ -1,13 +1,22 @@
+import { randomUUID } from "node:crypto";
 import {
+  cancelWorkflowRunAndHumanTasks,
   claimWorkflowRunForResume,
   createWorkflowRun,
+  finalizeWorkflowRunExecution,
   getWorkflowRun,
+  isWorkflowRunExecutionClaimed,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
+  markWorkflowRunWaitingOwned,
   releaseWorkflowRunResumeClaim,
+  touchWorkflowRunExecutionClaim,
   upsertWorkflowRunCheckpoint,
   updateWorkflowRun,
 } from "@/lib/db/workflows/runs";
+import {
+  createOrGetWorkflowHumanTask,
+} from "@/lib/db/workflows/human-tasks";
 import {
   getWorkflowVersion,
 } from "@/lib/db/workflows/versions";
@@ -68,7 +77,9 @@ type RunSubscriber = (event: WorkflowRunEvent) => void;
 
 type ActiveRunJob = {
   abortController: AbortController;
+  executionToken: string;
   subscribers: Set<RunSubscriber>;
+  wakeRequested: boolean;
 };
 
 const globalForRunJobs = globalThis as typeof globalThis & {
@@ -83,6 +94,7 @@ globalForRunJobs.__dynamicWorkflowRunJobs = jobs;
 export function startWorkflowRunJob(
   options: WorkflowRunJobOptions,
 ): WorkflowRunRecord {
+  const executionToken = randomUUID();
   const run = createWorkflowRun({
     workflowId: options.workflowId,
     workflowVersionId: options.version.id,
@@ -91,12 +103,15 @@ export function startWorkflowRunJob(
     model: options.model,
     cwd: options.cwd,
     request: options.input,
+    executionToken,
   });
   ensureRunLogDirectory(run.logPath);
 
   const job: ActiveRunJob = {
     abortController: new AbortController(),
+    executionToken,
     subscribers: new Set(),
+    wakeRequested: false,
   };
   jobs.set(run.id, job);
 
@@ -108,6 +123,29 @@ export async function resumeWorkflowRunJob(input: {
   workflowId: string;
   runId: string;
 }): Promise<WorkflowRunRecord> {
+  return resumeWorkflowRunJobInternal(input, false);
+}
+
+export async function resumeWorkflowRunAfterHumanTask(input: {
+  workflowId: string;
+  runId: string;
+}): Promise<WorkflowRunRecord> {
+  const active = jobs.get(input.runId);
+  if (active) {
+    active.wakeRequested = true;
+    const run = getWorkflowRun(input.runId);
+    if (!run) {
+      throw workflowRunNotFoundError();
+    }
+    return run;
+  }
+  return resumeWorkflowRunJobInternal(input, true);
+}
+
+async function resumeWorkflowRunJobInternal(input: {
+  workflowId: string;
+  runId: string;
+}, allowWaiting: boolean): Promise<WorkflowRunRecord> {
   const activeRun = getWorkflowRun(input.runId);
   if (!activeRun || activeRun.workflowId !== input.workflowId) {
     throw workflowRunNotFoundError();
@@ -117,7 +155,8 @@ export async function resumeWorkflowRunJob(input: {
   }
   if (
     activeRun.status !== "running" &&
-    activeRun.status !== "interrupted"
+    activeRun.status !== "interrupted" &&
+    !(allowWaiting && activeRun.status === "waiting_for_human")
   ) {
     throw new Error("Only interrupted workflow runs can be resumed.");
   }
@@ -129,7 +168,9 @@ export async function resumeWorkflowRunJob(input: {
 
   const job: ActiveRunJob = {
     abortController: new AbortController(),
+    executionToken: "",
     subscribers: new Set(),
+    wakeRequested: false,
   };
   const claim = claimWorkflowRunForResume({
     workflowId: input.workflowId,
@@ -138,6 +179,7 @@ export async function resumeWorkflowRunJob(input: {
   if (!claim) {
     return getWorkflowRun(activeRun.id) ?? activeRun;
   }
+  job.executionToken = claim.token;
   jobs.set(activeRun.id, job);
   const run = claim.run;
 
@@ -151,7 +193,11 @@ export async function resumeWorkflowRunJob(input: {
     });
     if (snapshot.terminalSummary) {
       jobs.delete(run.id);
-      return reconcileWorkflowRunFromTerminalLog(run, snapshot.terminalSummary);
+      return reconcileWorkflowRunFromTerminalLog(
+        run,
+        snapshot.terminalSummary,
+        claim.token,
+      );
     }
 
     ensureRunLogDirectory(run.logPath);
@@ -179,6 +225,10 @@ export async function resumeWorkflowRunJob(input: {
       token: claim.token,
     });
     jobs.delete(run.id);
+    markWorkflowRunInterrupted({
+      runId: run.id,
+      result: run.result ?? undefined,
+    });
     throw error;
   }
 }
@@ -186,7 +236,11 @@ export async function resumeWorkflowRunJob(input: {
 export async function markWorkflowRunInterruptedIfStale(
   run: WorkflowRunRecord,
 ): Promise<WorkflowRunRecord> {
-  if (run.status !== "running" || jobs.has(run.id)) {
+  if (
+    run.status !== "running" ||
+    jobs.has(run.id) ||
+    isWorkflowRunExecutionClaimed(run.id)
+  ) {
     return run;
   }
   const version = getWorkflowVersion(run.workflowVersionId);
@@ -227,6 +281,44 @@ export function cancelWorkflowRunJob(runId: string): boolean {
   return true;
 }
 
+export function cancelWorkflowRun(runId: string): WorkflowRunRecord | null {
+  const active = jobs.get(runId);
+  const run = getWorkflowRun(runId);
+  if (!run) {
+    return null;
+  }
+  if (
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "canceled"
+  ) {
+    return run;
+  }
+  let summary: WorkflowRunSummary = {
+    status: run.status,
+    ...readRunResult(run.result),
+  };
+  const event: WorkflowRunEvent = {
+    type: "run_completed",
+    runId,
+    status: "canceled",
+    outputs: summary.outputs,
+    error: "Run canceled.",
+    errorCode: "WORKFLOW_RUN_FAILED",
+  };
+  summary = applyWorkflowRunEvent(summary, event);
+  const canceled = cancelWorkflowRunAndHumanTasks({
+    runId,
+    result: toWorkflowRunResult(summary),
+  });
+  if (active && canceled.transitioned) {
+    active.abortController.abort();
+  } else if (canceled.transitioned) {
+    appendRunLogEvent(run.logPath, event);
+  }
+  return canceled.run;
+}
+
 export function subscribeWorkflowRunJob(
   runId: string,
   subscriber: RunSubscriber,
@@ -250,8 +342,19 @@ async function executeWorkflowRunJob(
   options: WorkflowRunJobOptions,
   job: ActiveRunJob,
 ) {
+  const heartbeat = setInterval(() => {
+    const owned = touchWorkflowRunExecutionClaim({
+      runId: run.id,
+      executionToken: job.executionToken,
+    });
+    if (!owned && getWorkflowRun(run.id)?.status === "canceled") {
+      job.abortController.abort();
+    }
+  }, 15_000);
+  heartbeat.unref();
+  let executionOptions = options;
   let summary =
-    options.initialSummary ??
+    executionOptions.initialSummary ??
     createInitialRunSummary(undefined, {
       status: "running",
       queueExecutableNodes: false,
@@ -264,60 +367,151 @@ async function executeWorkflowRunJob(
   };
 
   try {
-    for await (const event of runWorkflow({
-      runId: run.id,
-      script: options.version.script,
-      agent: options.agent,
-      model: options.model,
-      cwd: options.cwd,
-      inputs: options.inputs,
-      recovery: options.recovery,
-      onCheckpoint: async (checkpoint) => {
-        if (checkpoint.kind !== "loop") {
-          return;
+    while (true) {
+      job.wakeRequested = false;
+      let waitingEvent: Extract<WorkflowRunEvent, { type: "run_waiting" }> | undefined;
+      try {
+        for await (const emittedEvent of runWorkflow({
+          runId: run.id,
+          script: executionOptions.version.script,
+          agent: executionOptions.agent,
+          model: executionOptions.model,
+          cwd: executionOptions.cwd,
+          inputs: executionOptions.inputs,
+          recovery: executionOptions.recovery,
+          onHumanTask: (request) => createOrGetWorkflowHumanTask(request),
+          onCheckpoint: async (checkpoint) => {
+            if (checkpoint.kind !== "loop") {
+              return;
+            }
+            try {
+              upsertWorkflowRunCheckpoint({
+                runId: run.id,
+                nodeId: checkpoint.nodeId,
+                checkpoint: checkpoint.state,
+              });
+            } catch (error) {
+              throw new Error(
+                `Failed to save workflow run checkpoint for run ${run.id}, node ${checkpoint.nodeId}.`,
+                { cause: error },
+              );
+            }
+          },
+          signal: job.abortController.signal,
+        })) {
+          const event =
+            emittedEvent.type === "run_completed" &&
+            emittedEvent.status !== "canceled" &&
+            getWorkflowRun(run.id)?.status === "canceled"
+              ? createTerminalRunEvent({
+                  runId: run.id,
+                  summary,
+                  canceled: true,
+                })
+              : emittedEvent;
+          summary = applyWorkflowRunEvent(summary, event);
+          if (event.type === "run_waiting") {
+            waitingEvent = event;
+          } else {
+            appendAndPublish(run, job, event);
+          }
         }
-        try {
-          upsertWorkflowRunCheckpoint({
-            runId: run.id,
-            nodeId: checkpoint.nodeId,
-            checkpoint: checkpoint.state,
-          });
-        } catch (error) {
-          throw new Error(
-            `Failed to save workflow run checkpoint for run ${run.id}, node ${checkpoint.nodeId}.`,
-            { cause: error },
-          );
+      } catch (error) {
+        const finalEvent = createTerminalRunEvent({
+          runId: run.id,
+          summary,
+          error,
+          canceled: job.abortController.signal.aborted,
+        });
+        appendAndPublish(run, job, finalEvent);
+        summary = applyWorkflowRunEvent(summary, finalEvent);
+      }
+
+      if (
+        job.abortController.signal.aborted &&
+        summary.status !== "canceled"
+      ) {
+        const canceledEvent = createTerminalRunEvent({
+          runId: run.id,
+          summary,
+          canceled: true,
+        });
+        appendAndPublish(run, job, canceledEvent);
+        summary = applyWorkflowRunEvent(summary, canceledEvent);
+      }
+
+      if (summary.status !== "waiting_for_human" || !waitingEvent) {
+        break;
+      }
+
+      if (!job.wakeRequested) {
+        const transition = markWorkflowRunWaitingOwned({
+          runId: run.id,
+          executionToken: job.executionToken,
+          result: toWorkflowRunResult(summary),
+          pendingTaskIds: waitingEvent.pendingTaskIds,
+        });
+        if (transition.transitioned) {
+          appendAndPublish(run, job, waitingEvent);
+          break;
         }
-      },
-      signal: job.abortController.signal,
-    })) {
-      appendAndPublish(run, job, event);
-      summary = applyWorkflowRunEvent(summary, event);
+        if (transition.run?.status !== "running") {
+          summary = {
+            status: transition.run?.status ?? "interrupted",
+            ...readRunResult(transition.run?.result),
+          };
+          break;
+        }
+      }
+
+      const snapshot = createRecoveryStateFromSummary({
+        run,
+        version: executionOptions.version,
+        summary,
+        checkpoints: listWorkflowRunCheckpoints(run.id),
+      });
+      summary = { ...snapshot.summary, status: "running" };
+      executionOptions = {
+        ...executionOptions,
+        recovery: snapshot.recovery,
+        initialSummary: summary,
+      };
     }
-  } catch (error) {
-    const finalStatus = job.abortController.signal.aborted ? "canceled" : "failed";
-    const finalEvent: WorkflowRunEvent = {
-      type: "run_completed",
-      runId: run.id,
-      status: finalStatus,
-      outputs: summary.outputs,
-      error: job.abortController.signal.aborted
-        ? "Run canceled."
-        : formatRunError(error),
-      errorCode: job.abortController.signal.aborted
-        ? "WORKFLOW_RUN_FAILED"
-        : getRunErrorCode(error),
-    };
-    appendAndPublish(run, job, finalEvent);
-    summary = applyWorkflowRunEvent(summary, finalEvent);
+
+    if (
+      summary.status === "completed" ||
+      summary.status === "failed" ||
+      summary.status === "canceled"
+    ) {
+      finalizeWorkflowRunExecution({
+        runId: run.id,
+        executionToken: job.executionToken,
+        status: summary.status,
+        result: toWorkflowRunResult(summary),
+      });
+    }
   } finally {
-    updateWorkflowRun({
-      runId: run.id,
-      status: summary.status,
-      result: toWorkflowRunResult(summary),
-    });
+    clearInterval(heartbeat);
     jobs.delete(run.id);
   }
+}
+
+function createTerminalRunEvent(input: {
+  runId: string;
+  summary: WorkflowRunSummary;
+  error?: unknown;
+  canceled: boolean;
+}): Extract<WorkflowRunEvent, { type: "run_completed" }> {
+  return {
+    type: "run_completed",
+    runId: input.runId,
+    status: input.canceled ? "canceled" : "failed",
+    outputs: input.summary.outputs,
+    error: input.canceled ? "Run canceled." : formatRunError(input.error),
+    errorCode: input.canceled
+      ? "WORKFLOW_RUN_FAILED"
+      : getRunErrorCode(input.error),
+  };
 }
 
 function createRunRecoveryState(input: {
@@ -351,6 +545,29 @@ function createRunRecoveryState(input: {
       })
     : undefined;
 
+  return {
+    ...createRecoveryStateFromSummary({
+      run: input.run,
+      version: input.version,
+      summary,
+      checkpoints: input.checkpoints,
+    }),
+    terminalSummary,
+  };
+}
+
+function createRecoveryStateFromSummary(input: {
+  run: WorkflowRunRecord;
+  version: WorkflowVersionRecord;
+  summary: WorkflowRunSummary;
+  checkpoints: WorkflowRunCheckpointRecord[];
+}): {
+  recovery: WorkflowRunRecoveryState;
+  summary: WorkflowRunSummary;
+} {
+  const parsed = assertWorkflowScriptValid(input.version.script);
+  const { summary } = input;
+
   const completedNodeIds = Object.entries(summary.nodeStatuses)
     .filter(([, status]) => status === "completed")
     .map(([nodeId]) => nodeId);
@@ -379,7 +596,6 @@ function createRunRecoveryState(input: {
       loopStates,
     },
     summary,
-    terminalSummary,
   };
 }
 
@@ -418,12 +634,27 @@ function mergePersistedRunResult(
 function reconcileWorkflowRunFromTerminalLog(
   run: WorkflowRunRecord,
   summary: WorkflowRunSummary,
+  executionToken?: string,
 ): WorkflowRunRecord {
-  updateWorkflowRun({
-    runId: run.id,
-    status: summary.status,
-    result: toWorkflowRunResult(summary),
-  });
+  if (
+    executionToken &&
+    (summary.status === "completed" ||
+      summary.status === "failed" ||
+      summary.status === "canceled")
+  ) {
+    finalizeWorkflowRunExecution({
+      runId: run.id,
+      executionToken,
+      status: summary.status,
+      result: toWorkflowRunResult(summary),
+    });
+  } else {
+    updateWorkflowRun({
+      runId: run.id,
+      status: summary.status,
+      result: toWorkflowRunResult(summary),
+    });
+  }
   return getWorkflowRun(run.id) ?? run;
 }
 

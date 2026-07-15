@@ -1,14 +1,20 @@
-import type { WorkflowLoopUntil } from "./types";
+import type { WorkflowLoopUntil, WorkflowValue } from "./types";
+import { stringifyWorkflowValue } from "./templates";
 
 export function matchesLoopUntil(
-  output: string,
+  output: WorkflowValue,
   until: WorkflowLoopUntil,
 ): boolean {
-  return lastNonEmptyLine(output) === until.finalStatus;
+  if ("equals" in until) {
+    return output === until.equals;
+  }
+  return lastNonEmptyLine(stringifyWorkflowValue(output)) === until.finalStatus;
 }
 
 export function formatLoopUntil(until: WorkflowLoopUntil): string {
-  return `${until.source} final status ${JSON.stringify(until.finalStatus)}`;
+  return "equals" in until
+    ? `${until.source} equals ${JSON.stringify(until.equals)}`
+    : `${until.source} final status ${JSON.stringify(until.finalStatus)}`;
 }
 
 function lastNonEmptyLine(output: string): string {

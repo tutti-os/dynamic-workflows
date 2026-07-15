@@ -102,7 +102,9 @@ function RunListItem(props: {
           className={run.status === "running" ? "status-pulse" : undefined}
           variant={runStatusBadge(run.status)}
         >
-          {run.status}
+          {run.status === "waiting_for_human" && run.pendingHumanTaskCount
+            ? `needs input · ${run.pendingHumanTaskCount}`
+            : run.status}
         </Badge>
         <time>{formatDate(run.startedAt)}</time>
       </button>

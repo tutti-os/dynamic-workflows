@@ -1,6 +1,6 @@
 # Workflow Script DSL Reference
 
-A workflow script is a single JavaScript module using only the workflow primitives: `meta`, `inputs`, `phase`, `agent`, and `loop`. Anything outside this contract either produces a validation diagnostic or is ignored — always run validate and treat any error diagnostic as a broken script.
+A workflow script is a single JavaScript module using only the workflow primitives: `meta`, `inputs`, `phase`, `agent`, `human`, and `loop`. Anything outside this contract either produces a validation diagnostic or is ignored — always run validate and treat any error diagnostic as a broken script.
 
 ## Hard constraints
 
@@ -87,6 +87,37 @@ agent({
 - Never use legacy string session values.
 - Use `appendPrompt` on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas. Apply this to every inherited loop step — a reviewer step repeating its full initial prompt each round wastes context and confuses the session.
 
+## human tasks
+
+`human(...)` pauses the dependent branch, persists a task, and returns a structured response. Independent branches may continue and one run may have multiple pending Human Tasks.
+
+```js
+const decision = human({
+  id: "decision",
+  label: "Confirm result",
+  description: "Accept the result or request another iteration.",
+  context: [
+    { label: "Result", value: "{{worker}}", display: "markdown" },
+  ],
+  actions: [
+    { id: "pass", label: "Accept", intent: "primary" },
+    {
+      id: "revise",
+      label: "Request changes",
+      fields: [
+        { id: "comment", type: "textarea", label: "Feedback", required: true },
+      ],
+    },
+  ],
+});
+```
+
+- Context display modes are `"text"`, `"markdown"`, and `"json"`.
+- Action intents are `"primary"`, `"default"`, and `"danger"`.
+- Field types are `"text"`, `"textarea"`, and `"select"`; select fields require `{ label, value }` options.
+- Human output is `{ action, values }`. Use nested paths such as `{{decision.action}}` and `{{decision.values.comment}}` downstream.
+- A submitted task is immutable. Repeated input is modeled by another Human node or another loop iteration.
+
 ## loop
 
 ```js
@@ -111,10 +142,10 @@ loop({
 
 - `maxIterations` must be an integer from 1 to 10.
 - `onMaxIterations` decides what happens when the loop exhausts its iterations without the `until` status: `"fail"` (the default) fails the run, `"complete"` continues to the next node. Use `"complete"` only when downstream steps can safely run on unaccepted work.
-- Steps must be `agent({ id, label, prompt })` calls; a step can override `agent`, `model`, `cwd`, `session`.
+- Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `cwd`, and `session`.
 - A loop can set `agent`, `model`, and `cwd` as defaults for its steps; step values override loop values.
 - Loop `session` scope: `"step"` derives per-step session keys; `"loop"` shares one loop-level session.
-- `until` must be `{ source: "<step id>", finalStatus: "<literal status>" }`, and the source step's prompt must instruct that agent to put that status alone on the final non-empty line of its reply.
+- `until` may use the legacy text matcher `{ source: "<agent step>", finalStatus: "PASS" }` or an exact structured matcher such as `{ source: "review.action", equals: "pass" }`.
 - Inside loop step prompts, reference other step ids with `{{step_id}}` (most recent output) and use `{{iteration}}` for the current 1-based iteration number.
 
 ## Runtime option templates for agent / model

@@ -10,6 +10,7 @@ import type {
   WorkflowDiagnostic,
   WorkflowLoopStep,
   WorkflowNode,
+  WorkflowValue,
 } from "@/lib/workflow/types";
 import type {
   RunDetail,
@@ -57,8 +58,15 @@ type WorkflowInspectorPaneProps = {
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onResumeRun: (runId: string) => void;
+  onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
+  onRespondHumanTask: (input: {
+    taskId: string;
+    action: string;
+    values: Record<string, WorkflowValue>;
+    revision: number;
+  }) => Promise<void>;
 };
 
 export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
@@ -146,8 +154,10 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
             onSelectRun={props.onSelectRun}
             onRetryRun={props.onRetryRun}
             onResumeRun={props.onResumeRun}
+            onCancelRun={props.onCancelRun}
             onCopyRunText={props.onCopyRunText}
             onOpenAgentSession={props.onOpenAgentSession}
+            onRespondHumanTask={props.onRespondHumanTask}
           />
         )}
       </ScrollArea>

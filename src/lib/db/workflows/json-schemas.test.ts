@@ -144,15 +144,30 @@ describe("workflow JSON column schemas", () => {
         id: "run-1:loop",
       }),
     ).toBe(JSON.stringify(checkpoint));
-    expect(() =>
+    expect(
       stringifyWorkflowLoopRecoveryStateColumn(
-        { ...checkpoint, previousStepOutputs: { draft: 1 } },
+        {
+          ...checkpoint,
+          previousStepOutputs: {
+            draft: { action: "revise", values: { comment: "fix it" } },
+          },
+        },
         {
           table: "workflow_run_checkpoints",
           column: "checkpoint_json",
           id: "run-1:loop",
         },
       ),
-    ).toThrow("has invalid shape");
+    ).toContain('"action":"revise"');
+    expect(() =>
+      stringifyWorkflowLoopRecoveryStateColumn(
+        { ...checkpoint, previousStepOutputs: { draft: undefined } },
+        {
+          table: "workflow_run_checkpoints",
+          column: "checkpoint_json",
+          id: "run-1:loop",
+        },
+      ),
+    ).toThrow("is not JSON serializable");
   });
 });

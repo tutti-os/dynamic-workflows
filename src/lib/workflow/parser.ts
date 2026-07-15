@@ -7,6 +7,10 @@ import type {
   WorkflowInputDefinition,
   WorkflowInputSchema,
   WorkflowInputBinding,
+  WorkflowHumanAction,
+  WorkflowHumanContextItem,
+  WorkflowHumanField,
+  WorkflowHumanSpec,
   WorkflowLoopUntil,
   WorkflowLoopSpec,
   WorkflowLoopStep,
@@ -14,6 +18,7 @@ import type {
   WorkflowNode,
   WorkflowPhase,
   WorkflowSessionSpec,
+  WorkflowScalarValue,
 } from "./types";
 import {
   listOptionalInputNames,
@@ -218,6 +223,11 @@ function visitTopLevelStatement(statement: AnyNode, state: ParserState): void {
     return;
   }
 
+  if (isCallExpression(expression, "human")) {
+    addHumanNode(expression, variableName, state);
+    return;
+  }
+
   if (isCallExpression(expression, "loop")) {
     addLoopNode(expression, variableName, state);
     return;
@@ -306,7 +316,8 @@ function addLoopNode(
     ...new Set(
       steps.flatMap((step) =>
         step.templateRefs.filter(
-          (ref) => !stepIds.has(ref) && !isReservedTemplateRef(ref),
+          (ref) =>
+            !stepIds.has(templateRefRoot(ref)) && !isReservedTemplateRef(ref),
         ),
       ),
     ),
@@ -361,6 +372,40 @@ function addLoopNode(
     state.variableToNodeId[variableName] = node.id;
   }
   addInputEdges(node, state);
+}
+
+function addHumanNode(
+  callExpression: AnyNode,
+  variableName: string | undefined,
+  state: ParserState,
+): WorkflowNode {
+  const options = firstArg(callExpression);
+  const id =
+    readObjectString(options, "id") ??
+    variableName ??
+    `human_${state.anonymousIndex++}`;
+  const label = readObjectString(options, "label") ?? humanize(id);
+  const human = readHumanSpec(options, callExpression, state);
+  const node: WorkflowNode = {
+    id,
+    kind: "human",
+    label,
+    phase: state.currentPhase,
+    variableName,
+    human,
+    inputs: readInputs(options, state),
+    templateRefs: collectHumanTemplateRefs(human),
+    sourceRange: toRange(callExpression),
+    labelRange: readObjectPropertyValueRange(options, "label"),
+  };
+
+  state.nodes.push(node);
+  addNodeToCurrentPhase(node.id, state);
+  if (variableName) {
+    state.variableToNodeId[variableName] = node.id;
+  }
+  addInputEdges(node, state);
+  return node;
 }
 
 function addLogNode(
@@ -437,16 +482,21 @@ function readLoopSteps(
   const elements = (stepsArray.elements as AnyNode[] | undefined) ?? [];
   return elements.flatMap((element, index): WorkflowLoopStep[] => {
     const expression = unwrapExpression(unwrapFunctionBody(element));
-    if (!isCallExpression(expression, "agent")) {
+    if (
+      !isCallExpression(expression, "agent") &&
+      !isCallExpression(expression, "human")
+    ) {
       state.diagnostics.push({
         severity: "error",
-        message: "loop steps only support agent({...}) in this version.",
+        message: "loop steps only support agent({...}) or human({...}).",
         range: toRange(element),
       });
       return [];
     }
 
-    const step = readLoopAgentStep(expression, index, state);
+    const step = isCallExpression(expression, "human")
+      ? readLoopHumanStep(expression, index, state)
+      : readLoopAgentStep(expression, index, state);
     if (seenIds.has(step.id)) {
       state.diagnostics.push({
         severity: "error",
@@ -457,6 +507,276 @@ function readLoopSteps(
     seenIds.add(step.id);
     return [step];
   });
+}
+
+function readLoopHumanStep(
+  callExpression: AnyNode,
+  index: number,
+  state: ParserState,
+): WorkflowLoopStep {
+  const options = firstArg(callExpression);
+  const id = readObjectString(options, "id") ?? `step_${index + 1}`;
+  const label = readObjectString(options, "label") ?? humanize(id);
+  const human = readHumanSpec(options, callExpression, state);
+  return {
+    id,
+    kind: "human",
+    label,
+    human,
+    templateRefs: collectHumanTemplateRefs(human),
+    sourceRange: toRange(callExpression),
+    labelRange: readObjectPropertyValueRange(options, "label"),
+  };
+}
+
+function readHumanSpec(
+  options: AnyNode | undefined,
+  callExpression: AnyNode,
+  state: ParserState,
+): WorkflowHumanSpec {
+  const description = readObjectString(options, "description");
+  const context = readHumanContext(options, state);
+  const actions = readHumanActions(options, state);
+  if (actions.length === 0) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "human(...) requires at least one action.",
+      range:
+        readObjectPropertyValueRange(options, "actions") ?? toRange(callExpression),
+    });
+  }
+  return {
+    ...(description !== undefined ? { description } : {}),
+    context,
+    actions,
+  };
+}
+
+function readHumanContext(
+  options: AnyNode | undefined,
+  state: ParserState,
+): WorkflowHumanContextItem[] {
+  const value = readObjectPropertyValue(options, "context");
+  if (value === undefined) {
+    return [];
+  }
+  if (value.type !== "ArrayExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "human context must be an array literal.",
+      range: toRange(value),
+    });
+    return [];
+  }
+  return ((value.elements as AnyNode[] | undefined) ?? []).flatMap(
+    (item, index): WorkflowHumanContextItem[] => {
+      if (!item || item.type !== "ObjectExpression") {
+        state.diagnostics.push({
+          severity: "error",
+          message: "human context entries must be object literals.",
+          range: toRange(item),
+        });
+        return [];
+      }
+      const label = readObjectString(item, "label") ?? `Context ${index + 1}`;
+      const contextValue = readObjectString(item, "value");
+      const display = readObjectString(item, "display") ?? "text";
+      if (contextValue === undefined) {
+        state.diagnostics.push({
+          severity: "error",
+          message: "human context value must be one plain string literal.",
+          range: readObjectPropertyValueRange(item, "value") ?? toRange(item),
+        });
+      }
+      if (display !== "text" && display !== "markdown" && display !== "json") {
+        state.diagnostics.push({
+          severity: "error",
+          message: 'human context display must be "text", "markdown", or "json".',
+          range: readObjectPropertyValueRange(item, "display") ?? toRange(item),
+        });
+      }
+      return [{
+        label,
+        value: contextValue ?? "",
+        display:
+          display === "markdown" || display === "json" ? display : "text",
+      }];
+    },
+  );
+}
+
+function readHumanActions(
+  options: AnyNode | undefined,
+  state: ParserState,
+): WorkflowHumanAction[] {
+  const value = readObjectPropertyValue(options, "actions");
+  if (!value || value.type !== "ArrayExpression") {
+    if (value) {
+      state.diagnostics.push({
+        severity: "error",
+        message: "human actions must be an array literal.",
+        range: toRange(value),
+      });
+    }
+    return [];
+  }
+  const seen = new Set<string>();
+  return ((value.elements as AnyNode[] | undefined) ?? []).flatMap(
+    (item, index): WorkflowHumanAction[] => {
+      if (!item || item.type !== "ObjectExpression") {
+        state.diagnostics.push({
+          severity: "error",
+          message: "human actions must be object literals.",
+          range: toRange(item),
+        });
+        return [];
+      }
+      const id = readObjectString(item, "id")?.trim() ?? "";
+      const label = readObjectString(item, "label") ?? humanize(id || `Action ${index + 1}`);
+      const rawIntent = readObjectString(item, "intent") ?? "default";
+      if (!id) {
+        state.diagnostics.push({
+          severity: "error",
+          message: "human action id is required.",
+          range: readObjectPropertyValueRange(item, "id") ?? toRange(item),
+        });
+      } else if (seen.has(id)) {
+        state.diagnostics.push({
+          severity: "error",
+          message: `Duplicate human action id "${id}".`,
+          range: readObjectPropertyValueRange(item, "id") ?? toRange(item),
+        });
+      }
+      seen.add(id);
+      if (
+        rawIntent !== "primary" &&
+        rawIntent !== "default" &&
+        rawIntent !== "danger"
+      ) {
+        state.diagnostics.push({
+          severity: "error",
+          message: 'human action intent must be "primary", "default", or "danger".',
+          range: readObjectPropertyValueRange(item, "intent") ?? toRange(item),
+        });
+      }
+      return [{
+        id,
+        label,
+        intent:
+          rawIntent === "primary" || rawIntent === "danger"
+            ? rawIntent
+            : "default",
+        fields: readHumanFields(item, state),
+      }];
+    },
+  );
+}
+
+function readHumanFields(
+  action: AnyNode,
+  state: ParserState,
+): WorkflowHumanField[] {
+  const value = readObjectPropertyValue(action, "fields");
+  if (value === undefined) {
+    return [];
+  }
+  if (value.type !== "ArrayExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "human action fields must be an array literal.",
+      range: toRange(value),
+    });
+    return [];
+  }
+  const seen = new Set<string>();
+  return ((value.elements as AnyNode[] | undefined) ?? []).flatMap(
+    (item): WorkflowHumanField[] => {
+      if (!item || item.type !== "ObjectExpression") {
+        state.diagnostics.push({
+          severity: "error",
+          message: "human fields must be object literals.",
+          range: toRange(item),
+        });
+        return [];
+      }
+      const id = readObjectString(item, "id")?.trim() ?? "";
+      const rawType = readObjectString(item, "type") ?? "text";
+      const type =
+        rawType === "textarea" || rawType === "select" ? rawType : "text";
+      if (!id || seen.has(id)) {
+        state.diagnostics.push({
+          severity: "error",
+          message: id
+            ? `Duplicate human field id "${id}".`
+            : "human field id is required.",
+          range: readObjectPropertyValueRange(item, "id") ?? toRange(item),
+        });
+      }
+      seen.add(id);
+      if (rawType !== "text" && rawType !== "textarea" && rawType !== "select") {
+        state.diagnostics.push({
+          severity: "error",
+          message: 'human field type must be "text", "textarea", or "select".',
+          range: readObjectPropertyValueRange(item, "type") ?? toRange(item),
+        });
+      }
+      const options = readHumanFieldOptions(item, state);
+      if (type === "select" && options.length === 0) {
+        state.diagnostics.push({
+          severity: "error",
+          message: "human select fields require at least one option.",
+          range: readObjectPropertyValueRange(item, "options") ?? toRange(item),
+        });
+      }
+      return [{
+        id,
+        type,
+        label: readObjectString(item, "label") ?? humanize(id),
+        required: readObjectBoolean(item, "required"),
+        ...(readObjectString(item, "placeholder") !== undefined
+          ? { placeholder: readObjectString(item, "placeholder") }
+          : {}),
+        ...(readObjectString(item, "defaultValue") !== undefined
+          ? { defaultValue: readObjectString(item, "defaultValue") }
+          : {}),
+        ...(type === "select" ? { options } : {}),
+      }];
+    },
+  );
+}
+
+function readHumanFieldOptions(
+  field: AnyNode,
+  state: ParserState,
+): Array<{ label: string; value: string }> {
+  const value = readObjectPropertyValue(field, "options");
+  if (!value || value.type !== "ArrayExpression") {
+    return [];
+  }
+  return ((value.elements as AnyNode[] | undefined) ?? []).flatMap((item) => {
+    if (!item || item.type !== "ObjectExpression") {
+      state.diagnostics.push({
+        severity: "error",
+        message: "human select options must be object literals.",
+        range: toRange(item),
+      });
+      return [];
+    }
+    const optionValue = readObjectString(item, "value") ?? "";
+    return [{
+      value: optionValue,
+      label: readObjectString(item, "label") ?? optionValue,
+    }];
+  });
+}
+
+function collectHumanTemplateRefs(human: WorkflowHumanSpec): string[] {
+  return [...new Set([
+    ...human.context.flatMap((item) => extractTemplateRefs(item.value)),
+    ...human.actions.flatMap((action) =>
+      action.fields.flatMap((field) => extractTemplateRefs(field.defaultValue)),
+    ),
+  ])];
 }
 
 function readLoopAgentStep(
@@ -510,6 +830,8 @@ function readLoopUntil(
   const untilObject = readObjectPropertyValue(options, "until");
   const source = readObjectString(untilObject, "source") ?? "";
   const finalStatus = readObjectString(untilObject, "finalStatus");
+  const equalsNode = readObjectPropertyValue(untilObject, "equals");
+  const equals = readScalarLike(equalsNode);
 
   if (!untilObject || untilObject.type !== "ObjectExpression") {
     state.diagnostics.push({
@@ -519,7 +841,7 @@ function readLoopUntil(
       range: readObjectPropertyValueRange(options, "until"),
     });
   }
-  if (!source || !stepIds.has(source)) {
+  if (!source || !stepIds.has(templateRefRoot(source))) {
     state.diagnostics.push({
       severity: "error",
       message: source
@@ -528,13 +850,13 @@ function readLoopUntil(
       range: readObjectPropertyValueRange(untilObject, "source"),
     });
   }
-  if (finalStatus === undefined) {
+  if (finalStatus === undefined && equalsNode === undefined) {
     state.diagnostics.push({
       severity: "error",
       message: "loop until.finalStatus is required.",
       range: readObjectPropertyValueRange(options, "until") ?? toRange(options),
     });
-  } else if (!finalStatus.trim()) {
+  } else if (finalStatus !== undefined && !finalStatus.trim()) {
     state.diagnostics.push({
       severity: "error",
       message: "loop until.finalStatus must be non-empty.",
@@ -542,7 +864,24 @@ function readLoopUntil(
     });
   }
 
-  return { source, finalStatus: finalStatus ?? "" };
+  if (finalStatus !== undefined && equalsNode !== undefined) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop until must use either finalStatus or equals, not both.",
+      range: toRange(untilObject),
+    });
+  }
+  if (equalsNode !== undefined && equals === undefined) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop until.equals must be a string, number, boolean, or null literal.",
+      range: toRange(equalsNode),
+    });
+  }
+
+  return finalStatus !== undefined
+    ? { source, finalStatus }
+    : { source, equals: equals ?? null };
 }
 
 function readLoopOnMaxIterations(
@@ -599,13 +938,13 @@ function connectTemplateRefs(state: ParserState): void {
       if (node.inputs.some((input) => input.name === ref)) {
         continue;
       }
-      const sourceNodeId = state.variableToNodeId[ref];
+      const sourceNodeId = state.variableToNodeId[templateRefRoot(ref)];
       if (!sourceNodeId || sourceNodeId === node.id) {
         continue;
       }
       node.inputs.push({
         name: ref,
-        sourceVariable: ref,
+        sourceVariable: templateRefRoot(ref),
         sourceNodeId,
       });
       addEdge(sourceNodeId, node.id, ref, state);
@@ -1750,6 +2089,31 @@ function readNumberLike(node: AnyNode | undefined): number | undefined {
     }
   }
   return undefined;
+}
+
+function readScalarLike(node: AnyNode | undefined): WorkflowScalarValue | undefined {
+  if (!node) {
+    return undefined;
+  }
+  const stringValue = readStringLike(node);
+  if (stringValue !== undefined) {
+    return stringValue;
+  }
+  const numberValue = readNumberLike(node);
+  if (numberValue !== undefined) {
+    return numberValue;
+  }
+  if (node.type === "BooleanLiteral") {
+    return Boolean(node.value);
+  }
+  if (node.type === "NullLiteral") {
+    return null;
+  }
+  return undefined;
+}
+
+function templateRefRoot(ref: string): string {
+  return ref.split(".", 1)[0];
 }
 
 function readIdentifierName(node: AnyNode | undefined): string | undefined {

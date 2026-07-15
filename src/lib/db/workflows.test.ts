@@ -597,3 +597,158 @@ const first = await agent({ id: "first", prompt: "first" })
     ).toEqual({ count: 0 });
   });
 });
+
+describe("workflow human tasks", () => {
+  it("persists multiple tasks, resolves atomically, and cancels remaining tasks", async () => {
+    initTestDataDir();
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
+    const { createWorkflowRun, getWorkflowRun } = await import("./workflows/runs");
+    const {
+      HumanTaskConflictError,
+      cancelPendingWorkflowHumanTasks,
+      countPendingWorkflowHumanTasks,
+      createOrGetWorkflowHumanTask,
+      listWorkflowHumanTasks,
+      resolveWorkflowHumanTask,
+    } = await import("./workflows/human-tasks");
+    const created = createWorkflowFromScript(INITIAL_SCRIPT);
+    const version = created.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = createWorkflowRun({
+      workflowId: created.workflow.id,
+      workflowVersionId: version.id,
+      executorKind: "mock",
+      request: { inputs: {} },
+    });
+    const request = (nodeId: string) => ({
+      runId: run.id,
+      nodeId,
+      executionKey: `human:${nodeId}`,
+      spec: {
+        context: [{ label: "Draft", value: "text", display: "text" as const }],
+        actions: [
+          { id: "pass", label: "Pass", intent: "primary" as const, fields: [] },
+          {
+            id: "revise",
+            label: "Revise",
+            intent: "default" as const,
+            fields: [{
+              id: "comment",
+              type: "textarea" as const,
+              label: "Comment",
+              required: true,
+            }],
+          },
+        ],
+      },
+    });
+
+    const first = createOrGetWorkflowHumanTask(request("first"));
+    expect(createOrGetWorkflowHumanTask(request("first")).id).toBe(first.id);
+    const second = createOrGetWorkflowHumanTask(request("second"));
+    expect(countPendingWorkflowHumanTasks(run.id)).toBe(2);
+    expect(getWorkflowRun(run.id)?.pendingHumanTaskCount).toBe(2);
+
+    const resolved = resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: first.id,
+      action: "revise",
+      values: { comment: "fix it" },
+      revision: first.revision,
+    });
+    expect(resolved).toEqual(expect.objectContaining({
+      status: "resolved",
+      response: { action: "revise", values: { comment: "fix it" } },
+      revision: 2,
+    }));
+    expect(() => resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: first.id,
+      action: "pass",
+      values: {},
+      revision: first.revision,
+    })).toThrow(HumanTaskConflictError);
+    expect(cancelPendingWorkflowHumanTasks(run.id)).toBe(1);
+    expect(listWorkflowHumanTasks(run.id).map((task) => [task.id, task.status])).toEqual([
+      [first.id, "resolved"],
+      [second.id, "canceled"],
+    ]);
+  });
+
+  it("does not commit waiting over a resolved task and rejects responses after cancel", async () => {
+    initTestDataDir();
+    const { createWorkflowFromScript } = await import(
+      "./workflows/workflow-repository"
+    );
+    const {
+      cancelWorkflowRunAndHumanTasks,
+      createWorkflowRun,
+      getWorkflowRun,
+      markWorkflowRunWaitingOwned,
+    } = await import("./workflows/runs");
+    const {
+      HumanTaskConflictError,
+      createOrGetWorkflowHumanTask,
+      getWorkflowHumanTask,
+      resolveWorkflowHumanTask,
+    } = await import("./workflows/human-tasks");
+    const created = createWorkflowFromScript(INITIAL_SCRIPT);
+    const version = created.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = createWorkflowRun({
+      workflowId: created.workflow.id,
+      workflowVersionId: version.id,
+      executorKind: "mock",
+      request: { inputs: {} },
+      executionToken: "owner-token",
+    });
+    const createTask = (nodeId: string) => createOrGetWorkflowHumanTask({
+      runId: run.id,
+      nodeId,
+      executionKey: `human:${nodeId}`,
+      spec: {
+        context: [],
+        actions: [{ id: "pass", label: "Pass", intent: "primary", fields: [] }],
+      },
+    });
+    const first = createTask("first");
+    const second = createTask("second");
+    resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: first.id,
+      action: "pass",
+      values: {},
+      revision: first.revision,
+    });
+
+    const waiting = markWorkflowRunWaitingOwned({
+      runId: run.id,
+      executionToken: "owner-token",
+      result: { outputs: {}, nodeStatuses: {}, nodeSessions: {} },
+      pendingTaskIds: [first.id, second.id],
+    });
+    expect(waiting.transitioned).toBe(false);
+    expect(getWorkflowRun(run.id)?.status).toBe("running");
+
+    const canceled = cancelWorkflowRunAndHumanTasks({
+      runId: run.id,
+      result: { outputs: {}, nodeStatuses: {}, nodeSessions: {} },
+    });
+    expect(canceled.transitioned).toBe(true);
+    expect(canceled.run?.status).toBe("canceled");
+    expect(getWorkflowHumanTask(second.id)?.status).toBe("canceled");
+    expect(() => resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: second.id,
+      action: "pass",
+      values: {},
+      revision: second.revision,
+    })).toThrow(HumanTaskConflictError);
+  });
+});

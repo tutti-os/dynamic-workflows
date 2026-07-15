@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 9;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -48,6 +48,10 @@ export function migrateDb(database: Database.Database): void {
       if (currentVersion < 8) {
         applySchemaV8(database);
         recordSchemaMigration(database, 8);
+      }
+      if (currentVersion < 9) {
+        applySchemaV9(database);
+        recordSchemaMigration(database, 9);
       }
     })();
 }
@@ -234,5 +238,31 @@ function applySchemaV7(database: Database.Database): void {
 function applySchemaV8(database: Database.Database): void {
   database.exec(`
     ALTER TABLE workflow_generations ADD COLUMN agent_session_id TEXT;
+  `);
+}
+
+function applySchemaV9(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS workflow_run_human_tasks (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      parent_node_id TEXT,
+      iteration INTEGER,
+      execution_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      spec_json TEXT NOT NULL,
+      context_json TEXT NOT NULL,
+      response_json TEXT,
+      revision INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      resolved_by TEXT,
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      UNIQUE (run_id, execution_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_human_tasks_run_status
+      ON workflow_run_human_tasks(run_id, status, created_at);
   `);
 }

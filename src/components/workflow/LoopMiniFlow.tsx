@@ -25,6 +25,41 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
     <div className="loop-mini-flow">
       <div aria-label="Loop step flow" className="loop-mini-flow-steps">
         {props.loop.steps.map((step, index) => {
+          if (step.kind === "human") {
+            return (
+              <div className="loop-mini-flow-step-group" key={step.id}>
+                <button
+                  type="button"
+                  className={
+                    step.id === props.selectedStepId
+                      ? "loop-mini-flow-step selected"
+                      : "loop-mini-flow-step"
+                  }
+                  aria-label={`${index + 1} ${step.label} ${step.id} human task`}
+                  title={`Inspect ${step.label}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onStepSelect?.(props.loopNodeId, step.id);
+                  }}
+                >
+                  <div className="loop-mini-flow-step-title">
+                    <span className="loop-mini-flow-step-index">{index + 1}</span>
+                    <span className="loop-mini-flow-step-label" title={step.label}>
+                      {step.label}
+                    </span>
+                  </div>
+                  <div className="loop-mini-flow-step-session">{step.id} · waits for input</div>
+                  <div className="loop-mini-flow-badges">
+                    <span className="loop-step-badge">human</span>
+                    <span className="loop-step-badge">{step.human.actions.length} actions</span>
+                  </div>
+                </button>
+                {index < props.loop.steps.length - 1 ? (
+                  <ArrowRight aria-hidden className="loop-mini-flow-arrow" size={16} strokeWidth={2.1} />
+                ) : null}
+              </div>
+            );
+          }
           const sessionView = describeLoopStepSession(props.loop, step);
           const promptModeView = describeLoopStepPromptMode(step, sessionView);
           const targetView = describeLoopStepTarget(step);
