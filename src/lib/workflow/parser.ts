@@ -34,6 +34,7 @@ import {
   workflowDiagnostic,
   workflowInputPath,
 } from "./validation";
+import { validateWorkflowExecutionGraph } from "./execution-plan";
 
 type AnyNode = {
   type: string;
@@ -141,6 +142,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   addRuntimeOptionDiagnostics(state);
   connectTemplateRefs(state);
   addInputSchemaReferenceDiagnostics(state, inputSchema);
+  state.diagnostics.push(...validateWorkflowExecutionGraph(state));
 
   return {
     meta,

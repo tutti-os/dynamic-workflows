@@ -7,13 +7,16 @@ import {
   getWorkflowRun,
   isWorkflowRunExecutionClaimed,
 } from "@/lib/db/workflows/runs";
-import { readRunLog } from "@/lib/workflow/run-log";
+import {
+  readRunLogChunk,
+  type RunLogEntry,
+} from "@/lib/workflow/run-log";
 import {
   isWorkflowRunJobActive,
   markWorkflowRunInterruptedIfStale,
   subscribeWorkflowRunJob,
 } from "@/lib/workflow/run-jobs";
-import { parseRunLogEvents } from "@/lib/workflow/run-state";
+import { parseRunLogEntries } from "@/lib/workflow/run-state";
 import type { WorkflowRunEvent } from "@/lib/workflow/types";
 
 export async function GET(
@@ -37,9 +40,12 @@ export async function GET(
 
   const stream = new ReadableStream({
     async start(controller) {
-      const seenEvents = new Set<string>();
       let closed = false;
       let replaying = true;
+      let logOffset = 0;
+      let lastReplayedEvent: WorkflowRunEvent | undefined;
+      const replayedEntryIds = new Set<string>();
+      const bufferedLiveEntries: Array<RunLogEntry<WorkflowRunEvent>> = [];
 
       const close = () => {
         if (closed) {
@@ -62,10 +68,6 @@ export async function GET(
           return;
         }
         const payload = JSON.stringify(event);
-        if (seenEvents.has(payload)) {
-          return;
-        }
-        seenEvents.add(payload);
         controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
         if (
           !replaying &&
@@ -75,13 +77,36 @@ export async function GET(
         }
       };
 
-      unsubscribe = subscribeWorkflowRunJob(runId, enqueue);
-
-      const log = await readRunLog(run.logPath);
-      for (const event of parseRunLogEvents(log)) {
+      unsubscribe = subscribeWorkflowRunJob(runId, (event, entryId) => {
+        if (replaying) {
+          bufferedLiveEntries.push({ id: entryId, event });
+          return;
+        }
         enqueue(event);
+      });
+
+      const initialChunk = await readRunLogChunk(run.logPath, logOffset);
+      logOffset = initialChunk.nextOffset;
+      for (const entry of parseRunLogEntries(initialChunk.text)) {
+        replayedEntryIds.add(entry.id);
+        lastReplayedEvent = entry.event;
+        enqueue(entry.event);
       }
       replaying = false;
+      for (const entry of bufferedLiveEntries) {
+        if (!replayedEntryIds.has(entry.id)) {
+          enqueue(entry.event);
+        }
+      }
+      bufferedLiveEntries.length = 0;
+      replayedEntryIds.clear();
+      if (
+        !closed &&
+        (lastReplayedEvent?.type === "run_completed" ||
+          lastReplayedEvent?.type === "run_waiting")
+      ) {
+        close();
+      }
 
       const currentRun = getWorkflowRun(runId);
       if (currentRun?.status !== "running") {
@@ -98,9 +123,10 @@ export async function GET(
           polling = true;
           void (async () => {
             try {
-              const nextLog = await readRunLog(run.logPath);
-              for (const event of parseRunLogEvents(nextLog)) {
-                enqueue(event);
+              const nextChunk = await readRunLogChunk(run.logPath, logOffset);
+              logOffset = nextChunk.nextOffset;
+              for (const entry of parseRunLogEntries(nextChunk.text)) {
+                enqueue(entry.event);
               }
               if (getWorkflowRun(runId)?.status !== "running") {
                 close();

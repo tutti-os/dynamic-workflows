@@ -176,7 +176,7 @@
         "run"
       ],
       "summary": "Start a workflow run",
-      "description": "Start the current version of a saved workflow in the background and return the persisted run record used by the UI.",
+      "description": "Start the official or selected version of a saved workflow in the background and return the persisted run record used by the UI.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -184,9 +184,13 @@
             "type": "string",
             "description": "Workflow id to run."
           },
+          "version-id": {
+            "type": "string",
+            "description": "Optional workflow version id. Omit to run the official version."
+          },
           "inputs": {
             "type": "string",
-            "description": "JSON object string containing external workflow inputs."
+            "description": "JSON object string containing external workflow inputs, including runtime option inputs used by agent/model templates."
           },
           "agent": {
             "type": "string",

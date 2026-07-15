@@ -98,6 +98,18 @@ export function touchWorkflowRunExecutionClaim(input: {
   return result.changes === 1;
 }
 
+export function isWorkflowRunExecutionOwned(input: {
+  runId: string;
+  executionToken: string;
+}): boolean {
+  const row = getDb().prepare(`
+    SELECT 1 AS owned
+    FROM workflow_runs
+    WHERE id = ? AND resume_token = ? AND status = 'running'
+  `).get(input.runId, input.executionToken) as { owned: number } | undefined;
+  return Boolean(row?.owned);
+}
+
 export function markWorkflowRunWaitingOwned(input: {
   runId: string;
   executionToken: string;

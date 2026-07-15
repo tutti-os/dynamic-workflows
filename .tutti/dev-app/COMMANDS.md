@@ -31,7 +31,7 @@ Commands:
 - `show`: one workflow, parsed node summary, versions, and recent runs.
 - `validate`: parser diagnostics for a workflow script without saving it.
 - `create`: launch a workflow authoring agent session from a natural-language prompt and return immediately (workflow id + session). Versions land whenever the session submits; poll `show` to observe them.
-- `run`: start the current saved workflow version in the background and persist a run record.
+- `run`: start the official or a selected saved workflow version in the background and persist a run record.
 - `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.
 - `blueprints list|search|get`: browse the built-in blueprint library used as authoring references.
 - `authoring submit`: save a script version for an authoring job (used by the authoring agent itself; validates and saves, or returns diagnostics with `accepted: false`). A session may submit multiple times; each accepted submit saves a new version.

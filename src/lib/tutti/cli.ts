@@ -90,6 +90,22 @@ type CliContext = {
 
 type CliInput = Record<string, unknown>;
 
+export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
+  "status",
+  "agents",
+  "list",
+  "show",
+  "validate",
+  "create",
+  "run",
+  "blueprints/list",
+  "blueprints/search",
+  "blueprints/get",
+  "authoring/validate",
+  "authoring/submit",
+  "resume",
+] as const;
+
 export async function handleDynamicWorkflowsCliRequest(
   path: string[],
   body: unknown,

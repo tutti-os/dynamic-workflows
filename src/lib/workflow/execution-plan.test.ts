@@ -39,4 +39,32 @@ const dynamic = pipeline([])
       false,
     ]);
   });
+
+  it("rejects dependency cycles before execution", () => {
+    const parsed = parseWorkflowScript(`
+const first = agent({ id: "first", prompt: "Use {{second}}" })
+const second = agent({ id: "second", inputs: { first }, prompt: "Use {{first}}" })
+`);
+
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "workflow.graph.cycle",
+        severity: "error",
+      }),
+    ]));
+  });
+
+  it("rejects dependencies on preview-only nodes", () => {
+    const parsed = parseWorkflowScript(`
+const group = pipeline([])
+agent({ id: "worker", prompt: "Use {{group}}" })
+`);
+
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "workflow.graph.nonExecutableDependency",
+        severity: "error",
+      }),
+    ]));
+  });
 });

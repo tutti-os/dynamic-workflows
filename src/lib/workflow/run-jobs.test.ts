@@ -34,6 +34,99 @@ afterEach(() => {
 });
 
 describe("workflow run jobs recovery", () => {
+  it("stops publishing as soon as another runner owns the execution token", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(SCRIPT);
+    const node = parsed.nodes.find((item) => item.id === "first");
+    if (!node) {
+      throw new Error("node missing");
+    }
+    let releaseStart: (() => void) | undefined;
+    const allowStart = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let release: (() => void) | undefined;
+    const continueRun = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let markPublished: (() => void) | undefined;
+    const published = new Promise<void>((resolve) => {
+      markPublished = resolve;
+    });
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      const runId = request.runId ?? "run";
+      await allowStart;
+      yield { type: "run_started", runId, parsed };
+      await continueRun;
+      yield {
+        type: "node_started",
+        runId,
+        nodeId: node.id,
+        node,
+        agent: "mock",
+      };
+      yield {
+        type: "run_completed",
+        runId,
+        status: "completed",
+        outputs: {},
+      };
+    });
+
+    const { getDb } = await import("@/lib/db/client");
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { readRunLog } = await import("@/lib/workflow/run-log");
+    const { parseRunLogEvents } = await import("@/lib/workflow/run-state");
+    const {
+      isWorkflowRunJobActive,
+      startWorkflowRunJob,
+      subscribeWorkflowRunJob,
+    } = await import(
+      "@/lib/workflow/run-jobs"
+    );
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: process.cwd(),
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+
+    subscribeWorkflowRunJob(run.id, (event) => {
+      if (event.type === "run_started") {
+        markPublished?.();
+      }
+    });
+    releaseStart?.();
+    await published;
+    getDb().prepare(`
+      UPDATE workflow_runs
+      SET resume_token = 'replacement-owner'
+      WHERE id = ?
+    `).run(run.id);
+    release?.();
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    const eventTypes = parseRunLogEvents(await readRunLog(run.logPath)).map(
+      (event) => event.type,
+    );
+    expect(eventTypes).toEqual(["run_started"]);
+  });
+
   it("persists a waiting run and resumes after a human response", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;

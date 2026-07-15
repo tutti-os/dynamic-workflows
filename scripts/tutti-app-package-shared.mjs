@@ -81,9 +81,9 @@ export function cliManifest(options = {}) {
       },
       {
         path: ["create"],
-        summary: "Generate and save a workflow",
+        summary: "Launch a workflow authoring session",
         description:
-          "Generate a workflow from a prompt, save it, and return the created workflow and script.",
+          "Create a workflow and launch an authoring agent session from a prompt, returning immediately with the workflow id and session. Versions land whenever the authoring agent submits.",
         inputSchema: objectSchema(
           {
             prompt: {
@@ -152,6 +152,123 @@ export function cliManifest(options = {}) {
         handler: httpHandler("/tutti/cli/run"),
       },
       {
+        path: ["blueprints", "list"],
+        summary: "List workflow blueprints",
+        description:
+          "List built-in workflow blueprint summaries (patterns, tags, use cases).",
+        inputSchema: objectSchema({}),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/blueprints/list"),
+      },
+      {
+        path: ["blueprints", "search"],
+        summary: "Search workflow blueprints",
+        description:
+          "Search built-in workflow blueprints by keywords, category, tags, or cwd requirement.",
+        inputSchema: objectSchema({
+          query: {
+            type: "string",
+            description:
+              "Keywords matched against title, description, tags, and pattern summary.",
+          },
+          category: {
+            type: "string",
+            description:
+              "Filter by category: coding, review, planning, research, or ops.",
+          },
+          tags: {
+            type: "string",
+            description: "Comma-separated tag filter.",
+          },
+          "requires-cwd": {
+            type: "boolean",
+            description:
+              "Filter by whether the blueprint requires an explicit cwd.",
+          },
+          "include-script": {
+            type: "boolean",
+            description: "Include full workflow scripts in the results.",
+          },
+          limit: {
+            type: "integer",
+            description: "Maximum number of results. Defaults to 20.",
+          },
+        }),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/blueprints/search"),
+      },
+      {
+        path: ["blueprints", "get"],
+        summary: "Show one workflow blueprint",
+        description:
+          "Return one blueprint's metadata and optionally its full workflow script.",
+        inputSchema: objectSchema(
+          {
+            "blueprint-id": {
+              type: "string",
+              description: "Blueprint id to fetch.",
+            },
+            "include-script": {
+              type: "boolean",
+              description: "Include the full workflow script.",
+            },
+          },
+          ["blueprint-id"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/blueprints/get"),
+      },
+      {
+        path: ["authoring", "validate"],
+        summary: "Validate an authored workflow script",
+        description:
+          "Validate a script file inside an authoring job workspace without saving a workflow version.",
+        inputSchema: objectSchema(
+          {
+            "job-id": {
+              type: "string",
+              description:
+                "Authoring job id from the task prompt (generation or edit job).",
+            },
+            file: {
+              type: "string",
+              description:
+                "Script file path inside the authoring workspace.",
+            },
+          },
+          ["job-id", "file"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/authoring/validate"),
+      },
+      {
+        path: ["authoring", "submit"],
+        summary: "Submit an authored workflow script",
+        description:
+          "Validate and save a script version for a workflow authoring job.",
+        inputSchema: objectSchema(
+          {
+            "job-id": {
+              type: "string",
+              description:
+                "Authoring job id from the task prompt (generation or edit job).",
+            },
+            file: {
+              type: "string",
+              description:
+                "Script file path inside the authoring workspace.",
+            },
+            script: {
+              type: "string",
+              description: "Inline workflow script; alternative to file.",
+            },
+          },
+          ["job-id"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/authoring/submit"),
+      },
+      {
         path: ["resume"],
         summary: "Resume an interrupted workflow run",
         description:
@@ -198,6 +315,11 @@ export function commandsMarkdown(options = {}) {
     `tutti --json ${scope} create --prompt 'Summarize this repo and propose next steps' --agent local:codex`,
     `tutti --json ${scope} run --workflow-id <id> --agent local:codex --inputs '{"topic":"release"}'`,
     `tutti --json ${scope} resume --workflow-id <id> --run-id <run-id>`,
+    `tutti --json ${scope} blueprints list`,
+    `tutti --json ${scope} blueprints search --query 'acceptance loop' --category coding`,
+    `tutti --json ${scope} blueprints get --blueprint-id <id> --include-script`,
+    `tutti --json ${scope} authoring validate --job-id <job-id> --file draft.workflow.js`,
+    `tutti --json ${scope} authoring submit --job-id <job-id> --file draft.workflow.js`,
     "```",
     "",
     "Commands:",
@@ -207,9 +329,11 @@ export function commandsMarkdown(options = {}) {
     "- `list`: saved workflow summaries with version and latest run status.",
     "- `show`: one workflow, parsed node summary, versions, and recent runs.",
     "- `validate`: parser diagnostics for a workflow script without saving it.",
-    "- `create`: generate and save a workflow from a natural-language prompt.",
+    "- `create`: launch an authoring agent session and return immediately; versions land whenever the agent submits.",
     "- `run`: start the current saved workflow version in the background and persist a run record.",
     "- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.",
+    "- `blueprints list|search|get`: browse the built-in workflow blueprint library.",
+    "- `authoring validate|submit`: validate and save scripts produced by authoring sessions.",
     "",
     "`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe.",
     "",

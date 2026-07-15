@@ -5,6 +5,7 @@ import type {
 } from "@/lib/db/workflows/types";
 import { createWorkflowExecutionPlan } from "./execution-plan";
 import { RUN_TEXT_PREVIEW_CHARS } from "./run-constants";
+import type { RunLogEntry } from "./run-log";
 import type {
   ParsedWorkflow,
   WorkflowNodeSessionRef,
@@ -465,18 +466,41 @@ export function limitRunText(text: string): string {
 }
 
 export function parseRunLogEvents(log: string): WorkflowRunEvent[] {
+  return parseRunLogEntries(log).map((entry) => entry.event);
+}
+
+export function parseRunLogEntries(
+  log: string,
+): Array<RunLogEntry<WorkflowRunEvent>> {
   return log
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .flatMap((line) => {
+    .flatMap((rawLine, index) => {
+      const line = rawLine.trim();
+      if (!line) {
+        return [];
+      }
       try {
-        const event = JSON.parse(line) as unknown;
-        return isWorkflowRunEvent(event) ? [event] : [];
+        const value = JSON.parse(line) as unknown;
+        if (isRunLogEntry(value) && isWorkflowRunEvent(value.event)) {
+          return [{ id: value.id, event: value.event }];
+        }
+        return isWorkflowRunEvent(value)
+          ? [{ id: `legacy:${index}`, event: value }]
+          : [];
       } catch {
         return [];
       }
     });
+}
+
+function isRunLogEntry(value: unknown): value is RunLogEntry {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      typeof (value as { id?: unknown }).id === "string" &&
+      "event" in value,
+  );
 }
 
 function appendRunLog(

@@ -6,6 +6,7 @@ import {
   finalizeWorkflowRunExecution,
   getWorkflowRun,
   isWorkflowRunExecutionClaimed,
+  isWorkflowRunExecutionOwned,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
   markWorkflowRunWaitingOwned,
@@ -73,13 +74,14 @@ export type WorkflowRunJobOptions = {
   initialSummary?: WorkflowRunSummary;
 };
 
-type RunSubscriber = (event: WorkflowRunEvent) => void;
+type RunSubscriber = (event: WorkflowRunEvent, entryId: string) => void;
 
 type ActiveRunJob = {
   abortController: AbortController;
   executionToken: string;
   subscribers: Set<RunSubscriber>;
   wakeRequested: boolean;
+  ownershipLost: boolean;
 };
 
 const globalForRunJobs = globalThis as typeof globalThis & {
@@ -112,6 +114,7 @@ export function startWorkflowRunJob(
     executionToken,
     subscribers: new Set(),
     wakeRequested: false,
+    ownershipLost: false,
   };
   jobs.set(run.id, job);
 
@@ -171,6 +174,7 @@ async function resumeWorkflowRunJobInternal(input: {
     executionToken: "",
     subscribers: new Set(),
     wakeRequested: false,
+    ownershipLost: false,
   };
   const claim = claimWorkflowRunForResume({
     workflowId: input.workflowId,
@@ -343,12 +347,20 @@ async function executeWorkflowRunJob(
   job: ActiveRunJob,
 ) {
   const heartbeat = setInterval(() => {
-    const owned = touchWorkflowRunExecutionClaim({
-      runId: run.id,
-      executionToken: job.executionToken,
-    });
-    if (!owned && getWorkflowRun(run.id)?.status === "canceled") {
-      job.abortController.abort();
+    try {
+      const owned = touchWorkflowRunExecutionClaim({
+        runId: run.id,
+        executionToken: job.executionToken,
+      });
+      if (!owned) {
+        if (getWorkflowRun(run.id)?.status === "canceled") {
+          job.abortController.abort();
+        } else {
+          loseWorkflowRunOwnership(job);
+        }
+      }
+    } catch {
+      loseWorkflowRunOwnership(job);
     }
   }, 15_000);
   heartbeat.unref();
@@ -384,6 +396,7 @@ async function executeWorkflowRunJob(
             if (checkpoint.kind !== "loop") {
               return;
             }
+            ensureWorkflowRunJobOwned(run.id, job);
             try {
               upsertWorkflowRunCheckpoint({
                 runId: run.id,
@@ -399,6 +412,12 @@ async function executeWorkflowRunJob(
           },
           signal: job.abortController.signal,
         })) {
+          if (isExecutionBoundaryEvent(emittedEvent)) {
+            ensureWorkflowRunJobOwned(run.id, job);
+          }
+          if (job.ownershipLost) {
+            return;
+          }
           const event =
             emittedEvent.type === "run_completed" &&
             emittedEvent.status !== "canceled" &&
@@ -417,6 +436,9 @@ async function executeWorkflowRunJob(
           }
         }
       } catch (error) {
+        if (job.ownershipLost || error instanceof WorkflowRunOwnershipLostError) {
+          return;
+        }
         const finalEvent = createTerminalRunEvent({
           runId: run.id,
           summary,
@@ -428,6 +450,7 @@ async function executeWorkflowRunJob(
       }
 
       if (
+        !job.ownershipLost &&
         job.abortController.signal.aborted &&
         summary.status !== "canceled"
       ) {
@@ -492,8 +515,46 @@ async function executeWorkflowRunJob(
     }
   } finally {
     clearInterval(heartbeat);
-    jobs.delete(run.id);
+    if (jobs.get(run.id) === job) {
+      jobs.delete(run.id);
+    }
   }
+}
+
+class WorkflowRunOwnershipLostError extends Error {
+  constructor() {
+    super("Workflow run execution ownership was lost.");
+    this.name = "WorkflowRunOwnershipLostError";
+  }
+}
+
+function loseWorkflowRunOwnership(job: ActiveRunJob): void {
+  job.ownershipLost = true;
+  job.abortController.abort();
+}
+
+function ensureWorkflowRunJobOwned(runId: string, job: ActiveRunJob): void {
+  if (
+    !job.ownershipLost &&
+    isWorkflowRunExecutionOwned({
+      runId,
+      executionToken: job.executionToken,
+    })
+  ) {
+    return;
+  }
+  if (getWorkflowRun(runId)?.status === "canceled") {
+    job.abortController.abort();
+    return;
+  }
+  loseWorkflowRunOwnership(job);
+  throw new WorkflowRunOwnershipLostError();
+}
+
+function isExecutionBoundaryEvent(event: WorkflowRunEvent): boolean {
+  return event.type === "run_started" ||
+    event.type === "node_started" ||
+    (event.type === "loop_step_state" && event.status === "running");
 }
 
 function createTerminalRunEvent(input: {
@@ -743,10 +804,10 @@ function appendAndPublish(
   job: ActiveRunJob,
   event: WorkflowRunEvent,
 ) {
-  appendRunLogEvent(run.logPath, event);
+  const entry = appendRunLogEvent(run.logPath, event);
   for (const subscriber of job.subscribers) {
     try {
-      subscriber(event);
+      subscriber(event, entry.id);
     } catch {
       // UI subscribers are observational; a broken stream must not fail the run.
     }
