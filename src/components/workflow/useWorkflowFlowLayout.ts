@@ -19,8 +19,9 @@ const FLOW_NODE_WIDTH = 230;
 const FLOW_NODE_HEIGHT = 132;
 const FLOW_LOOP_LANE_WIDTH = 560;
 const FLOW_LOOP_NODE_WIDTH = 430;
-const FLOW_LOOP_NODE_MIN_HEIGHT = 210;
-const FLOW_LOOP_STEP_HEIGHT = 32;
+const FLOW_LOOP_NODE_BASE_HEIGHT = 280;
+const FLOW_LOOP_FIRST_ENTRY_HEIGHT = 42;
+const FLOW_LOOP_INPUTS_HEIGHT = 36;
 const FLOW_ORIGIN_X = 80;
 const FLOW_ORIGIN_Y = 56;
 const FLOW_PHASE_GAP = 112;
@@ -168,7 +169,7 @@ function createPhaseYPositions(parsed: ParsedWorkflow): Map<string, number> {
   return phaseYByTitle;
 }
 
-function getFlowNodeDimensions(
+export function getFlowNodeDimensions(
   workflowNode: ParsedWorkflow["nodes"][number],
 ): { width: number; height: number } {
   if (workflowNode.kind !== "loop") {
@@ -177,10 +178,10 @@ function getFlowNodeDimensions(
 
   return {
     width: FLOW_LOOP_NODE_WIDTH,
-    height: Math.max(
-      FLOW_LOOP_NODE_MIN_HEIGHT,
-      154 + (workflowNode.loop?.steps.length ?? 0) * FLOW_LOOP_STEP_HEIGHT,
-    ),
+    height:
+      FLOW_LOOP_NODE_BASE_HEIGHT +
+      (workflowNode.loop?.firstIteration ? FLOW_LOOP_FIRST_ENTRY_HEIGHT : 0) +
+      (workflowNode.inputs.length > 0 ? FLOW_LOOP_INPUTS_HEIGHT : 0),
   };
 }
 
