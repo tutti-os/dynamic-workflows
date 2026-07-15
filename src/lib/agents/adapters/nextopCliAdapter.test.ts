@@ -669,6 +669,7 @@ describe("nextop cli adapter", () => {
       agent: "local:codex",
       cwd: "/tmp/project",
       prompt: "scan",
+      title: "Scan repository",
       model: "gpt-5",
     })) {
       events.push(event);
@@ -684,6 +685,8 @@ describe("nextop cli adapter", () => {
       "gpt-5",
       "--prompt",
       "scan",
+      "--title",
+      "Scan repository",
       "--cwd",
       "/tmp/project",
     ]);

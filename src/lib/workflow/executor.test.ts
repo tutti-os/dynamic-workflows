@@ -40,7 +40,7 @@ export const inputs = {
   dryRun: { type: "boolean", default: false },
 }
 
-const first = await agent({ id: "first", prompt: "rounds={{maxRounds}} dryRun={{dryRun}}" })
+const first = await agent({ id: "first", label: "Run rounds", prompt: "rounds={{maxRounds}} dryRun={{dryRun}}" })
 `,
       agent: "local:codex",
       cwd: process.cwd(),
@@ -49,6 +49,7 @@ const first = await agent({ id: "first", prompt: "rounds={{maxRounds}} dryRun={{
     }
 
     expect(calls[0].prompt).toBe("rounds=3 dryRun=false");
+    expect(calls[0].title).toBe("Run rounds");
   });
 
   it("serializes nodes that share an agent session and resumes the session", async () => {
@@ -357,8 +358,8 @@ const delivery = await loop({
   model: "claude-sonnet-4",
   maxIterations: 1,
   steps: [
-    agent({ id: "rd", agent: "local:codex", model: "gpt-5.1", prompt: "work" }),
-    agent({ id: "review", prompt: "review {{rd}}" }),
+    agent({ id: "rd", label: "Implement", agent: "local:codex", model: "gpt-5.1", prompt: "work" }),
+    agent({ id: "review", label: "Review", prompt: "review {{rd}}" }),
   ],
   until: { source: "review", finalStatus: "PASS: ok" },
 })
@@ -385,6 +386,7 @@ const delivery = await loop({
       ["local:codex", "gpt-5.1"],
       ["local:claude-code", "claude-sonnet-4"],
     ]);
+    expect(calls.map((call) => call.title)).toEqual(["Implement", "Review"]);
   });
 
   it("resolves agent and model templates from workflow inputs with defaults", async () => {

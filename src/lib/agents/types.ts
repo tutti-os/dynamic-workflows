@@ -20,6 +20,7 @@ export type AgentRunInput = {
   agent: string;
   cwd: string;
   prompt: string;
+  title?: string;
   model?: string;
   resumeSessionId?: string;
   attachSessionId?: string;

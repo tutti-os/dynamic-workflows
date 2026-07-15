@@ -477,6 +477,7 @@ export function createNextopCliAgentAdapter(
               model,
               "--prompt",
               input.prompt,
+              ...(input.title ? ["--title", input.title] : []),
               "--cwd",
               input.cwd,
             ],
