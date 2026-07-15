@@ -794,6 +794,10 @@ const broken = await loop({
     expect(rdFix?.session).toEqual({ mode: "inherit", key: "rd_room" });
     expect(reviewer?.session).toEqual({ mode: "inherit", key: "reviewer_room" });
     expect(acceptance?.loop?.firstIteration).toEqual({ startAt: "reviewer" });
+    expect(rdFix?.appendPrompt).toContain("不要再次请求 Human 审批");
+    expect(reviewer?.prompt).toContain(
+      "Human 通过只表示允许进入验收，不构成需求已经满足的证据",
+    );
     expect(acceptance?.inputs).toContainEqual(expect.objectContaining({
       sourceNodeId: "human_alignment",
     }));

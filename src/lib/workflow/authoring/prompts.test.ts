@@ -23,6 +23,8 @@ describe("workflow authoring prompts", () => {
       "authoring submit --job-id generation-1 --file draft.workflow.js",
     );
     expect(prompt).toContain("accepted: true");
+    expect(prompt).toContain("loop entry and later-iteration order");
+    expect(prompt).toContain("role session continuity");
     expect(prompt).toContain(
       'Related runtime project directory (JSON string):\n"/workspace/project\\nquoted context"',
     );
@@ -46,5 +48,7 @@ describe("workflow authoring prompts", () => {
       "authoring submit --job-id edit-1 --file current.workflow.js",
     );
     expect(prompt).toContain("accepted: true");
+    expect(prompt).toContain("Re-check every affected loop entry/order");
+    expect(prompt).toContain("session key");
   });
 });

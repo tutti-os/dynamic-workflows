@@ -82,10 +82,12 @@ agent({
 ## Sessions
 
 - `session: { mode: "inherit", key: "name" }` lets multiple steps share one agent conversation. Reuse the same key only for calls that must share context; keep independent agents sessionless.
+- A key identifies the conversation, not the node or loop. The same continuing role may reuse one key across different step ids and different loops when its agent target and effective `cwd` remain compatible. Different roles must use different keys.
 - `session: { mode: "independent" }` only when a step must explicitly start a fresh session each time.
 - Never reuse an inherited session key across different `cwd` values.
 - Never use legacy string session values.
 - Use `appendPrompt` on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas. Apply this to every inherited loop step — a reviewer step repeating its full initial prompt each round wastes context and confuses the session.
+- If a step reuses a key established by an earlier node or loop, its first execution is already a continuation and therefore uses `appendPrompt`. Put the actionable delta in `appendPrompt`; treat `prompt` as the fallback for a genuinely new session.
 
 ## human tasks
 
@@ -141,13 +143,14 @@ loop({
 ```
 
 - `maxIterations` must be an integer from 1 to 10.
-- `firstIteration: { startAt: "<step id>" }` optionally starts only the first iteration at a later step. Every subsequent iteration runs all steps in their declared order. The `until.source` step must not be skipped by this entry point. This is useful for `[repair, reviewer]`: review immediately, then repair and re-review only after a failure.
+- `firstIteration: { startAt: "<step id>" }` optionally starts only the first iteration at a later step. Every subsequent iteration runs all steps in their declared order. The `until.source` step must not be skipped by this entry point. This is useful for `[repair, reviewer]`: review immediately, then repair and re-review only after a failure. `maxIterations` counts these evaluation cycles, including the initial review.
 - `onMaxIterations` decides what happens when the loop exhausts its iterations without the `until` status: `"fail"` (the default) fails the run, `"complete"` continues to the next node. Use `"complete"` only when downstream steps can safely run on unaccepted work.
 - Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `cwd`, and `session`.
 - A loop can set `agent`, `model`, and `cwd` as defaults for its steps; step values override loop values.
 - Loop `session` scope: `"step"` derives per-step session keys; `"loop"` shares one loop-level session.
 - `until` may use the legacy text matcher `{ source: "<agent step>", finalStatus: "PASS" }` or an exact structured matcher such as `{ source: "review.action", equals: "pass" }`.
 - Inside loop step prompts, reference other step ids with `{{step_id}}` (most recent output) and use `{{iteration}}` for the current 1-based iteration number.
+- A first-iteration step should not require output from a skipped prefix step. For an initial reviewer entry, instruct the reviewer to inspect the current repository; on later iterations, `{{reviewer}}` resolves to the previous review and can drive the preceding repair step.
 
 ## Runtime option templates for agent / model
 

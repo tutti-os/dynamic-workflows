@@ -71,6 +71,14 @@ describe("authoring workspace", () => {
         expect(existsSync(filePath)).toBe(true);
         expect(readFileSync(filePath, "utf8")).toContain(marker);
       }
+      const materializedDsl = readFileSync(
+        path.join(workspace.dir, root, "workflow-authoring", "dsl-reference.md"),
+        "utf8",
+      );
+      expect(materializedDsl).toContain('firstIteration: { startAt: "<step id>" }');
+      expect(materializedDsl).toContain(
+        "its first execution is already a continuation and therefore uses `appendPrompt`",
+      );
     }
     expect(
       readFileSync(path.join(workspace.dir, "current.workflow.js"), "utf8"),

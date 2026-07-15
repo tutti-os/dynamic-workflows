@@ -110,13 +110,13 @@ const acceptance_loop = loop({
 Reviewer 验收反馈：
 {{reviewer}}
 
-请修复 Reviewer 标注为「阻断」且属于原始需求范围的问题，运行相关检查，并保留改动在工作区。不要 commit 或 push。
+Human 对齐门禁已经完成，不需要再次请求 Human 审批。请修复 Reviewer 标注为「阻断」且属于原始需求范围的问题，运行相关检查，并保留改动在工作区。若反馈暴露出必须新增产品决策的信息缺口，标注「需要重新对齐」并停止猜测，不要擅自扩展需求。不要 commit 或 push。
 `,
       appendPrompt: `
 Reviewer 最新一轮验收未通过，反馈如下：
 {{reviewer}}
 
-请继续使用当前同一个 RD 会话和工作目录修复「阻断」问题。先核对反馈是否符合原始需求，不要因建议项或范围外意见扩大实现。修复后运行相关检查并输出简洁的修复摘要；不要 commit 或 push。
+Human 对齐门禁已经完成，不要再次请求 Human 审批。请继续使用当前同一个 RD 会话和工作目录修复「阻断」问题。先核对反馈是否符合原始需求，不要因建议项或范围外意见扩大实现；若必须新增产品决策，标注「需要重新对齐」并停止猜测。修复后运行相关检查并输出简洁的修复摘要；不要 commit 或 push。
 `,
     }),
     agent({
@@ -130,7 +130,7 @@ Reviewer 最新一轮验收未通过，反馈如下：
 原始需求：
 {{requirement}}
 
-你是独立验收 Reviewer，不修改代码，也不读取或依赖 RD 的交付叙述。只依据原始需求和仓库当前实际状态验收。
+你是独立验收 Reviewer，不修改代码，也不读取或依赖 RD 的交付叙述。Human 通过只表示允许进入验收，不构成需求已经满足的证据。只依据原始需求和仓库当前实际状态验收。
 
 验收要求：
 1. 从原始需求提炼逐条、可验证的标准，不增加产品需求或扩大范围。
@@ -173,7 +173,7 @@ agent({
 验收循环结果：
 {{acceptance_loop}}
 
-只用验收循环的 Stop reason 判断门禁：until_matched 表示 Reviewer PASS；max_iterations_reached 表示仍未通过。
+只用验收循环的 Stop reason 判断门禁：until_matched 表示 Reviewer PASS；max_iterations_reached 表示仍未通过。Human 曾经通过不能替代 Reviewer PASS。
 
 若未通过，不要 commit、push 或创建 MR/PR。检查当前仓库状态，输出已完成改动、剩余阻断问题和建议下一步。
 

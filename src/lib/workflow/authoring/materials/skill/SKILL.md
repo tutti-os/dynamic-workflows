@@ -28,7 +28,7 @@ All commands support `--json` for machine-readable output.
 
 ## Working loop
 
-1. Read the task prompt and `dsl-reference.md`. Identify the job id, create-or-edit mode, requested behavior, target file, runtime cwd needs, role boundaries, side effects, and completion condition.
+1. Read the task prompt and `dsl-reference.md`. Identify the job id, create-or-edit mode, requested behavior, target file, runtime cwd needs, role boundaries, first-versus-later loop behavior, conversation continuity, side effects, and completion condition.
 2. For edit jobs, read the complete `current.workflow.js` before deciding what to change. Preserve behavior outside the edit instruction.
 3. Resolve small gaps with conservative, reversible assumptions. Ask the user only when a missing choice would materially alter scope, authority, graph structure, or acceptance behavior and local context cannot answer it.
 4. Search the blueprint library with one focused query. If a close pattern exists, fetch its script and adapt it. Try at most one refined query before drafting directly from `dsl-reference.md`.
@@ -44,6 +44,9 @@ Before submitting, verify:
 - Every runtime value is declared in `inputs` or comes from a valid upstream reference.
 - Every node has a clear role, sufficient context, explicit authority, concrete work, and an observable completion/output contract.
 - Dataflow is intentional: independent roles do not receive another role's narrative unless the workflow explicitly requires it.
-- Loops are bounded, inherited sessions use `appendPrompt`, and `until.finalStatus` matches the reviewer output contract exactly.
+- Human actions have unambiguous effects; revise feedback is required when the next iteration depends on it, and approval resumes the intended branch only.
+- Loop order matches the intended first evaluation and later repair cycles. `firstIteration.startAt`, `maxIterations`, `until`, and `onMaxIterations` agree with that behavior.
+- Conversation identity is intentional: the same continuing role reuses one inherited session key across step or loop boundaries, different roles use different keys, and every inherited loop step has a continuation-safe `appendPrompt`.
+- `until.finalStatus` matches the reviewer output contract exactly, and independent review does not treat a prior Human approval or implementer summary as acceptance evidence.
 - External side effects have explicit authorization and honest failure behavior.
 - The script is concise, UI-readable, and free of leftover blueprint wording.

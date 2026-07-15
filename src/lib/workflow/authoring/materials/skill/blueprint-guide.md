@@ -24,6 +24,7 @@ Choose by behavior, not vocabulary. Compare:
 - role and information boundaries;
 - inherited versus independent sessions;
 - acceptance and termination behavior;
+- first-iteration entry versus later-iteration order;
 - runtime cwd needs and external side effects.
 
 If these do not substantially match the request, start from the DSL rather than forcing the nearest blueprint.
@@ -31,7 +32,9 @@ If these do not substantially match the request, start from the DSL rather than 
 ## Adaptation
 
 1. Use the selected script as a skeleton, then rewrite `meta`, `inputs`, phases, node ids, labels, prompts, roles, and output contracts for the actual request.
-2. Preserve only the structural mechanics that are relevant, such as loop bounds, session inheritance, `appendPrompt`, and `until` gating.
+2. Preserve only the structural mechanics that are relevant, such as loop bounds, first-iteration entry, cross-loop session continuity, `appendPrompt`, and `until` gating.
 3. Rebuild dataflow deliberately. Do not pass one role's output to another merely because the blueprint did; preserve independent judgment where the request needs it.
 4. Re-evaluate every side effect. A copied commit, push, publish, message, or deletion instruction must still be explicitly authorized by the new workflow.
 5. Remove all placeholder and blueprint-specific wording, then validate the complete adapted script before submission.
+
+For a Human-approved implementation followed by independent acceptance, search for `human rd acceptance session`. The `rd-human-acceptance-delivery-v1` pattern deliberately orders the acceptance steps as `[rd_fix, reviewer]` but starts the first iteration at `reviewer`. Reviewer failure therefore runs `rd_fix` and then re-review without repeating the Human gate. The initial RD and `rd_fix` share one session key; the reviewer uses another.
