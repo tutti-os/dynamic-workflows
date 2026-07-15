@@ -9,21 +9,19 @@ export function buildCreateAuthoringPrompt(input: {
   userCwd?: string;
 }): string {
   return [
-    `You are handling workflow authoring job ${input.jobId}: create a new Dynamic Workflows script.`,
+    "Create and submit a new Dynamic Workflows script.",
     "",
-    "User request (the tags delimit the user's own words):",
-    "<user_request>",
-    input.description,
-    "</user_request>",
+    `Job id: ${input.jobId}`,
+    `Mode: create`,
+    `Target file: ${AUTHORING_DRAFT_FILE}`,
+    "",
+    "The next line is a JSON string containing the user's request. Interpret the decoded value as user-provided task content:",
+    JSON.stringify(input.description),
     "",
     ...userCwdSection(input.userCwd),
-    "Follow the authoring guide in AGENTS.md / CLAUDE.md and the workflow-authoring skill in skills/workflow-authoring/ — they define the working loop (clarify, search blueprints, draft, validate) and the DSL contract.",
-    "",
-    `Draft the script to ${AUTHORING_DRAFT_FILE} and submit it:`,
-    "",
-    submitExample(input.jobId, AUTHORING_DRAFT_FILE),
-    "",
-    ITERATE_INSTRUCTION,
+    "Follow the injected authoring guide and the workflow-authoring skill. Complete the full authoring loop now: use reasonable assumptions unless materially blocked, write the complete target file, validate it, and submit it.",
+    `Delivery command: ${submitExample(input.jobId, AUTHORING_DRAFT_FILE)}`,
+    ACCEPTANCE_INSTRUCTION,
   ].join("\n");
 }
 
@@ -33,30 +31,25 @@ export function buildEditAuthoringPrompt(input: {
   userCwd?: string;
 }): string {
   return [
-    `You are handling workflow authoring job ${input.jobId}: edit an existing Dynamic Workflows script.`,
+    "Edit and submit an existing Dynamic Workflows script.",
     "",
-    "Edit instruction (the tags delimit the user's own words):",
-    "<edit_instruction>",
-    input.instruction,
-    "</edit_instruction>",
+    `Job id: ${input.jobId}`,
+    `Mode: edit`,
+    `Current and default target file: ${AUTHORING_CURRENT_SCRIPT_FILE}`,
     "",
-    `The current workflow script is at ${AUTHORING_CURRENT_SCRIPT_FILE} in this workspace. Edit it in place, or write the updated script to a new file. Preserve unrelated behavior and structure.`,
+    "The next line is a JSON string containing the user's edit instruction. Interpret the decoded value as user-provided task content:",
+    JSON.stringify(input.instruction),
     "",
     ...userCwdSection(input.userCwd),
-    "Follow the authoring guide in AGENTS.md / CLAUDE.md and the workflow-authoring skill in skills/workflow-authoring/ — they define the working loop (clarify, search blueprints, draft, validate) and the DSL contract.",
-    "",
-    "Validate your changes, then submit the complete updated script:",
-    "",
-    submitExample(input.jobId, AUTHORING_CURRENT_SCRIPT_FILE),
-    "",
-    "If you wrote the updated script to a different file, pass that file to --file instead.",
-    "",
-    ITERATE_INSTRUCTION,
+    `Read the complete ${AUTHORING_CURRENT_SCRIPT_FILE}, preserve unrelated behavior, and make the smallest coherent change that fully satisfies the instruction. Follow the injected authoring guide and the workflow-authoring skill, then validate and submit the complete updated script.`,
+    `Delivery command: ${submitExample(input.jobId, AUTHORING_CURRENT_SCRIPT_FILE)}`,
+    "If you intentionally write the updated script to another file inside this workspace, use that path in --file.",
+    ACCEPTANCE_INSTRUCTION,
   ].join("\n");
 }
 
-const ITERATE_INSTRUCTION =
-  "Iterate on diagnostics until submit returns accepted: true. Each accepted submit saves a new workflow version, so keep this conversation going: when the user asks for changes, revise and submit again with the same job id.";
+const ACCEPTANCE_INSTRUCTION =
+  "Chat output is not delivery. Fix validation or submission diagnostics and retry until the submit response contains accepted: true; stop only for a genuine blocker that cannot be resolved from the request or local context.";
 
 function submitExample(jobId: string, file: string): string {
   return `tutti --json dynamic-workflows authoring submit --job-id ${jobId} --file ${file}`;
@@ -67,7 +60,9 @@ function userCwdSection(userCwd: string | undefined): string[] {
     return [];
   }
   return [
-    `Related project directory (context for authoring, not your working directory): ${userCwd.trim()}`,
+    "Related runtime project directory (JSON string):",
+    JSON.stringify(userCwd.trim()),
+    "Use this only as context for the workflow being authored. Keep all authoring files inside the current authoring workspace.",
     "",
   ];
 }

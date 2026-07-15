@@ -318,6 +318,40 @@
     {
       "path": [
         "authoring",
+        "validate"
+      ],
+      "summary": "Validate an authored workflow script",
+      "description": "Validate a script file inside an authoring job workspace without saving a workflow version.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job-id": {
+            "type": "string",
+            "description": "Authoring job id from the task prompt (generation or edit job)."
+          },
+          "file": {
+            "type": "string",
+            "description": "Script file path inside the authoring workspace (relative paths resolve against it)."
+          }
+        },
+        "required": [
+          "job-id",
+          "file"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/authoring/validate"
+      }
+    },
+    {
+      "path": [
+        "authoring",
         "submit"
       ],
       "summary": "Submit an authored workflow script",

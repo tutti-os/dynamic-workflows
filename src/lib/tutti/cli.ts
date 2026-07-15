@@ -30,6 +30,7 @@ import {
 import {
   AuthoringSubmitError,
   submitAuthoringScript,
+  validateAuthoringScript,
 } from "@/lib/workflow/authoring/submit";
 import {
   assertWorkflowScriptValid,
@@ -121,6 +122,8 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(blueprintsSearchCommand(input));
       case "blueprints/get":
         return cliJson(blueprintsGetCommand(input));
+      case "authoring/validate":
+        return cliJson(authoringValidateCommand(input));
       case "authoring/submit":
         return cliJson(authoringSubmitCommand(input));
       default:
@@ -369,6 +372,20 @@ function authoringSubmitCommand(input: CliInput) {
 
   try {
     return submitAuthoringScript({ jobId, file, script });
+  } catch (error) {
+    if (error instanceof AuthoringSubmitError) {
+      throw new CliHttpError(error.code, error.message, error.status);
+    }
+    throw error;
+  }
+}
+
+function authoringValidateCommand(input: CliInput) {
+  const jobId = readRequiredString(input, ["job-id", "jobId"]);
+  const file = readRequiredString(input, ["file"]);
+
+  try {
+    return validateAuthoringScript({ jobId, file });
   } catch (error) {
     if (error instanceof AuthoringSubmitError) {
       throw new CliHttpError(error.code, error.message, error.status);

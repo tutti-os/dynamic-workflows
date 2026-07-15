@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,6 +71,46 @@ const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
           path: "inputs.unused",
         }),
       ],
+    });
+  });
+
+  it("validates a file inside an authoring job workspace", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { createPendingWorkflowGeneration } = await import(
+      "@/lib/db/workflows/generations"
+    );
+    const { prepareAuthoringWorkspace } = await import(
+      "@/lib/workflow/authoring/workspace"
+    );
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+
+    const pending = createPendingWorkflowGeneration({ prompt: "Make a workflow" });
+    const jobId = pending.generation!.id;
+    const workspace = prepareAuthoringWorkspace({ jobId });
+    writeFileSync(
+      path.join(workspace.dir, "draft.workflow.js"),
+      'const first = agent({ id: "first", prompt: "Uses {{missing}}" })',
+    );
+
+    const response = await handleDynamicWorkflowsCliRequest(
+      ["authoring", "validate"],
+      {
+        input: {
+          "job-id": jobId,
+          file: "draft.workflow.js",
+        },
+      },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value).toMatchObject({
+      valid: false,
+      jobType: "generation",
+      diagnosticSummary: { errorCount: 1 },
     });
   });
 

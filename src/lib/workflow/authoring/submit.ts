@@ -45,6 +45,13 @@ export type AuthoringSubmitResult =
       diagnostics: WorkflowDiagnostic[];
     };
 
+export type AuthoringValidateResult = {
+  valid: boolean;
+  jobType: "generation" | "edit";
+  diagnosticSummary: WorkflowDiagnosticSummary;
+  diagnostics: WorkflowDiagnostic[];
+};
+
 export class AuthoringSubmitError extends Error {
   readonly code: string;
   readonly status: number;
@@ -60,15 +67,7 @@ export class AuthoringSubmitError extends Error {
 export function submitAuthoringScript(
   input: AuthoringSubmitInput,
 ): AuthoringSubmitResult {
-  const jobId = input.jobId.trim();
-  if (!jobId) {
-    throw new AuthoringSubmitError("invalid_input", "job-id is required.", 400);
-  }
-
-  const job = locateAuthoringJob(jobId);
-  const script = readSubmittedScript(input, jobId);
-
-  const parsed = parseWorkflowScript(script);
+  const { jobId, job, script, parsed } = inspectAuthoringScript(input);
   if (hasWorkflowDiagnosticErrors(parsed.diagnostics)) {
     return {
       accepted: false,
@@ -114,6 +113,30 @@ export function submitAuthoringScript(
     version: null,
     workflowName: null,
   };
+}
+
+export function validateAuthoringScript(
+  input: AuthoringSubmitInput,
+): AuthoringValidateResult {
+  const { job, parsed } = inspectAuthoringScript(input);
+  return {
+    valid: !hasWorkflowDiagnosticErrors(parsed.diagnostics),
+    jobType: job.type,
+    diagnosticSummary: summarizeWorkflowDiagnostics(parsed.diagnostics),
+    diagnostics: parsed.diagnostics,
+  };
+}
+
+function inspectAuthoringScript(input: AuthoringSubmitInput) {
+  const jobId = input.jobId.trim();
+  if (!jobId) {
+    throw new AuthoringSubmitError("invalid_input", "job-id is required.", 400);
+  }
+
+  const job = locateAuthoringJob(jobId);
+  const script = readSubmittedScript(input, jobId);
+  const parsed = parseWorkflowScript(script);
+  return { jobId, job, script, parsed };
 }
 
 // Authoring sessions are decoupled from job completion: a session may keep

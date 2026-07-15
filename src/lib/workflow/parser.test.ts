@@ -647,11 +647,16 @@ const broken = await loop({
 
     expect(parsed.meta.requiresCwd).toBe(true);
     expect(parsed.requiredInputNames).toEqual(["requirement"]);
-    expect(parsed.nodes[1].loop?.onMaxIterations).toBe("complete");
+    expect(parsed.nodes[0].loop?.onMaxIterations).toBe("complete");
     expect(parsed.nodes.map((node) => [node.id, node.cwd])).toEqual([
-      ["baseline", "."],
       ["delivery_loop", "."],
       ["submit_mr", "."],
     ]);
+    const acceptance = parsed.nodes[0].loop?.steps.find(
+      (step) => step.id === "acceptance",
+    );
+    expect(acceptance?.templateRefs).not.toContain("rd");
+    expect(acceptance?.prompt).not.toContain("{{rd}}");
+    expect(acceptance?.appendPrompt).not.toContain("{{rd}}");
   });
 });
