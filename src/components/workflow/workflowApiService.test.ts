@@ -3,6 +3,7 @@ import {
   apiJson,
   ApiJsonError,
   instantiateWorkflowBlueprint,
+  listAgentTargets,
   listWorkflowBlueprints,
   loadWorkflowBlueprint,
   searchWorkflowBlueprints,
@@ -49,6 +50,30 @@ describe("apiJson", () => {
         },
       }),
     );
+  });
+
+  it("forwards cancellation and preserves stale catalog status", async () => {
+    const controller = new AbortController();
+    const fetchMock = mockFetch(
+      new Response(
+        JSON.stringify({
+          targets: [],
+          freshness: "stale",
+          loadedAt: 123,
+          warning: "Using cached agents.",
+        }),
+      ),
+    );
+
+    await expect(listAgentTargets(controller.signal)).resolves.toEqual({
+      targets: [],
+      freshness: "stale",
+      loadedAt: 123,
+      warning: "Using cached agents.",
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/agents/targets", {
+      signal: controller.signal,
+    });
   });
 
   it("loads workflow blueprint summaries from the blueprint API", async () => {

@@ -16,6 +16,10 @@ export function HomePage() {
     model,
     modelOptions,
     cwd,
+    agentsLoading,
+    agentsError,
+    agentsWarning,
+    retryAgents,
     setAgent,
     setModel,
     setCwd,
@@ -80,6 +84,9 @@ export function HomePage() {
           model={model}
           modelOptions={modelOptions}
           cwd={cwd}
+          agentsLoading={agentsLoading}
+          agentsError={agentsError}
+          agentsWarning={agentsWarning}
           isCreating={isCreating}
           createError={createError}
           createDiagnostics={createDiagnostics}
@@ -87,6 +94,7 @@ export function HomePage() {
           onAgentChange={setAgent}
           onModelChange={setModel}
           onCwdChange={setCwd}
+          onRetryAgents={retryAgents}
           onCreate={createWorkflow}
         />
       </section>

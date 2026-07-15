@@ -449,6 +449,58 @@ a {
   align-items: end;
 }
 
+.agent-catalog-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--status-running) 28%, var(--border-1));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--status-running) 7%, var(--background-fronted));
+  padding: 9px 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agent-catalog-status-error {
+  justify-content: space-between;
+  border-color: color-mix(in srgb, var(--state-danger) 38%, var(--border-1));
+  background: color-mix(in srgb, var(--state-danger) 7%, var(--background-fronted));
+}
+
+.agent-catalog-status-warning {
+  justify-content: space-between;
+  border-color: color-mix(in srgb, var(--state-warning) 38%, var(--border-1));
+  background: color-mix(in srgb, var(--state-warning) 7%, var(--background-fronted));
+}
+
+.agent-catalog-status-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.agent-catalog-status-copy strong {
+  color: var(--state-danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-catalog-status-warning .agent-catalog-status-copy strong {
+  color: var(--state-warning);
+}
+
+.agent-catalog-status-copy span {
+  overflow-wrap: anywhere;
+}
+
+.workflow-run-settings > .agent-catalog-status,
+.agent-edit-settings > .agent-catalog-status {
+  grid-column: 1 / -1;
+}
+
 .control-field {
   display: grid;
   min-width: 0;

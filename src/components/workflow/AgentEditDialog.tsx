@@ -13,6 +13,7 @@ import {
   Spinner,
   Textarea,
 } from "@tutti-os/ui-system";
+import { AgentCatalogStatus } from "./AgentCatalogStatus";
 import {
   cancelWorkflowAgentEdit,
   listWorkflowAgentEdits,
@@ -41,10 +42,14 @@ type AgentEditDialogProps = {
   model: string;
   modelOptions: string[];
   cwd: string;
+  agentsLoading: boolean;
+  agentsError?: string;
+  agentsWarning?: string;
   onOpenChange: (open: boolean) => void;
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
+  onRetryAgents: () => Promise<void>;
   onVersionCreated: (version: WorkflowVersionRecord) => Promise<void>;
   onOpenAgentSession: (agentSessionId: string) => Promise<void>;
   onLogEvent: (message: string) => void;
@@ -248,10 +253,15 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
   const baseVersionLabel = props.baseVersion
     ? `v${props.baseVersion.version}`
     : "No version";
+  const agentsBlocked = props.agentsLoading || Boolean(props.agentsError);
   const canStart =
-    Boolean(props.baseVersion) && Boolean(instruction.trim()) && !isActive && !isSubmitting;
-  const canRetry =
+    Boolean(props.baseVersion) &&
+    Boolean(instruction.trim()) &&
     !isActive &&
+    !isSubmitting &&
+    !agentsBlocked;
+  const canRetry =
+    !isActive && !agentsBlocked &&
     (activeEdit?.status === "failed" || activeEdit?.status === "canceled");
 
   return (
@@ -301,7 +311,7 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
               <WorkflowAgentSelect
                 agents={props.agents}
                 value={props.agent}
-                disabled={isActive}
+                disabled={isActive || agentsBlocked}
                 onValueChange={props.onAgentChange}
               />
             </label>
@@ -311,13 +321,13 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
                 <WorkflowModelSelect
                   models={props.modelOptions}
                   value={props.model}
-                  disabled={isActive}
+                  disabled={isActive || agentsBlocked}
                   onValueChange={props.onModelChange}
                 />
               ) : (
                 <Input
                   value={props.model}
-                  disabled={isActive}
+                  disabled={isActive || agentsBlocked}
                   placeholder="Default model"
                   aria-label="Agent model"
                   onChange={(event) => props.onModelChange(event.target.value)}
@@ -331,6 +341,12 @@ export function AgentEditDialog(props: AgentEditDialogProps) {
                 onChange={props.onCwdChange}
               />
             </label>
+            <AgentCatalogStatus
+              loading={props.agentsLoading}
+              error={props.agentsError}
+              warning={props.agentsWarning}
+              onRetry={props.onRetryAgents}
+            />
           </section>
 
           {error ? (

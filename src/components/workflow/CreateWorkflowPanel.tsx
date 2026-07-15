@@ -10,6 +10,7 @@ import {
   Textarea,
 } from "@tutti-os/ui-system";
 import type { ReactNode } from "react";
+import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
 import { DiagnosticsPanel } from "@/components/workflow/DiagnosticsPanel";
 import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
 import {
@@ -26,6 +27,9 @@ type CreateWorkflowPanelProps = {
   model: string;
   modelOptions: string[];
   cwd: string;
+  agentsLoading: boolean;
+  agentsError?: string;
+  agentsWarning?: string;
   isCreating: boolean;
   createError?: string;
   createDiagnostics: WorkflowDiagnostic[];
@@ -33,10 +37,13 @@ type CreateWorkflowPanelProps = {
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
+  onRetryAgents: () => Promise<void>;
   onCreate: () => Promise<void>;
 };
 
 export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
+  const agentsBlocked = props.agentsLoading || Boolean(props.agentsError);
+
   return (
     <form
       className="create-panel"
@@ -74,6 +81,7 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
             agents={props.agents}
             value={props.agent}
             fallbackValue="mock"
+            disabled={agentsBlocked}
             onValueChange={props.onAgentChange}
           />
         </ControlField>
@@ -82,11 +90,13 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
             <WorkflowModelSelect
               models={props.modelOptions}
               value={props.model}
+              disabled={agentsBlocked}
               onValueChange={props.onModelChange}
             />
           ) : (
             <Input
               value={props.model}
+              disabled={agentsBlocked}
               placeholder="Default model"
               aria-label="Agent model"
               onChange={(event) => props.onModelChange(event.target.value)}
@@ -101,7 +111,7 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
         </ControlField>
         <Button
           className="create-button"
-          disabled={props.isCreating}
+          disabled={props.isCreating || agentsBlocked}
           type="submit"
         >
           {props.isCreating ? (
@@ -112,6 +122,12 @@ export function CreateWorkflowPanel(props: CreateWorkflowPanelProps) {
           Create
         </Button>
       </div>
+      <AgentCatalogStatus
+        loading={props.agentsLoading}
+        error={props.agentsError}
+        warning={props.agentsWarning}
+        onRetry={props.onRetryAgents}
+      />
       <DiagnosticsPanel
         message={props.createError}
         diagnostics={props.createDiagnostics}

@@ -20,6 +20,9 @@ export function WorkflowWorkbenchDialogs(props: {
   model: string;
   modelOptions: string[];
   cwd: string;
+  agentsLoading: boolean;
+  agentsError?: string;
+  agentsWarning?: string;
   requiresCwd: boolean;
   inputSchema: WorkflowInputSchema;
   workflowInputNames: string[];
@@ -39,6 +42,7 @@ export function WorkflowWorkbenchDialogs(props: {
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
+  onRetryAgents: () => Promise<void>;
   onRunInputChange: (name: string, value: WorkflowInputValue) => void;
   onRun: () => void;
   onMetadataNameChange: (value: string) => void;
@@ -57,6 +61,9 @@ export function WorkflowWorkbenchDialogs(props: {
         model={props.model}
         modelOptions={props.modelOptions}
         cwd={props.cwd}
+        agentsLoading={props.agentsLoading}
+        agentsError={props.agentsError}
+        agentsWarning={props.agentsWarning}
         requiresCwd={props.requiresCwd}
         inputSchema={props.inputSchema}
         workflowInputNames={props.workflowInputNames}
@@ -69,6 +76,7 @@ export function WorkflowWorkbenchDialogs(props: {
         onAgentChange={props.onAgentChange}
         onModelChange={props.onModelChange}
         onCwdChange={props.onCwdChange}
+        onRetryAgents={props.onRetryAgents}
         onRunInputChange={props.onRunInputChange}
         onRun={props.onRun}
       />
@@ -95,10 +103,14 @@ export function WorkflowWorkbenchDialogs(props: {
         model={props.model}
         modelOptions={props.modelOptions}
         cwd={props.cwd}
+        agentsLoading={props.agentsLoading}
+        agentsError={props.agentsError}
+        agentsWarning={props.agentsWarning}
         onOpenChange={props.onAgentEditOpenChange}
         onAgentChange={props.onAgentChange}
         onModelChange={props.onModelChange}
         onCwdChange={props.onCwdChange}
+        onRetryAgents={props.onRetryAgents}
         onVersionCreated={props.onAgentVersionCreated}
         onOpenAgentSession={props.onOpenAgentSession}
         onLogEvent={props.onLogEvent}

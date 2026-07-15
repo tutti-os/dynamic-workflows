@@ -20,7 +20,7 @@ import type {
   WorkflowBlueprintSearchResult,
   WorkflowBlueprintSummary,
 } from "@/lib/workflow/blueprint-types";
-import type { AgentTargetOption } from "@/lib/agents/types";
+import type { AgentTargetCatalogResult } from "@/lib/agents/types";
 import {
   delay,
   readEventStream,
@@ -213,13 +213,20 @@ export function parseWorkflowScript(script: string): Promise<ParsedWorkflow> {
   );
 }
 
-export async function listAgentTargets(): Promise<AgentTargetOption[]> {
-  const data = await apiJson<{ targets?: AgentTargetOption[] }>(
+export async function listAgentTargets(
+  signal?: AbortSignal,
+): Promise<AgentTargetCatalogResult> {
+  const data = await apiJson<Partial<AgentTargetCatalogResult>>(
     "/api/agents/targets",
-    undefined,
+    signal ? { signal } : undefined,
     "AGENT_TARGET_DETECTION_FAILED",
   );
-  return data.targets ?? [];
+  return {
+    targets: data.targets ?? [],
+    freshness: data.freshness === "stale" ? "stale" : "fresh",
+    ...(typeof data.loadedAt === "number" ? { loadedAt: data.loadedAt } : {}),
+    ...(typeof data.warning === "string" ? { warning: data.warning } : {}),
+  };
 }
 
 export function loadWorkflowDetail(workflowId: string): Promise<WorkflowDetail> {

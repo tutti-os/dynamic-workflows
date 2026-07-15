@@ -1,5 +1,9 @@
 import { createNextopCliAgentAdapter } from "./adapters/nextopCliAdapter";
-import type { AgentRuntimeAdapter, AgentSessionStartInput } from "./types";
+import type {
+  AgentRuntimeAdapter,
+  AgentSessionStartInput,
+  AgentTargetCatalogResult,
+} from "./types";
 
 let defaultAdapter: AgentRuntimeAdapter | undefined;
 
@@ -12,6 +16,17 @@ export function getAgentRuntimeAdapter(): AgentRuntimeAdapter {
 
 export async function listAgentTargets() {
   return getAgentRuntimeAdapter().listTargets();
+}
+
+export async function listAgentTargetCatalog(): Promise<AgentTargetCatalogResult> {
+  const adapter = getAgentRuntimeAdapter();
+  if (adapter.listTargetCatalog) {
+    return adapter.listTargetCatalog();
+  }
+  return {
+    targets: await adapter.listTargets(),
+    freshness: "fresh",
+  };
 }
 
 export function runAgent(input: Parameters<AgentRuntimeAdapter["run"]>[0]) {

@@ -8,6 +8,13 @@ export type AgentTargetOption = {
   reason?: string;
 };
 
+export type AgentTargetCatalogResult = {
+  targets: AgentTargetOption[];
+  freshness: "fresh" | "stale";
+  loadedAt?: number;
+  warning?: string;
+};
+
 export type AgentRunInput = {
   runId: string;
   agent: string;
@@ -112,6 +119,7 @@ export type AgentRuntimeAdapter = {
   id: string;
   label: string;
   listTargets(): Promise<AgentTargetOption[]>;
+  listTargetCatalog?(): Promise<AgentTargetCatalogResult>;
   run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent>;
   startSession?(input: AgentSessionStartInput): Promise<AgentSessionRef>;
   cancel?(runId: string): Promise<void>;

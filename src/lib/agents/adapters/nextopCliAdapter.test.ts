@@ -7,6 +7,7 @@ import {
   parseNextopJson,
   parseSessionFromOutput,
   resolveNextopCliPath,
+  runNextopJson,
 } from "./nextopCliAdapter";
 
 describe("nextop cli adapter", () => {
@@ -182,7 +183,7 @@ describe("nextop cli adapter", () => {
     );
   });
 
-  it("does not hide ordinary agent list failures behind provider fallback", async () => {
+  it("retries transient catalog timeouts without using the legacy fallback", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
@@ -193,13 +194,280 @@ describe("nextop cli adapter", () => {
     });
 
     await expect(adapter.listTargets()).rejects.toThrow(/timed out/);
-    expect(calls).toEqual([["--json", "agent", "list"]]);
+    expect(calls).toEqual([
+      ["--json", "agent", "list"],
+      ["--json", "agent", "list"],
+    ]);
     expect(
       isUnknownAgentListCommand(new Error("unknown command: agent list")),
     ).toBe(true);
     expect(
       isUnknownAgentListCommand(new Error("unknown command: agent list now")),
     ).toBe(false);
+  });
+
+  it("returns a catalog when the second detection attempt succeeds", async () => {
+    const detectionTimeouts: number[] = [];
+    let detectionAttempt = 0;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      providerDetectionRetryBackoffMs: 0,
+      runner: async (args, options) => {
+        if (isAgentListCall(args)) {
+          detectionTimeouts.push(options?.timeoutMs ?? 0);
+          detectionAttempt += 1;
+          if (detectionAttempt === 1) {
+            throw new Error(`Nextop CLI timed out after ${options?.timeoutMs}ms.`);
+          }
+          return currentAgentCatalog();
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(adapter.listTargets()).resolves.toHaveLength(1);
+    expect(detectionTimeouts).toEqual([4_750, 4_750]);
+  });
+
+  it("keeps retry attempt budgets within the overall discovery deadline", async () => {
+    let currentTime = 1_000;
+    const detectionTimeouts: number[] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      providerDetectionTimeoutMs: 8_000,
+      providerDetectionOverallTimeoutMs: 10_500,
+      providerDetectionRetryBackoffMs: 0,
+      now: () => currentTime,
+      runner: async (_args, options) => {
+        const timeoutMs = options?.timeoutMs ?? 0;
+        detectionTimeouts.push(timeoutMs);
+        currentTime += timeoutMs;
+        throw new Error(`Nextop CLI timed out after ${timeoutMs}ms.`);
+      },
+    });
+
+    await expect(adapter.listTargets()).rejects.toThrow(/timed out/);
+    expect(detectionTimeouts).toEqual([8_000, 2_500]);
+    expect(detectionTimeouts.reduce((total, value) => total + value, 0)).toBe(
+      10_500,
+    );
+  });
+
+  it("shares the overall deadline with legacy provider detection", async () => {
+    let currentTime = 1_000;
+    const commandTimeouts: Array<{ command: string; timeoutMs: number }> = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      providerDetectionRetryBackoffMs: 0,
+      now: () => currentTime,
+      runner: async (args, options) => {
+        const timeoutMs = options?.timeoutMs ?? 0;
+        commandTimeouts.push({ command: args.at(-1) ?? "", timeoutMs });
+        currentTime += timeoutMs;
+        if (isAgentListCall(args)) {
+          throw new Error("unknown command: agent list");
+        }
+        throw new Error(`Nextop CLI timed out after ${timeoutMs}ms.`);
+      },
+    });
+
+    await expect(adapter.listTargets()).rejects.toThrow(/exceeded/);
+    expect(commandTimeouts).toEqual([
+      { command: "list", timeoutMs: 4_750 },
+      { command: "providers", timeoutMs: 4_750 },
+      { command: "list", timeoutMs: 1_000 },
+    ]);
+    expect(
+      commandTimeouts.reduce((total, item) => total + item.timeoutMs, 0),
+    ).toBe(10_500);
+  });
+
+  it("reuses a fresh catalog and coalesces concurrent discovery", async () => {
+    const calls: string[][] = [];
+    let releaseCatalog: (() => void) | undefined;
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      catalogTtlMs: 60_000,
+      runner: async (args) => {
+        calls.push(args);
+        if (isAgentListCall(args)) {
+          await catalogGate;
+          return currentAgentCatalog();
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const first = adapter.listTargets();
+    const second = adapter.listTargets();
+    releaseCatalog?.();
+    await Promise.all([first, second]);
+    await adapter.listTargets();
+
+    expect(calls.filter(isAgentListCall)).toHaveLength(1);
+  });
+
+  it("serves the last successful catalog when a refresh times out", async () => {
+    const calls: string[][] = [];
+    let currentTime = 1_000;
+    let catalogAvailable = true;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      catalogTtlMs: 100,
+      catalogMaxStaleAgeMs: 500,
+      providerDetectionRetries: 0,
+      now: () => currentTime,
+      runner: async (args) => {
+        calls.push(args);
+        if (isAgentListCall(args)) {
+          if (!catalogAvailable) {
+            throw new Error("Nextop CLI timed out after 10000ms.");
+          }
+          return currentAgentCatalog();
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await expect(adapter.listTargetCatalog?.()).resolves.toMatchObject({
+      freshness: "fresh",
+      targets: [{ id: "local:codex", models: ["gpt-5"] }],
+    });
+    currentTime += 101;
+    catalogAvailable = false;
+    await expect(adapter.listTargetCatalog?.()).resolves.toMatchObject({
+      freshness: "stale",
+      loadedAt: 1_000,
+      targets: [{ id: "local:codex", models: ["gpt-5"] }],
+    });
+    await expect(adapter.listTargetCatalog?.()).resolves.toMatchObject({
+      freshness: "stale",
+    });
+
+    expect(calls.filter(isAgentListCall)).toHaveLength(3);
+  });
+
+  it("rejects transient failures after the maximum stale age", async () => {
+    let currentTime = 1_000;
+    let catalogAvailable = true;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      catalogTtlMs: 100,
+      catalogMaxStaleAgeMs: 200,
+      providerDetectionRetries: 0,
+      now: () => currentTime,
+      runner: async (args) => {
+        if (isAgentListCall(args)) {
+          if (!catalogAvailable) {
+            throw new Error("Nextop CLI timed out after 5000ms.");
+          }
+          return currentAgentCatalog();
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await adapter.listTargets();
+    currentTime += 201;
+    catalogAvailable = false;
+
+    await expect(adapter.listTargets()).rejects.toThrow(/timed out/);
+  });
+
+  it("uses bounded stale data for temporary CLI execution failures", async () => {
+    let currentTime = 1_000;
+    let daemonAvailable = true;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      catalogTtlMs: 100,
+      catalogMaxStaleAgeMs: 500,
+      providerDetectionRetries: 0,
+      now: () => currentTime,
+      runner: async (args) => {
+        if (isAgentListCall(args)) {
+          if (!daemonAvailable) {
+            throw new Error(
+              "Nextop CLI failed: daemon is temporarily unavailable",
+            );
+          }
+          return currentAgentCatalog();
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await adapter.listTargets();
+    currentTime += 101;
+    daemonAvailable = false;
+
+    await expect(adapter.listTargetCatalog?.()).resolves.toMatchObject({
+      freshness: "stale",
+    });
+  });
+
+  it("does not hide catalog schema failures behind stale data", async () => {
+    let currentTime = 1_000;
+    let returnInvalidCatalog = false;
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      catalogTtlMs: 100,
+      catalogMaxStaleAgeMs: 500,
+      providerDetectionRetries: 0,
+      now: () => currentTime,
+      runner: async (args) => {
+        if (isAgentListCall(args)) {
+          return returnInvalidCatalog
+            ? { schemaVersion: 1, agents: "invalid" }
+            : currentAgentCatalog();
+        }
+        if (args.includes("composer-options")) {
+          return { effectiveSettings: { model: "gpt-5" } };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    await adapter.listTargets();
+    currentTime += 101;
+    returnInvalidCatalog = true;
+
+    await expect(adapter.listTargets()).rejects.toThrow(
+      /unsupported agent catalog/,
+    );
+  });
+
+  it("waits for a timed-out CLI child to exit after the termination grace", async () => {
+    const startedAt = Date.now();
+    await expect(
+      runNextopJson(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+        ],
+        { timeoutMs: 100 },
+      ),
+    ).rejects.toThrow("Nextop CLI timed out after 100ms.");
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(250);
   });
 
   it("starts the exact selected target through the agent-id contract", async () => {

@@ -14,6 +14,7 @@ import {
   Textarea,
 } from "@tutti-os/ui-system";
 import { useEffect } from "react";
+import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
 import {
   WorkflowAgentSelect,
   WorkflowModelSelect,
@@ -33,6 +34,9 @@ type RunInputsDialogProps = {
   model: string;
   modelOptions: string[];
   cwd: string;
+  agentsLoading: boolean;
+  agentsError?: string;
+  agentsWarning?: string;
   requiresCwd: boolean;
   inputSchema: WorkflowInputSchema;
   workflowInputNames: string[];
@@ -45,6 +49,7 @@ type RunInputsDialogProps = {
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onCwdChange: (value: string) => void;
+  onRetryAgents: () => Promise<void>;
   onRunInputChange: (name: string, value: WorkflowInputValue) => void;
   onRun: () => void;
 };
@@ -60,7 +65,8 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
       ? `${filledRunInputCount}/${requiredWorkflowInputNames.length}`
       : "optional";
   const hasMissingInputs = props.missingRunInputNames.length > 0;
-  const isBlocked = hasMissingInputs || props.missingCwd;
+  const agentsBlocked = props.agentsLoading || Boolean(props.agentsError);
+  const isBlocked = hasMissingInputs || props.missingCwd || agentsBlocked;
 
   useEffect(() => {
     if (!props.open) {
@@ -101,6 +107,7 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
               <WorkflowAgentSelect
                 agents={props.agents}
                 value={props.agent}
+                disabled={agentsBlocked}
                 onValueChange={props.onAgentChange}
               />
             </label>
@@ -110,11 +117,13 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
                 <WorkflowModelSelect
                   models={props.modelOptions}
                   value={props.model}
+                  disabled={agentsBlocked}
                   onValueChange={props.onModelChange}
                 />
               ) : (
                 <Input
                   value={props.model}
+                  disabled={agentsBlocked}
                   placeholder="Default model"
                   aria-label="Agent model"
                   onChange={(event) => props.onModelChange(event.target.value)}
@@ -140,6 +149,12 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
                 Select a project before running this workflow.
               </span>
             ) : null}
+            <AgentCatalogStatus
+              loading={props.agentsLoading}
+              error={props.agentsError}
+              warning={props.agentsWarning}
+              onRetry={props.onRetryAgents}
+            />
           </section>
 
           {props.workflowInputNames.length > 0 ? (

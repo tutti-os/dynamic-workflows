@@ -70,6 +70,10 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     model,
     modelOptions,
     cwd,
+    agentsLoading,
+    agentsError,
+    agentsWarning,
+    retryAgents,
     setAgent,
     setModel,
     setCwd,
@@ -338,6 +342,9 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         model={model}
         modelOptions={modelOptions}
         cwd={cwd}
+        agentsLoading={agentsLoading}
+        agentsError={agentsError}
+        agentsWarning={agentsWarning}
         requiresCwd={requiresCwd}
         inputSchema={inputSchema}
         workflowInputNames={runWorkflowInputNames}
@@ -357,6 +364,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         onAgentChange={setAgent}
         onModelChange={setModel}
         onCwdChange={setCwd}
+        onRetryAgents={retryAgents}
         onRunInputChange={setRunInputValue}
         onRun={submitRunInputDialog}
         onMetadataNameChange={setMetadataName}

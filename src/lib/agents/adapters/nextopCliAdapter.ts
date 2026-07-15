@@ -7,6 +7,7 @@ import type {
   AgentRuntimeEvent,
   AgentSessionRef,
   AgentSessionStatus,
+  AgentTargetCatalogResult,
   AgentTargetOption,
 } from "../types";
 import { createMockAgentAdapter, MOCK_AGENT_TARGET_ID } from "./mockAdapter";
@@ -17,7 +18,13 @@ type NextopCliAdapterOptions = {
   pollIntervalMs?: number;
   waitTimeoutMs?: number;
   providerDetectionTimeoutMs?: number;
+  providerDetectionOverallTimeoutMs?: number;
+  providerDetectionRetries?: number;
+  providerDetectionRetryBackoffMs?: number;
   providerModelsTimeoutMs?: number;
+  catalogTtlMs?: number;
+  catalogMaxStaleAgeMs?: number;
+  now?: () => number;
   runner?: NextopCliRunner;
 };
 
@@ -95,9 +102,15 @@ const DEFAULT_CLI_PATH = "tutti-dev";
 const CLI_PATH_ENV_NAMES = ["TUTTI_CLI"] as const;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 360_000;
-const DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS = 3_000;
+const DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS = 4_750;
+const DEFAULT_PROVIDER_DETECTION_OVERALL_TIMEOUT_MS = 10_500;
+const DEFAULT_PROVIDER_DETECTION_RETRIES = 1;
+const DEFAULT_PROVIDER_DETECTION_RETRY_BACKOFF_MS = 100;
 const DEFAULT_PROVIDER_MODELS_TIMEOUT_MS = 1_500;
+const DEFAULT_CATALOG_TTL_MS = 30_000;
+const DEFAULT_CATALOG_MAX_STALE_AGE_MS = 300_000;
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
+const CLI_TERMINATION_GRACE_MS = 250;
 const TAIL_SUMMARY_LIMIT = 50;
 
 type NextopAgentTargetSpec = {
@@ -112,6 +125,12 @@ type NextopAgentTargetSpec = {
 
 type NextopAgentCatalog = {
   targets: NextopAgentTargetSpec[];
+};
+
+type LoadedNextopAgentCatalog = {
+  catalog: NextopAgentCatalog;
+  loadedAt: number;
+  stale: boolean;
 };
 
 export function createNextopCliAgentAdapter(
@@ -139,58 +158,158 @@ export function createNextopCliAgentAdapter(
     options.providerDetectionTimeoutMs ??
     readPositiveIntegerEnv("NEXTOP_PROVIDER_DETECTION_TIMEOUT_MS") ??
     DEFAULT_PROVIDER_DETECTION_TIMEOUT_MS;
+  const providerDetectionOverallTimeoutMs =
+    options.providerDetectionOverallTimeoutMs ??
+    readPositiveIntegerEnv("NEXTOP_PROVIDER_DETECTION_DEADLINE_MS") ??
+    DEFAULT_PROVIDER_DETECTION_OVERALL_TIMEOUT_MS;
+  const providerDetectionRetries =
+    options.providerDetectionRetries ??
+    readNonNegativeIntegerEnv("NEXTOP_PROVIDER_DETECTION_RETRIES") ??
+    DEFAULT_PROVIDER_DETECTION_RETRIES;
+  const providerDetectionRetryBackoffMs =
+    options.providerDetectionRetryBackoffMs ??
+    DEFAULT_PROVIDER_DETECTION_RETRY_BACKOFF_MS;
   const providerModelsTimeoutMs =
     options.providerModelsTimeoutMs ??
     readPositiveIntegerEnv("NEXTOP_PROVIDER_MODELS_TIMEOUT_MS") ??
     DEFAULT_PROVIDER_MODELS_TIMEOUT_MS;
-  let catalogPromise: Promise<NextopAgentCatalog> | undefined;
-  const loadCatalog = (refresh = false): Promise<NextopAgentCatalog> => {
-    if (refresh || !catalogPromise) {
-      catalogPromise = readNextopAgentCatalog(
-        runner,
-        providerDetectionTimeoutMs,
-      ).catch((error) => {
-        catalogPromise = undefined;
-        throw error;
-      });
+  const catalogTtlMs =
+    options.catalogTtlMs ??
+    readPositiveIntegerEnv("NEXTOP_AGENT_CATALOG_TTL_MS") ??
+    DEFAULT_CATALOG_TTL_MS;
+  const catalogMaxStaleAgeMs =
+    options.catalogMaxStaleAgeMs ??
+    readPositiveIntegerEnv("NEXTOP_AGENT_CATALOG_MAX_STALE_AGE_MS") ??
+    DEFAULT_CATALOG_MAX_STALE_AGE_MS;
+  const now = options.now ?? Date.now;
+  let catalogSnapshot:
+    | { catalog: NextopAgentCatalog; loadedAt: number }
+    | undefined;
+  let targetSnapshot:
+    | { targets: AgentTargetOption[]; loadedAt: number }
+    | undefined;
+  let catalogPromise: Promise<LoadedNextopAgentCatalog> | undefined;
+  const loadCatalog = (): Promise<LoadedNextopAgentCatalog> => {
+    if (
+      catalogSnapshot &&
+      Math.max(0, now() - catalogSnapshot.loadedAt) < catalogTtlMs
+    ) {
+      return Promise.resolve({ ...catalogSnapshot, stale: false });
     }
-    return catalogPromise;
+    if (catalogPromise) {
+      return catalogPromise;
+    }
+
+    const startedAt = now();
+    const pending = readNextopAgentCatalogWithRetry(
+      runner,
+      providerDetectionTimeoutMs,
+      providerDetectionOverallTimeoutMs,
+      providerDetectionRetries,
+      providerDetectionRetryBackoffMs,
+      now,
+    )
+      .then((catalog) => {
+        const loadedAt = now();
+        catalogSnapshot = { catalog, loadedAt };
+        console.info(
+          `[agent-runtime:nextop-cli] agent catalog loaded in ${Math.max(0, now() - startedAt)}ms`,
+        );
+        return { catalog, loadedAt, stale: false };
+      })
+      .catch((error) => {
+        const staleAgeMs = catalogSnapshot
+          ? Math.max(0, now() - catalogSnapshot.loadedAt)
+          : Number.POSITIVE_INFINITY;
+        if (
+          catalogSnapshot &&
+          catalogMaxStaleAgeMs > 0 &&
+          staleAgeMs <= catalogMaxStaleAgeMs &&
+          isTransientCatalogFailure(error)
+        ) {
+          console.warn(
+            `[agent-runtime:nextop-cli] agent catalog refresh failed; using cached catalog: ${errorMessage(error)}`,
+          );
+          return { ...catalogSnapshot, stale: true };
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (catalogPromise === pending) {
+          catalogPromise = undefined;
+        }
+      });
+    catalogPromise = pending;
+    return pending;
+  };
+
+  const listTargetCatalog = async (): Promise<AgentTargetCatalogResult> => {
+    const loaded = await loadCatalog();
+    if (loaded.stale && targetSnapshot?.loadedAt === loaded.loadedAt) {
+      return {
+        targets: targetSnapshot.targets,
+        freshness: "stale",
+        loadedAt: loaded.loadedAt,
+        warning:
+          "Agent discovery is temporarily unavailable. Showing recently cached agents.",
+      };
+    }
+
+    const targets = await Promise.all(
+      loaded.catalog.targets.map(async (spec): Promise<AgentTargetOption> => {
+        return {
+          id: spec.id,
+          name: spec.name,
+          provider: spec.provider,
+          supported: spec.supported,
+          models: spec.supported
+            ? await readAgentModels(spec, runner, providerModelsTimeoutMs)
+            : [],
+          isDefault: spec.isDefault,
+          reason: spec.reason,
+        };
+      }),
+    );
+    const combinedTargets =
+      options.includeMockTarget === false
+        ? targets
+        : [...(await mockAdapter.listTargets()), ...targets];
+    if (!loaded.stale) {
+      targetSnapshot = {
+        targets: combinedTargets,
+        loadedAt: loaded.loadedAt,
+      };
+    }
+    return {
+      targets: combinedTargets,
+      freshness: loaded.stale ? "stale" : "fresh",
+      loadedAt: loaded.loadedAt,
+      ...(loaded.stale
+        ? {
+            warning:
+              "Agent discovery is temporarily unavailable. Showing recently cached agents.",
+          }
+        : {}),
+    };
   };
 
   const adapter: AgentRuntimeAdapter = {
     id: "nextop-cli",
     label: "Nextop CLI agent adapter",
     async listTargets(): Promise<AgentTargetOption[]> {
-      const catalog = await loadCatalog(true);
-      const targets = await Promise.all(
-        catalog.targets.map(async (spec): Promise<AgentTargetOption> => {
-          return {
-            id: spec.id,
-            name: spec.name,
-            provider: spec.provider,
-            supported: spec.supported,
-            models: spec.supported
-              ? await readAgentModels(spec, runner, providerModelsTimeoutMs)
-              : [],
-            isDefault: spec.isDefault,
-            reason: spec.reason,
-          };
-        }),
-      );
-
-      if (options.includeMockTarget === false) {
-        return targets;
-      }
-
-      return [...(await mockAdapter.listTargets()), ...targets];
+      return (await listTargetCatalog()).targets;
     },
+    listTargetCatalog,
     async startSession(input: {
       agent: string;
       model?: string;
       cwd: string;
       prompt: string;
     }): Promise<AgentSessionRef> {
-      const target = findNextopAgentTarget(await loadCatalog(), input.agent);
+      const target = findNextopAgentTarget(
+        (await loadCatalog()).catalog,
+        input.agent,
+      );
       if (!target) {
         throw new Error(
           `Unknown agent target "${input.agent}". Run tutti --json agent list to discover available agents.`,
@@ -231,7 +350,10 @@ export function createNextopCliAgentAdapter(
         return;
       }
 
-      const target = findNextopAgentTarget(await loadCatalog(), input.agent);
+      const target = findNextopAgentTarget(
+        (await loadCatalog()).catalog,
+        input.agent,
+      );
       if (!target) {
         yield {
           type: "error",
@@ -676,6 +798,97 @@ async function readNextopAgentCatalog(
   );
 }
 
+async function readNextopAgentCatalogWithRetry(
+  runner: NextopCliRunner,
+  attemptTimeoutMs: number,
+  overallTimeoutMs: number,
+  retries: number,
+  retryBackoffMs: number,
+  now: () => number,
+): Promise<NextopAgentCatalog> {
+  const deadline = now() + overallTimeoutMs;
+  let attempt = 0;
+  while (true) {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      throw new Error(
+        `Nextop CLI agent catalog detection exceeded ${overallTimeoutMs}ms.`,
+      );
+    }
+    const timeoutForAttemptMs = Math.max(
+      1,
+      Math.min(attemptTimeoutMs, remainingMs),
+    );
+    const deadlineBoundRunner: NextopCliRunner = (args, options) => {
+      const remainingForCommandMs = deadline - now();
+      if (remainingForCommandMs <= 0) {
+        return Promise.reject(
+          new Error(
+            `Nextop CLI agent catalog detection exceeded ${overallTimeoutMs}ms.`,
+          ),
+        );
+      }
+      return runner(args, {
+        ...options,
+        timeoutMs: Math.max(
+          1,
+          Math.min(
+            options?.timeoutMs ?? timeoutForAttemptMs,
+            remainingForCommandMs,
+          ),
+        ),
+      });
+    };
+    try {
+      return await readNextopAgentCatalog(
+        deadlineBoundRunner,
+        timeoutForAttemptMs,
+      );
+    } catch (error) {
+      if (attempt >= retries || !isNextopCliTimeout(error)) {
+        throw error;
+      }
+      attempt += 1;
+      console.warn(
+        `[agent-runtime:nextop-cli] agent catalog detection timed out; retrying (${attempt}/${retries})`,
+      );
+      const remainingAfterAttemptMs = deadline - now();
+      if (remainingAfterAttemptMs <= 0) {
+        throw error;
+      }
+      const backoffMs = Math.min(
+        Math.max(0, retryBackoffMs),
+        Math.max(0, remainingAfterAttemptMs - 1),
+      );
+      if (backoffMs > 0) {
+        await delay(backoffMs);
+      }
+    }
+  }
+}
+
+function isNextopCliTimeout(error: unknown): boolean {
+  const message = errorMessage(error);
+  return (
+    message.includes("Nextop CLI timed out after") ||
+    message.includes("agent catalog detection exceeded")
+  );
+}
+
+function isTransientCatalogFailure(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return (
+    isNextopCliTimeout(error) ||
+    message.includes("temporarily unavailable") ||
+    message.includes("daemon is not reachable") ||
+    message.includes("connection refused") ||
+    message.includes("connection reset") ||
+    message.includes("database is locked") ||
+    message.includes("resource busy") ||
+    /\b(eagain|econnrefused|econnreset|epipe|etimedout)\b/.test(message)
+  );
+}
+
 export function isUnknownAgentListCommand(error: unknown): boolean {
   const message = error instanceof Error ? error.message.trim() : "";
   const detail = message.startsWith("Nextop CLI failed: ")
@@ -904,7 +1117,9 @@ function runNextop(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let terminationTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const settle = (callback: () => void) => {
       if (settled) {
@@ -913,6 +1128,9 @@ function runNextop(
       settled = true;
       if (timeout) {
         clearTimeout(timeout);
+      }
+      if (terminationTimeout) {
+        clearTimeout(terminationTimeout);
       }
       options.signal?.removeEventListener("abort", onAbort);
       callback();
@@ -924,12 +1142,11 @@ function runNextop(
 
     if (options.timeoutMs && options.timeoutMs > 0) {
       timeout = setTimeout(() => {
+        timedOut = true;
         child.kill("SIGTERM");
-        settle(() =>
-          reject(
-            new Error(`Nextop CLI timed out after ${options.timeoutMs}ms.`),
-          ),
-        );
+        terminationTimeout = setTimeout(() => {
+          child.kill("SIGKILL");
+        }, CLI_TERMINATION_GRACE_MS);
       }, options.timeoutMs);
     }
 
@@ -943,6 +1160,9 @@ function runNextop(
       stderr += chunk;
     });
     child.on("error", (error) => {
+      if (timedOut) {
+        return;
+      }
       settle(() =>
         reject(
           new Error(
@@ -953,6 +1173,10 @@ function runNextop(
     });
     child.on("close", (code, signal) => {
       settle(() => {
+        if (timedOut) {
+          reject(new Error(`Nextop CLI timed out after ${options.timeoutMs}ms.`));
+          return;
+        }
         if (code === 0) {
           resolve({ stdout, stderr });
           return;
@@ -1283,6 +1507,19 @@ function readPositiveIntegerEnv(name: string): number | undefined {
   }
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function readNonNegativeIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isAbortError(error: unknown): boolean {

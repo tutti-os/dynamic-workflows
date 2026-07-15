@@ -1,6 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { listAgentTargets } from "@/components/workflow/workflowApiService";
-import type { AgentTargetOption } from "@/lib/agents/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  listAgentTargets,
+  readApiJsonError,
+} from "@/components/workflow/workflowApiService";
+import type {
+  AgentTargetCatalogResult,
+  AgentTargetOption,
+} from "@/lib/agents/types";
 
 export const DEFAULT_MODEL_VALUE = "__default__";
 
@@ -14,12 +20,62 @@ const FALLBACK_AGENTS: AgentTargetOption[] = [
   },
 ];
 
+type AgentCatalogLoadHandlers = {
+  onStart: () => void;
+  onSuccess: (catalog: AgentTargetCatalogResult) => void;
+  onError: (error: unknown) => void;
+  onSettled: () => void;
+};
+
+export function createAgentCatalogLoadCoordinator() {
+  let requestVersion = 0;
+  let activeController: AbortController | undefined;
+
+  return {
+    async run(
+      load: (signal: AbortSignal) => Promise<AgentTargetCatalogResult>,
+      handlers: AgentCatalogLoadHandlers,
+    ): Promise<void> {
+      activeController?.abort();
+      const controller = new AbortController();
+      const version = ++requestVersion;
+      activeController = controller;
+      handlers.onStart();
+
+      try {
+        const catalog = await load(controller.signal);
+        if (version === requestVersion && !controller.signal.aborted) {
+          handlers.onSuccess(catalog);
+        }
+      } catch (error) {
+        if (version === requestVersion && !controller.signal.aborted) {
+          handlers.onError(error);
+        }
+      } finally {
+        if (version === requestVersion && !controller.signal.aborted) {
+          activeController = undefined;
+          handlers.onSettled();
+        }
+      }
+    },
+    cancel(): void {
+      requestVersion += 1;
+      activeController?.abort();
+      activeController = undefined;
+    },
+  };
+}
+
 export function useWorkflowRunSettings(): {
   agents: AgentTargetOption[];
   effectiveAgent: string;
   model: string;
   modelOptions: string[];
   cwd: string;
+  agentsLoading: boolean;
+  agentsError?: string;
+  agentsWarning?: string;
+  retryAgents: () => Promise<void>;
   setAgent: (value: string) => void;
   setModel: (value: string) => void;
   setCwd: (value: string) => void;
@@ -28,24 +84,68 @@ export function useWorkflowRunSettings(): {
   const [agent, setAgentState] = useState("mock");
   const [model, setModel] = useState("");
   const [cwd, setCwd] = useState("");
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState<string | undefined>();
+  const [agentsWarning, setAgentsWarning] = useState<string | undefined>();
+  const hasLoadedCatalogRef = useRef(false);
+  const agentRef = useRef(agent);
+  const loadCoordinatorRef = useRef<
+    ReturnType<typeof createAgentCatalogLoadCoordinator>
+  >(undefined);
+  loadCoordinatorRef.current ??= createAgentCatalogLoadCoordinator();
+  const loadCoordinator = loadCoordinatorRef.current;
+
+  const loadAgents = useCallback(
+    () =>
+      loadCoordinator.run(listAgentTargets, {
+        onStart: () => setAgentsLoading(true),
+        onSuccess: (catalog) => {
+          const nextAgents =
+            catalog.targets.length > 0 ? catalog.targets : FALLBACK_AGENTS;
+          setAgents(nextAgents);
+          const preferredAgent = selectDefaultAgentTarget(nextAgents);
+          if (preferredAgent) {
+            const currentAgent = agentRef.current;
+            const nextAgent =
+              hasLoadedCatalogRef.current &&
+              nextAgents.some(
+                (item) => item.id === currentAgent && item.supported,
+              )
+                ? currentAgent
+                : preferredAgent.id;
+            if (nextAgent !== currentAgent) {
+              agentRef.current = nextAgent;
+              setAgentState(nextAgent);
+              setModel("");
+            }
+          }
+          hasLoadedCatalogRef.current = true;
+          setAgentsError(undefined);
+          setAgentsWarning(
+            catalog.freshness === "stale"
+              ? catalog.warning ??
+                  "Agent discovery is temporarily unavailable. Showing recently cached agents."
+              : undefined,
+          );
+        },
+        onError: (error) => {
+          const apiError = readApiJsonError(
+            error,
+            "AGENT_TARGET_DETECTION_FAILED",
+          );
+          setAgents(FALLBACK_AGENTS);
+          setAgentsWarning(undefined);
+          setAgentsError(apiError.message);
+        },
+        onSettled: () => setAgentsLoading(false),
+      }),
+    [loadCoordinator],
+  );
 
   useEffect(() => {
-    listAgentTargets()
-      .then((targets) => {
-        const nextAgents =
-          targets.length > 0
-            ? targets
-            : FALLBACK_AGENTS;
-        setAgents(nextAgents);
-        const preferredAgent = selectDefaultAgentTarget(nextAgents);
-        if (preferredAgent) {
-          setAgentState(preferredAgent.id);
-        }
-      })
-      .catch(() => {
-        setAgents(FALLBACK_AGENTS);
-      });
-  }, []);
+    void loadAgents();
+    return () => loadCoordinator.cancel();
+  }, [loadAgents, loadCoordinator]);
 
   const effectiveAgent = agent || FALLBACK_AGENTS[0].id;
   const selectedAgent =
@@ -56,6 +156,7 @@ export function useWorkflowRunSettings(): {
   );
 
   function setAgent(value: string) {
+    agentRef.current = value;
     setAgentState(value);
     setModel("");
   }
@@ -66,6 +167,10 @@ export function useWorkflowRunSettings(): {
     model,
     modelOptions,
     cwd,
+    agentsLoading,
+    agentsError,
+    agentsWarning,
+    retryAgents: loadAgents,
     setAgent,
     setModel,
     setCwd,
