@@ -25,6 +25,8 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
     <div className="loop-mini-flow">
       <div aria-label="Loop step flow" className="loop-mini-flow-steps">
         {props.loop.steps.map((step, index) => {
+          const isFirstIterationEntry =
+            props.loop.firstIteration?.startAt === step.id;
           if (step.kind === "human") {
             return (
               <div className="loop-mini-flow-step-group" key={step.id}>
@@ -50,6 +52,9 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                   </div>
                   <div className="loop-mini-flow-step-session">{step.id} · waits for input</div>
                   <div className="loop-mini-flow-badges">
+                    {isFirstIterationEntry ? (
+                      <span className="loop-step-badge">first entry</span>
+                    ) : null}
                     <span className="loop-step-badge">human</span>
                     <span className="loop-step-badge">{step.human.actions.length} actions</span>
                   </div>
@@ -103,6 +108,9 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                   {step.id} · {sessionView.label}
                 </div>
                 <div className="loop-mini-flow-badges">
+                  {isFirstIterationEntry ? (
+                    <span className="loop-step-badge">first entry</span>
+                  ) : null}
                   <span className="loop-step-badge">{sessionView.badge}</span>
                   {targetView ? (
                     <span className="loop-step-badge" title={targetView.title}>
@@ -129,6 +137,15 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
         })}
       </div>
       <div className="loop-mini-flow-footer">
+        {props.loop.firstIteration ? (
+          <div
+            className="loop-mini-flow-until"
+            title={`The first iteration starts at ${props.loop.firstIteration.startAt}; later iterations run every step.`}
+          >
+            <ArrowRight aria-hidden size={13} strokeWidth={2.2} />
+            <span>first starts at {props.loop.firstIteration.startAt}</span>
+          </div>
+        ) : null}
         <div
           className="loop-mini-flow-until"
           title={untilView}

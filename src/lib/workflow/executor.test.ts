@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunInput, AgentRuntimeEvent } from "@/lib/agents/types";
@@ -953,6 +954,225 @@ const delivery = await loop({
         status: "completed",
       }),
     );
+  });
+
+  it("starts the first loop iteration at reviewer and exits without an unnecessary fix", async () => {
+    const calls: AgentRunInput[] = [];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield { type: "text_delta", text: "PASS" };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const acceptance = await loop({
+  id: "acceptance",
+  maxIterations: 3,
+  firstIteration: { startAt: "reviewer" },
+  steps: [
+    agent({ id: "rd_fix", label: "RD Fix", prompt: "fix {{reviewer}}" }),
+    agent({ id: "reviewer", label: "Reviewer", prompt: "review" }),
+  ],
+  until: { source: "reviewer", finalStatus: "PASS" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(calls.map((call) => call.title)).toEqual(["Reviewer"]);
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      type: "run_completed",
+      status: "completed",
+    }));
+  });
+
+  it("reuses one RD session across human alignment and reviewer repair loops", async () => {
+    const calls: AgentRunInput[] = [];
+    let reviewerRuns = 0;
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      const isReviewer = input.title === "Reviewer";
+      if (isReviewer) {
+        reviewerRuns += 1;
+      }
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId:
+            input.resumeSessionId ?? (isReviewer ? "reviewer-session" : "rd-session"),
+          agent: input.agent,
+          status: "running",
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: isReviewer && reviewerRuns === 1 ? "FAIL" : isReviewer ? "PASS" : "work",
+      };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const alignment = await loop({
+  id: "alignment",
+  maxIterations: 2,
+  steps: [
+    agent({
+      id: "rd",
+      label: "RD",
+      session: { mode: "inherit", key: "rd_room" },
+      prompt: "implement",
+      appendPrompt: "revise {{human_review.values.comment}}",
+    }),
+    human({ id: "human_review", actions: [{ id: "approve", label: "Approve" }] }),
+  ],
+  until: { source: "human_review.action", equals: "approve" },
+})
+const acceptance = await loop({
+  id: "acceptance",
+  inputs: { alignment },
+  maxIterations: 3,
+  firstIteration: { startAt: "reviewer" },
+  steps: [
+    agent({
+      id: "rd_fix",
+      label: "RD Fix",
+      session: { mode: "inherit", key: "rd_room" },
+      prompt: "fix {{reviewer}}",
+      appendPrompt: "fix {{reviewer}}",
+    }),
+    agent({
+      id: "reviewer",
+      label: "Reviewer",
+      session: { mode: "inherit", key: "reviewer_room" },
+      prompt: "review",
+      appendPrompt: "review again",
+    }),
+  ],
+  until: { source: "reviewer", finalStatus: "PASS" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+      onHumanTask: (request) => humanTask(request, "resolved", {
+        action: "approve",
+        values: {},
+      }),
+    })) {
+      events.push(event);
+    }
+
+    expect(calls.map((call) => call.title)).toEqual([
+      "RD",
+      "Reviewer",
+      "RD Fix",
+      "Reviewer",
+    ]);
+    expect(calls.map((call) => call.resumeSessionId)).toEqual([
+      undefined,
+      undefined,
+      "rd-session",
+      "reviewer-session",
+    ]);
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      type: "run_completed",
+      status: "completed",
+    }));
+  });
+
+  it("runs the human-gated RD blueprint through revise, acceptance repair, and submission", async () => {
+    const script = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/lib/workflow/blueprints/rd-human-acceptance-delivery-v1.workflow.js",
+      ),
+      "utf8",
+    );
+    const calls: AgentRunInput[] = [];
+    let reviewerRuns = 0;
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      const isRd = input.title === "RD 工程师" || input.title === "RD 修复";
+      const isReviewer = input.title === "验收 Reviewer";
+      if (isReviewer) {
+        reviewerRuns += 1;
+      }
+      if (isRd || isReviewer) {
+        yield {
+          type: "session_ref",
+          session: {
+            agentSessionId:
+              input.resumeSessionId ?? (isReviewer ? "reviewer-session" : "rd-session"),
+            agent: input.agent,
+            status: "running",
+          },
+        };
+      }
+      yield {
+        type: "text_delta",
+        text: isReviewer
+          ? reviewerRuns === 1
+            ? "阻断：缺少边界测试\nFAIL"
+            : "验收通过\nPASS"
+          : input.title === "提交 MR"
+            ? "MR prepared"
+            : "implementation updated",
+      };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script,
+      agent: "mock",
+      cwd: process.cwd(),
+      inputs: { requirement: "实现并验证 Human gate 研发流程" },
+      onHumanTask: (request) =>
+        humanTask(request, "resolved", request.iteration === 1
+          ? {
+              action: "revise",
+              values: { comment: "请补充边界测试" },
+            }
+          : { action: "approve", values: {} }),
+    })) {
+      events.push(event);
+    }
+
+    expect(calls.map((call) => call.title)).toEqual([
+      "RD 工程师",
+      "RD 工程师",
+      "验收 Reviewer",
+      "RD 修复",
+      "验收 Reviewer",
+      "提交 MR",
+    ]);
+    expect(calls.map((call) => call.resumeSessionId)).toEqual([
+      undefined,
+      "rd-session",
+      undefined,
+      "rd-session",
+      "reviewer-session",
+      undefined,
+    ]);
+    expect(calls[1].prompt).toContain("请补充边界测试");
+    expect(calls[3].prompt).toContain("阻断：缺少边界测试");
+    expect(calls[5].prompt).toContain("Stop reason: until_matched");
+    expect(events.at(-1)).toEqual(expect.objectContaining({
+      type: "run_completed",
+      status: "completed",
+    }));
   });
 
   it("fails by default when max_iterations_reached before until matches", async () => {

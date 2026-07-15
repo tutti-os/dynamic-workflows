@@ -592,7 +592,16 @@ async function* runLoopNode(input: {
         message: `Loop "${input.node.id}" iteration ${iteration} started.`,
       });
 
-      for (const step of loop.steps) {
+      const iterationSteps =
+        iteration === 1 && loop.firstIteration
+          ? loop.steps.slice(
+              loop.steps.findIndex(
+                (step) => step.id === loop.firstIteration?.startAt,
+              ),
+            )
+          : loop.steps;
+
+      for (const step of iterationSteps) {
         throwIfAborted(input.request.signal);
         if (currentStepOutputs[step.id] !== undefined) {
           yield loopStatusEvent({

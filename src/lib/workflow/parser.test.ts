@@ -447,6 +447,57 @@ const last_line = await loop({
     });
   });
 
+  it("parses a loop that enters the first iteration at a later step", () => {
+    const parsed = parseWorkflowScript(`
+const acceptance = await loop({
+  id: "acceptance",
+  maxIterations: 3,
+  firstIteration: { startAt: "reviewer" },
+  steps: [
+    agent({ id: "rd_fix", prompt: "Fix {{reviewer}}" }),
+    agent({ id: "reviewer", prompt: "Review" }),
+  ],
+  until: { source: "reviewer", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes[0].loop?.firstIteration).toEqual({ startAt: "reviewer" });
+  });
+
+  it("validates firstIteration.startAt and requires the until step on the first iteration", () => {
+    const parsed = parseWorkflowScript(`
+const missing = await loop({
+  id: "missing",
+  maxIterations: 1,
+  firstIteration: { startAt: "unknown" },
+  steps: [agent({ id: "reviewer", prompt: "Review" })],
+  until: { source: "reviewer", finalStatus: "PASS" },
+})
+const skipped_until = await loop({
+  id: "skipped_until",
+  maxIterations: 1,
+  firstIteration: { startAt: "reviewer" },
+  steps: [
+    agent({ id: "decision", prompt: "Decide" }),
+    agent({ id: "reviewer", prompt: "Review" }),
+  ],
+  until: { source: "decision", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        severity: "error",
+        message: 'loop firstIteration.startAt "unknown" must match a loop step id.',
+      }),
+      expect.objectContaining({
+        severity: "error",
+        message: 'loop until.source "decision" must run on the first iteration at or after firstIteration.startAt.',
+      }),
+    ]));
+  });
+
   it("reports missing and blank loop until finalStatus", () => {
     const parsed = parseWorkflowScript(`
 const missing = await loop({
@@ -720,5 +771,31 @@ const broken = await loop({
     expect(acceptance?.templateRefs).not.toContain("rd");
     expect(acceptance?.prompt).not.toContain("{{rd}}");
     expect(acceptance?.appendPrompt).not.toContain("{{rd}}");
+  });
+
+  it("keeps the human-gated RD blueprint on one RD session across both loops", () => {
+    const script = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/lib/workflow/blueprints/rd-human-acceptance-delivery-v1.workflow.js",
+      ),
+      "utf8",
+    );
+    const parsed = assertWorkflowScriptValid(script);
+    const alignment = parsed.nodes.find((node) => node.id === "human_alignment");
+    const acceptance = parsed.nodes.find((node) => node.id === "acceptance_loop");
+    const rd = alignment?.loop?.steps.find((step) => step.id === "rd");
+    const rdFix = acceptance?.loop?.steps.find((step) => step.id === "rd_fix");
+    const reviewer = acceptance?.loop?.steps.find((step) => step.id === "reviewer");
+
+    expect(parsed.meta.requiresCwd).toBe(true);
+    expect(parsed.requiredInputNames).toEqual(["requirement"]);
+    expect(rd?.session).toEqual({ mode: "inherit", key: "rd_room" });
+    expect(rdFix?.session).toEqual({ mode: "inherit", key: "rd_room" });
+    expect(reviewer?.session).toEqual({ mode: "inherit", key: "reviewer_room" });
+    expect(acceptance?.loop?.firstIteration).toEqual({ startAt: "reviewer" });
+    expect(acceptance?.inputs).toContainEqual(expect.objectContaining({
+      sourceNodeId: "human_alignment",
+    }));
   });
 });

@@ -126,6 +126,9 @@ export type WorkflowLoopUntil =
 export type WorkflowLoopSpec = {
   maxIterations: number;
   onMaxIterations: "fail" | "complete";
+  firstIteration?: {
+    startAt: string;
+  };
   session?: WorkflowSessionSpec;
   steps: WorkflowLoopStep[];
   until: WorkflowLoopUntil;

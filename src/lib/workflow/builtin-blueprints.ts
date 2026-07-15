@@ -46,6 +46,30 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       ),
     ),
   },
+  {
+    id: "rd-human-acceptance-delivery-v1",
+    title: "RD Human-Gated Acceptance Delivery",
+    description:
+      "An RD first iterates with a person, then enters independent acceptance. Reviewer failures return directly to the same RD session for repair without repeating the human gate.",
+    category: "coding",
+    tags: ["human", "loop", "rd", "acceptance", "reviewer", "mr", "session"],
+    difficulty: "advanced",
+    requiresCwd: true,
+    patternSummary:
+      "A human alignment loop approves the RD implementation before an acceptance loop starts directly at the reviewer. Failed reviews run RD repair and review again. Both RD steps share rd_room across loop boundaries, while the reviewer keeps a separate inherited session.",
+    useCases: [
+      "Align implementation direction with a person before formal acceptance.",
+      "Send acceptance failures directly back to the original RD context.",
+      "Avoid making a person approve every reviewer-driven repair cycle.",
+      "Create an MR/PR only after independent acceptance passes.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL(
+        "./blueprints/rd-human-acceptance-delivery-v1.workflow.js",
+        import.meta.url,
+      ),
+    ),
+  },
 ];
 
 function readBuiltinBlueprintScript(fileUrl: URL): string {

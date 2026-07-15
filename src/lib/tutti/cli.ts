@@ -508,6 +508,7 @@ function parsedSummary(parsed: ParsedWorkflow) {
         ? {
             maxIterations: node.loop.maxIterations,
             onMaxIterations: node.loop.onMaxIterations,
+            firstIteration: node.loop.firstIteration,
             cwd: node.cwd,
             session: node.loop.session,
             until: node.loop.until,

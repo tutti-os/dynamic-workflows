@@ -231,7 +231,7 @@ function createFlowLayoutKey(parsed: ParsedWorkflow): string {
       if (node.loop) {
         return `${node.id}:${node.phase ?? "Workflow"}:${node.loop.steps
           .map((step) => step.id)
-          .join(",")}:${node.loop.maxIterations}:${formatLoopUntil(node.loop.until)}`;
+          .join(",")}:${node.loop.maxIterations}:${node.loop.firstIteration?.startAt ?? "all"}:${formatLoopUntil(node.loop.until)}`;
       }
 
       return `${node.id}:${node.phase ?? "Workflow"}`;

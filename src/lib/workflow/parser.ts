@@ -312,6 +312,7 @@ function addLoopNode(
   const steps = readLoopSteps(options, state);
   const stepIds = new Set(steps.map((step) => step.id));
   const until = readLoopUntil(options, state, stepIds);
+  const firstIteration = readLoopFirstIteration(options, state, steps, until);
   const templateRefs = [
     ...new Set(
       steps.flatMap((step) =>
@@ -337,7 +338,7 @@ function addLoopNode(
   if (steps.length === 0) {
     state.diagnostics.push({
       severity: "error",
-      message: "loop(...) requires at least one agent step in steps.",
+      message: "loop(...) requires at least one step in steps.",
       range: readObjectPropertyValueRange(options, "steps") ?? toRange(callExpression),
     });
   }
@@ -345,6 +346,7 @@ function addLoopNode(
   const loop: WorkflowLoopSpec = {
     maxIterations: Number.isInteger(maxIterations) ? maxIterations : 1,
     onMaxIterations,
+    ...(firstIteration ? { firstIteration } : {}),
     ...(session ? { session } : {}),
     steps,
     until,
@@ -372,6 +374,52 @@ function addLoopNode(
     state.variableToNodeId[variableName] = node.id;
   }
   addInputEdges(node, state);
+}
+
+function readLoopFirstIteration(
+  options: AnyNode | undefined,
+  state: ParserState,
+  steps: WorkflowLoopStep[],
+  until: WorkflowLoopUntil,
+): WorkflowLoopSpec["firstIteration"] {
+  const value = readObjectPropertyValue(options, "firstIteration");
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value.type !== "ObjectExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "loop firstIteration must be an object with a startAt step id.",
+      range: toRange(value),
+    });
+    return undefined;
+  }
+
+  const startAt = readObjectString(value, "startAt")?.trim() ?? "";
+  const startIndex = steps.findIndex((step) => step.id === startAt);
+  if (!startAt || startIndex < 0) {
+    state.diagnostics.push({
+      severity: "error",
+      message: startAt
+        ? `loop firstIteration.startAt "${startAt}" must match a loop step id.`
+        : "loop firstIteration.startAt is required.",
+      range: readObjectPropertyValueRange(value, "startAt") ?? toRange(value),
+    });
+    return undefined;
+  }
+
+  const untilStepIndex = steps.findIndex(
+    (step) => step.id === templateRefRoot(until.source),
+  );
+  if (untilStepIndex >= 0 && untilStepIndex < startIndex) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `loop until.source "${until.source}" must run on the first iteration at or after firstIteration.startAt.`,
+      range: readObjectPropertyValueRange(options, "until"),
+    });
+  }
+
+  return { startAt };
 }
 
 function addHumanNode(

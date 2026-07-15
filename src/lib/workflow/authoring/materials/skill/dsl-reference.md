@@ -141,6 +141,7 @@ loop({
 ```
 
 - `maxIterations` must be an integer from 1 to 10.
+- `firstIteration: { startAt: "<step id>" }` optionally starts only the first iteration at a later step. Every subsequent iteration runs all steps in their declared order. The `until.source` step must not be skipped by this entry point. This is useful for `[repair, reviewer]`: review immediately, then repair and re-review only after a failure.
 - `onMaxIterations` decides what happens when the loop exhausts its iterations without the `until` status: `"fail"` (the default) fails the run, `"complete"` continues to the next node. Use `"complete"` only when downstream steps can safely run on unaccepted work.
 - Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `cwd`, and `session`.
 - A loop can set `agent`, `model`, and `cwd` as defaults for its steps; step values override loop values.

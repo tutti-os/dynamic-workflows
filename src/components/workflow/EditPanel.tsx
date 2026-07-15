@@ -71,6 +71,12 @@ export function EditPanel(props: EditPanelProps) {
                   </Button>
                 ))}
               </div>
+              {selectedNode.loop.firstIteration ? (
+                <div className="field-hint">
+                  First iteration starts at {selectedNode.loop.firstIteration.startAt};
+                  later iterations run every step.
+                </div>
+              ) : null}
             </div>
           ) : null}
 

@@ -63,6 +63,23 @@ const delivery = loop({
 });
 ```
 
+When the first evaluation should skip preparation work, set a first-iteration entry point. The first iteration starts at that step; every later iteration runs the full ordered step list:
+
+```js
+const acceptance = loop({
+  id: "acceptance",
+  maxIterations: 4,
+  firstIteration: { startAt: "reviewer" },
+  steps: [
+    agent({ id: "rd_fix", prompt: "Fix the latest reviewer blockers: {{reviewer}}" }),
+    agent({ id: "reviewer", prompt: "Review the repository. End with PASS or FAIL." }),
+  ],
+  until: { source: "reviewer", finalStatus: "PASS" },
+});
+```
+
+Here the initial repository state is reviewed immediately. A failed review makes the next iteration run `rd_fix` and then `reviewer`. `maxIterations` counts reviewer evaluation cycles, including that first review.
+
 ## Human Tasks
 
 Use `human({...})` as a top-level node or loop step to persist a request for user input. The dependent branch waits without keeping the runner process alive; unrelated branches may continue and a run can contain multiple pending tasks.
