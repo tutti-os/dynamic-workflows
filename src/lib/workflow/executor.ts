@@ -26,8 +26,10 @@ import type {
   WorkflowHumanTask,
   WorkflowInputValue,
   WorkflowLoopRecoveryState,
+  WorkflowLoopStepExecutionRef,
   WorkflowLoopStep,
   WorkflowNode,
+  WorkflowNodeStatus,
   WorkflowRunRecoveryState,
   WorkflowRunEvent,
   WorkflowRunRequest,
@@ -600,10 +602,38 @@ async function* runLoopNode(input: {
               ),
             )
           : loop.steps;
+      const iterationStepIds = new Set(iterationSteps.map((step) => step.id));
+      for (const skippedStep of loop.steps.filter(
+        (step) => !iterationStepIds.has(step.id),
+      )) {
+        yield loopStepStateEvent({
+          runId: input.runId,
+          loopStep: createLoopStepExecutionRef(
+            input.node.id,
+            iteration,
+            skippedStep.id,
+          ),
+          step: skippedStep,
+          status: "skipped",
+        });
+      }
 
       for (const step of iterationSteps) {
         throwIfAborted(input.request.signal);
+        const loopStep = createLoopStepExecutionRef(
+          input.node.id,
+          iteration,
+          step.id,
+        );
         if (currentStepOutputs[step.id] !== undefined) {
+          yield loopStepStateEvent({
+            runId: input.runId,
+            loopStep,
+            step,
+            status: "completed",
+            restored: true,
+            output: currentStepOutputs[step.id],
+          });
           yield loopStatusEvent({
             runId: input.runId,
             nodeId: input.node.id,
@@ -615,85 +645,105 @@ async function* runLoopNode(input: {
         const syntheticId = createLoopStepId(input.node.id, iteration, step.id);
         const stepCwd = resolveEffectiveNodeCwd(loopCwd, step.cwd);
         let stepOutput: WorkflowValue;
-        if (step.kind === "human") {
-          await saveLoopCheckpoint(input.request, {
-            runId: input.runId,
-            nodeId: input.node.id,
-            state: {
-              nextIteration: iteration,
-              currentIteration: iteration,
-              currentStepOutputs: { ...currentStepOutputs },
-              previousStepOutputs: { ...previousStepOutputs },
-              iterations: [...iterations],
-            },
-          });
-          const humanOutput = yield* runLoopHumanStep({
-            runId: input.runId,
-            nodeId: input.node.id,
-            syntheticId,
-            step,
-            iteration,
-            request: input.request,
-            spec: renderHumanSpec(step.human, (name) =>
-              resolveLoopTemplateValue({
-                name,
-                iteration,
-                loopNode: input.node,
-                workflowOutputs: input.outputs,
-                workflowInputs: input.request.inputs,
-                workflowCwd: stepCwd,
-                previousStepOutputs,
-                currentStepOutputs,
-              }),
-            ),
-          });
-          if (humanOutput === undefined) {
-            return;
+        try {
+          if (step.kind === "human") {
+            await saveLoopCheckpoint(input.request, {
+              runId: input.runId,
+              nodeId: input.node.id,
+              state: {
+                nextIteration: iteration,
+                currentIteration: iteration,
+                currentStepOutputs: { ...currentStepOutputs },
+                previousStepOutputs: { ...previousStepOutputs },
+                iterations: [...iterations],
+              },
+            });
+            const humanOutput = yield* runLoopHumanStep({
+              runId: input.runId,
+              nodeId: input.node.id,
+              loopStep,
+              syntheticId,
+              step,
+              iteration,
+              request: input.request,
+              spec: renderHumanSpec(step.human, (name) =>
+                resolveLoopTemplateValue({
+                  name,
+                  iteration,
+                  loopNode: input.node,
+                  workflowOutputs: input.outputs,
+                  workflowInputs: input.request.inputs,
+                  workflowCwd: stepCwd,
+                  previousStepOutputs,
+                  currentStepOutputs,
+                }),
+              ),
+            });
+            if (humanOutput === undefined) {
+              return;
+            }
+            stepOutput = humanOutput;
+          } else {
+            const prompt = renderLoopStepPrompt({
+              template: step.prompt,
+              step,
+              iteration,
+              loopNode: input.node,
+              workflowOutputs: input.outputs,
+              workflowInputs: input.request.inputs,
+              workflowCwd: stepCwd,
+              previousStepOutputs,
+              currentStepOutputs,
+            });
+            const appendPrompt = step.appendPrompt
+              ? renderLoopStepPrompt({
+                  template: step.appendPrompt,
+                  step,
+                  iteration,
+                  loopNode: input.node,
+                  workflowOutputs: input.outputs,
+                  workflowInputs: input.request.inputs,
+                  workflowCwd: stepCwd,
+                  previousStepOutputs,
+                  currentStepOutputs,
+                })
+              : undefined;
+            stepOutput = yield* runLoopAgentStep({
+              runId: input.runId,
+              nodeId: input.node.id,
+              loopStep,
+              syntheticId,
+              step,
+              prompt,
+              appendPrompt,
+              defaultAgent: agent,
+              defaultModel: model,
+              defaultSession: loop.session,
+              cwd: stepCwd,
+              workflowInputs: input.request.inputs,
+              signal: input.request.signal,
+              sessionIdsByKey: input.sessionIdsByKey,
+              sessionCwdsByKey: input.sessionCwdsByKey,
+              attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
+            });
           }
-          stepOutput = humanOutput;
-        } else {
-          const prompt = renderLoopStepPrompt({
-            template: step.prompt,
-            step,
-            iteration,
-            loopNode: input.node,
-            workflowOutputs: input.outputs,
-            workflowInputs: input.request.inputs,
-            workflowCwd: stepCwd,
-            previousStepOutputs,
-            currentStepOutputs,
-          });
-          const appendPrompt = step.appendPrompt
-            ? renderLoopStepPrompt({
-                template: step.appendPrompt,
-                step,
-                iteration,
-                loopNode: input.node,
-                workflowOutputs: input.outputs,
-                workflowInputs: input.request.inputs,
-                workflowCwd: stepCwd,
-                previousStepOutputs,
-                currentStepOutputs,
-              })
-            : undefined;
-          stepOutput = yield* runLoopAgentStep({
+        } catch (error) {
+          yield loopStepStateEvent({
             runId: input.runId,
-            nodeId: input.node.id,
-            syntheticId,
+            loopStep,
             step,
-            prompt,
-            appendPrompt,
-            defaultAgent: agent,
-            defaultModel: model,
-            defaultSession: loop.session,
-            cwd: stepCwd,
-            workflowInputs: input.request.inputs,
-            signal: input.request.signal,
-            sessionIdsByKey: input.sessionIdsByKey,
-            sessionCwdsByKey: input.sessionCwdsByKey,
-            attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
+            status: "failed",
+            error: toRunErrorMessage(error),
           });
+          throw error;
         }
+        yield loopStepStateEvent({
+          runId: input.runId,
+          loopStep,
+          step,
+          status: "completed",
+          output: stepOutput,
+        });
         currentStepOutputs[step.id] = stepOutput;
         previousStepOutputs[step.id] = stepOutput;
         await saveLoopCheckpoint(input.request, {
@@ -788,11 +838,19 @@ async function* runLoopHumanStep(input: {
   runId: string;
   nodeId: string;
   syntheticId: string;
+  loopStep: WorkflowLoopStepExecutionRef;
   step: Extract<WorkflowLoopStep, { kind: "human" }>;
   iteration: number;
   request: WorkflowRunRequest;
   spec: RenderedWorkflowHumanSpec;
 }): AsyncGenerator<WorkflowRunEvent, WorkflowValue | undefined> {
+  yield loopStepStateEvent({
+    runId: input.runId,
+    loopStep: input.loopStep,
+    step: input.step,
+    status: "running",
+    input: JSON.stringify(input.spec),
+  });
   yield loopStatusEvent({
     runId: input.runId,
     nodeId: input.nodeId,
@@ -808,6 +866,12 @@ async function* runLoopHumanStep(input: {
     spec: input.spec,
   });
   if (task.status === "pending") {
+    yield loopStepStateEvent({
+      runId: input.runId,
+      loopStep: input.loopStep,
+      step: input.step,
+      status: "waiting",
+    });
     yield {
       type: "human_task_requested",
       runId: input.runId,
@@ -838,6 +902,7 @@ async function* runLoopAgentStep(input: {
   runId: string;
   nodeId: string;
   syntheticId: string;
+  loopStep: WorkflowLoopStepExecutionRef;
   step: WorkflowAgentLoopStep;
   prompt: string;
   appendPrompt?: string;
@@ -870,6 +935,18 @@ async function* runLoopAgentStep(input: {
   const sessionNodeId = createLoopStepSessionNodeId(input.nodeId, input.step.id);
   const attachSessionId = input.attachSessionIdsByNodeId[sessionNodeId];
   let output = "";
+
+  yield loopStepStateEvent({
+    runId: input.runId,
+    loopStep: input.loopStep,
+    step: input.step,
+    status: "running",
+    agent,
+    model,
+    sessionKey: runContext.sessionKey,
+    promptMode: runContext.promptMode,
+    input: runContext.prompt,
+  });
 
   yield loopStatusEvent({
     runId: input.runId,
@@ -924,6 +1001,7 @@ async function* runLoopAgentStep(input: {
       type: "node_event",
       runId: input.runId,
       nodeId: agentSessionId && runContext.sessionKey ? sessionNodeId : input.nodeId,
+      loopStep: input.loopStep,
       event,
     };
 
@@ -1260,6 +1338,51 @@ function createLoopStepId(
   stepId: string,
 ): string {
   return `${loopId}[${iteration}].${stepId}`;
+}
+
+function createLoopStepExecutionRef(
+  loopId: string,
+  iteration: number,
+  stepId: string,
+): WorkflowLoopStepExecutionRef {
+  return {
+    executionKey: `loop:${loopId}:${iteration}:${stepId}`,
+    parentNodeId: loopId,
+    stepId,
+    iteration,
+  };
+}
+
+function loopStepStateEvent(input: {
+  runId: string;
+  loopStep: WorkflowLoopStepExecutionRef;
+  step: WorkflowLoopStep;
+  status: WorkflowNodeStatus;
+  agent?: string;
+  model?: string;
+  sessionKey?: string;
+  promptMode?: "full" | "append";
+  input?: string;
+  restored?: boolean;
+  output?: WorkflowValue;
+  error?: string;
+}): WorkflowRunEvent {
+  return {
+    type: "loop_step_state",
+    runId: input.runId,
+    loopStep: input.loopStep,
+    kind: input.step.kind,
+    label: input.step.label,
+    status: input.status,
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
+    ...(input.promptMode ? { promptMode: input.promptMode } : {}),
+    ...(input.input !== undefined ? { input: input.input } : {}),
+    ...(input.restored !== undefined ? { restored: input.restored } : {}),
+    ...(input.output !== undefined ? { output: input.output } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  };
 }
 
 function renderLoopStepPrompt(input: {

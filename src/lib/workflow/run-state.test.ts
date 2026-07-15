@@ -78,7 +78,84 @@ describe("workflow run state", () => {
       outputs: { scan: "final" },
       nodeStatuses: { scan: "completed" },
       nodeSessions: {},
+      loopStepRuns: {},
     });
+  });
+
+  it("tracks loop step attempts separately from top-level node status", () => {
+    let summary = createInitialRunSummary(undefined, {
+      queueExecutableNodes: false,
+    });
+    const loopStep = {
+      executionKey: "loop:delivery:2:reviewer",
+      parentNodeId: "delivery",
+      stepId: "reviewer",
+      iteration: 2,
+    };
+    const events: WorkflowRunEvent[] = [
+      {
+        type: "loop_step_state",
+        runId: "run-1",
+        loopStep,
+        kind: "agent",
+        label: "Reviewer",
+        status: "running",
+        agent: "local:codex",
+        sessionKey: "reviewer_room",
+        promptMode: "append",
+        input: "Review again",
+      },
+      {
+        type: "node_event",
+        runId: "run-1",
+        nodeId: "delivery.reviewer",
+        loopStep,
+        event: {
+          type: "session_ref",
+          session: {
+            agentSessionId: "reviewer-session",
+            agent: "local:codex",
+            status: "running",
+          },
+        },
+      },
+      {
+        type: "node_event",
+        runId: "run-1",
+        nodeId: "delivery",
+        loopStep,
+        event: { type: "text_delta", text: "PASS" },
+      },
+      {
+        type: "loop_step_state",
+        runId: "run-1",
+        loopStep,
+        kind: "agent",
+        label: "Reviewer",
+        status: "completed",
+        output: "PASS",
+      },
+    ];
+
+    for (const event of events) {
+      summary = applyWorkflowRunEvent(summary, event);
+    }
+
+    expect(summary.nodeStatuses).toEqual({});
+    expect(summary.loopStepRuns[loopStep.executionKey]).toEqual(
+      expect.objectContaining({
+        ...loopStep,
+        status: "completed",
+        promptMode: "append",
+        input: "Review again",
+        output: "PASS",
+        session: expect.objectContaining({
+          agentSessionId: "reviewer-session",
+          status: "completed",
+          lastText: "PASS",
+        }),
+      }),
+    );
   });
 
   it("stores compact node session refs and final text", () => {

@@ -9,6 +9,7 @@ import type {
   ParsedWorkflow,
   WorkflowNodeSessionRef,
   WorkflowNodeSessionStatus,
+  WorkflowLoopStepRun,
   WorkflowNodeStatus,
   WorkflowRunEvent,
   WorkflowHumanTask,
@@ -21,6 +22,7 @@ export type WorkflowRunResult = {
   outputs: Record<string, WorkflowValue>;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   nodeSessions: Record<string, WorkflowNodeSessionRef>;
+  loopStepRuns: Record<string, WorkflowLoopStepRun>;
   error?: string;
   errorCode?: ApiErrorCode;
 };
@@ -57,6 +59,7 @@ export function createInitialRunSummary(
     outputs: {},
     nodeStatuses,
     nodeSessions: {},
+    loopStepRuns: {},
   };
 }
 
@@ -69,6 +72,7 @@ export function applyWorkflowRunEvent(
     outputs: { ...summary.outputs },
     nodeStatuses: { ...summary.nodeStatuses },
     nodeSessions: { ...summary.nodeSessions },
+    loopStepRuns: { ...summary.loopStepRuns },
     error: summary.error,
     errorCode: summary.errorCode,
   };
@@ -83,6 +87,43 @@ export function applyWorkflowRunEvent(
 
   if (event.type === "node_started") {
     next.nodeStatuses[event.nodeId] = "running";
+    return next;
+  }
+
+  if (event.type === "loop_step_state") {
+    const current = next.loopStepRuns[event.loopStep.executionKey];
+    const session = current?.session
+      ? withNodeSessionPatch(current.session, {
+          nodeId: current.session.nodeId,
+          status:
+            event.status === "failed"
+              ? "failed"
+              : event.status === "completed"
+                ? "completed"
+                : current.session.status,
+          ...(event.error ? { lastError: event.error } : {}),
+          ...(typeof event.output === "string" ? { lastText: event.output } : {}),
+        })
+      : undefined;
+    next.loopStepRuns[event.loopStep.executionKey] = {
+      ...event.loopStep,
+      ...(current ?? {}),
+      kind: event.kind,
+      label: event.label,
+      status: event.status,
+      ...(event.agent ? { agent: event.agent } : {}),
+      ...(event.model ? { model: event.model } : {}),
+      ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
+      ...(event.promptMode ? { promptMode: event.promptMode } : {}),
+      ...(event.input !== undefined ? { input: event.input } : {}),
+      ...(event.restored !== undefined ? { restored: event.restored } : {}),
+      ...(event.output !== undefined ? { output: event.output } : {}),
+      ...(event.error ? { error: event.error } : {}),
+      ...(session ? { session } : {}),
+    };
+    if (session) {
+      next.nodeSessions[session.nodeId] = session;
+    }
     return next;
   }
 
@@ -126,6 +167,42 @@ export function applyWorkflowRunEvent(
           lastError: agentEvent.message,
         },
       );
+    }
+    if (event.loopStep) {
+      const executionKey = event.loopStep.executionKey;
+      const current = next.loopStepRuns[executionKey];
+      const output =
+        agentEvent.type === "text_delta" && agentEvent.text
+          ? `${typeof current?.output === "string" ? current.output : ""}${agentEvent.text}`
+          : current?.output;
+      const sessionNodeId = `${event.loopStep.parentNodeId}.${event.loopStep.stepId}`;
+      const sessionPatch =
+        agentEvent.type === "session_ref"
+          ? readNodeSessionRef(sessionNodeId, agentEvent.session)
+          : undefined;
+      const session = sessionPatch
+        ? withNodeSessionPatch(current?.session, sessionPatch)
+        : current?.session
+          ? withNodeSessionPatch(current.session, {
+              nodeId: current.session.nodeId,
+              ...(typeof output === "string" ? { lastText: output } : {}),
+              ...(agentEvent.type === "error" && agentEvent.message
+                ? { status: "failed", lastError: agentEvent.message }
+                : {}),
+            })
+          : undefined;
+      next.loopStepRuns[executionKey] = {
+        ...event.loopStep,
+        ...(current ?? {}),
+        kind: current?.kind ?? "agent",
+        label: current?.label ?? event.loopStep.stepId,
+        status: agentEvent.type === "error" ? "failed" : (current?.status ?? "running"),
+        ...(output !== undefined ? { output } : {}),
+        ...(session ? { session } : {}),
+        ...(agentEvent.type === "error" && agentEvent.message
+          ? { error: agentEvent.message, status: "failed" }
+          : {}),
+      };
     }
     return next;
   }
@@ -197,6 +274,20 @@ export function applyWorkflowRunEvent(
           : session,
       ]),
     );
+    next.loopStepRuns = Object.fromEntries(
+      Object.entries(next.loopStepRuns).map(([executionKey, run]) => [
+        executionKey,
+        run.status === "running" || run.status === "waiting"
+          ? {
+              ...run,
+              status: "skipped" as const,
+              session: run.session
+                ? { ...run.session, status: "canceled" as const }
+                : undefined,
+            }
+          : run,
+      ]),
+    );
   }
   if (event.error !== undefined || event.status === "completed") {
     next.error = event.error;
@@ -214,6 +305,7 @@ export function toWorkflowRunResult(
     outputs: summary.outputs,
     nodeStatuses: summary.nodeStatuses,
     nodeSessions: summary.nodeSessions,
+    loopStepRuns: summary.loopStepRuns,
     ...(summary.error === undefined ? {} : { error: summary.error }),
     ...(summary.errorCode === undefined ? {} : { errorCode: summary.errorCode }),
   };
@@ -221,13 +313,14 @@ export function toWorkflowRunResult(
 
 export function readRunResult(result: unknown): WorkflowRunResult {
   if (!result || typeof result !== "object") {
-    return { outputs: {}, nodeStatuses: {}, nodeSessions: {} };
+    return { outputs: {}, nodeStatuses: {}, nodeSessions: {}, loopStepRuns: {} };
   }
 
   const raw = result as {
     outputs?: unknown;
     nodeStatuses?: unknown;
     nodeSessions?: unknown;
+    loopStepRuns?: unknown;
     error?: unknown;
     errorCode?: unknown;
   };
@@ -238,6 +331,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
       ? raw.nodeStatuses
       : {},
     nodeSessions: readNodeSessionRecord(raw.nodeSessions),
+    loopStepRuns: readLoopStepRunRecord(raw.loopStepRuns),
     error: typeof raw.error === "string" ? raw.error : undefined,
     errorCode:
       typeof raw.errorCode === "string"
@@ -469,6 +563,46 @@ function readNodeSessionRecord(
   return Object.fromEntries(entries) as Record<string, WorkflowNodeSessionRef>;
 }
 
+function readLoopStepRunRecord(
+  value: unknown,
+): Record<string, WorkflowLoopStepRun> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value);
+  if (!entries.every(([executionKey, run]) =>
+    typeof executionKey === "string" && isWorkflowLoopStepRun(run)
+  )) {
+    return {};
+  }
+  return Object.fromEntries(entries) as Record<string, WorkflowLoopStepRun>;
+}
+
+function isWorkflowLoopStepRun(value: unknown): value is WorkflowLoopStepRun {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.executionKey === "string" &&
+    typeof raw.parentNodeId === "string" &&
+    typeof raw.stepId === "string" &&
+    Number.isInteger(raw.iteration) &&
+    (raw.kind === "agent" || raw.kind === "human") &&
+    typeof raw.label === "string" &&
+    isWorkflowNodeStatus(raw.status) &&
+    optionalString(raw.agent) &&
+    optionalString(raw.model) &&
+    optionalString(raw.sessionKey) &&
+    optionalString(raw.input) &&
+    (raw.promptMode === undefined || raw.promptMode === "full" || raw.promptMode === "append") &&
+    (raw.restored === undefined || typeof raw.restored === "boolean") &&
+    (raw.output === undefined || isWorkflowValue(raw.output)) &&
+    optionalString(raw.error) &&
+    (raw.session === undefined || isWorkflowNodeSessionRef(raw.session))
+  );
+}
+
 function isWorkflowNodeSessionRef(
   value: unknown,
 ): value is WorkflowNodeSessionRef {
@@ -576,6 +710,7 @@ function isWorkflowRunEvent(value: unknown): value is WorkflowRunEvent {
     type === "run_started" ||
     type === "node_started" ||
     type === "node_event" ||
+    type === "loop_step_state" ||
     type === "node_completed" ||
     type === "human_task_requested" ||
     type === "human_task_resolved" ||

@@ -1620,6 +1620,19 @@ a {
   gap: 4px;
 }
 
+.loop-step-badge.loop-step-status-running,
+.loop-step-badge.loop-step-status-waiting {
+  color: var(--status-blue, #3b82f6);
+}
+
+.loop-step-badge.loop-step-status-completed {
+  color: var(--status-green, #22c55e);
+}
+
+.loop-step-badge.loop-step-status-failed {
+  color: var(--status-red, #ef4444);
+}
+
 .loop-step-badge {
   display: inline-flex;
   max-width: 100%;
@@ -1840,6 +1853,18 @@ a {
   border-radius: 7px;
   background: var(--background-fronted);
   padding: 10px;
+}
+
+.loop-step-attempt-list {
+  display: grid;
+  gap: 12px;
+}
+
+.loop-step-attempt {
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--background-fronted);
 }
 
 .workflow-input-dialog {

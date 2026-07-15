@@ -11,6 +11,7 @@ import {
 import type {
   ParsedWorkflow,
   WorkflowNodeStatus,
+  WorkflowLoopStepRun,
 } from "@/lib/workflow/types";
 
 export function useWorkflowRunPreview(input: {
@@ -19,11 +20,13 @@ export function useWorkflowRunPreview(input: {
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   selectedNodeId?: string;
+  selectedLoopStepId?: string;
 }): {
   isRunPreview: boolean;
   graphParsed: ParsedWorkflow;
   selectedRunNodeDetail: RunNodeDetail | null;
   displayNodeStatuses: Record<string, WorkflowNodeStatus>;
+  displayLoopStepRuns: WorkflowLoopStepRun[];
   completedCount: number;
   runningCount: number;
   failedCount: number;
@@ -68,9 +71,13 @@ export function useWorkflowRunPreview(input: {
   const selectedRunNodeDetail = useMemo(
     () =>
       input.selectedRun && graphSelectedNode
-        ? buildRunNodeDetail(input.selectedRun, graphSelectedNode)
+        ? buildRunNodeDetail(
+            input.selectedRun,
+            graphSelectedNode,
+            input.selectedLoopStepId,
+          )
         : null,
-    [graphSelectedNode, input.selectedRun],
+    [graphSelectedNode, input.selectedLoopStepId, input.selectedRun],
   );
 
   const displayNodeStatuses = isRunPreview
@@ -104,6 +111,9 @@ export function useWorkflowRunPreview(input: {
     graphParsed,
     selectedRunNodeDetail,
     displayNodeStatuses,
+    displayLoopStepRuns: isRunPreview
+      ? Object.values(selectedRunResult.loopStepRuns)
+      : [],
     ...statusCounts,
   };
 }

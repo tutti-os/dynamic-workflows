@@ -8,6 +8,7 @@ import {
 import { formatLoopUntil } from "@/lib/workflow/loop-until";
 import type {
   ParsedWorkflow,
+  WorkflowLoopStepRun,
   WorkflowNodeStatus,
 } from "@/lib/workflow/types";
 import type { FlowNodeData } from "@/components/workflow/WorkflowWorkbench.types";
@@ -28,6 +29,7 @@ export function useWorkflowFlowLayout(input: {
   onLoopStepSelect?: (loopNodeId: string, stepId: string) => void;
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
+  loopStepRuns?: WorkflowLoopStepRun[];
   selectedNodeId?: string;
   selectedLoopStepId?: string;
 }): {
@@ -40,12 +42,14 @@ export function useWorkflowFlowLayout(input: {
       buildFlowNodes({
         parsed: input.parsed,
         nodeStatuses: input.nodeStatuses,
+        loopStepRuns: input.loopStepRuns,
         onLoopStepSelect: input.onLoopStepSelect,
         selectedNodeId: input.selectedNodeId,
         selectedLoopStepId: input.selectedLoopStepId,
       }),
     [
       input.nodeStatuses,
+      input.loopStepRuns,
       input.onLoopStepSelect,
       input.parsed.nodes,
       input.parsed.phases,
@@ -75,6 +79,7 @@ function buildFlowNodes(input: {
   onLoopStepSelect?: (loopNodeId: string, stepId: string) => void;
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
+  loopStepRuns?: WorkflowLoopStepRun[];
   selectedNodeId?: string;
   selectedLoopStepId?: string;
 }): Node<FlowNodeData>[] {
@@ -116,6 +121,9 @@ function buildFlowNodes(input: {
       },
       data: {
         onLoopStepSelect: input.onLoopStepSelect,
+        loopStepRuns: input.loopStepRuns?.filter(
+          (run) => run.parentNodeId === workflowNode.id,
+        ),
         selectedLoopStepId:
           workflowNode.id === input.selectedNodeId
             ? input.selectedLoopStepId

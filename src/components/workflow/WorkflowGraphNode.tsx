@@ -72,6 +72,7 @@ function WorkflowNodeCard(props: NodeProps<Node<FlowNodeData>>) {
             loop={loop}
             loopNodeId={workflowNode.id}
             selectedStepId={props.data.selectedLoopStepId}
+            stepRuns={props.data.loopStepRuns}
             onStepSelect={props.data.onLoopStepSelect}
           />
         ) : null}

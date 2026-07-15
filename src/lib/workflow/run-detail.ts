@@ -10,6 +10,8 @@ import { stringifyWorkflowValue } from "@/lib/workflow/templates";
 import type {
   ParsedWorkflow,
   WorkflowInputValue,
+  WorkflowLoopStep,
+  WorkflowLoopStepRun,
   WorkflowNode,
   WorkflowNodeSessionRef,
   WorkflowNodeStatus,
@@ -33,11 +35,20 @@ export type RunNodeDetail = {
   input: string;
   output: string;
   log: string;
+  loopStep?: {
+    step: WorkflowLoopStep;
+    attempts: RunLoopStepAttemptDetail[];
+  };
+};
+
+export type RunLoopStepAttemptDetail = WorkflowLoopStepRun & {
+  log: string;
 };
 
 export function buildRunNodeDetail(
   detail: RunDetail,
   node: WorkflowNode,
+  selectedLoopStepId?: string,
 ): RunNodeDetail {
   const result = readRunResult(detail.run.result);
   const workflowInputs = readWorkflowRunInputs(detail.run.input);
@@ -50,6 +61,29 @@ export function buildRunNodeDetail(
     .join("\n");
   const eventResult = readRunResultFromEvents(nodeEvents);
   const eventOutput = eventResult.outputs[node.id];
+  const allEventResult = readRunResultFromEvents(parseRunLogEvents(detail.log));
+  const loopStepRuns = {
+    ...allEventResult.loopStepRuns,
+    ...result.loopStepRuns,
+  };
+  const selectedLoopStep = node.loop?.steps.find(
+    (step) => step.id === selectedLoopStepId,
+  );
+  const loopStepAttempts = selectedLoopStep
+    ? Object.values(loopStepRuns)
+        .filter(
+          (run) =>
+            run.parentNodeId === node.id && run.stepId === selectedLoopStep.id,
+        )
+        .sort((left, right) => left.iteration - right.iteration)
+        .map((run) => ({
+          ...run,
+          log: parseRunLogEvents(detail.log)
+            .filter((event) => isLoopStepRunEvent(event, run.executionKey))
+            .map(formatRunNodeEvent)
+            .join("\n") || "No step log events.",
+        }))
+    : [];
 
   return {
     node,
@@ -64,7 +98,26 @@ export function buildRunNodeDetail(
         ? stringifyWorkflowValue(result.outputs[node.id] ?? eventOutput)
         : "No output captured.",
     log: log.trim() ? log : "No node log events.",
+    ...(selectedLoopStep
+      ? {
+          loopStep: {
+            step: selectedLoopStep,
+            attempts: loopStepAttempts,
+          },
+        }
+      : {}),
   };
+}
+
+function isLoopStepRunEvent(
+  event: WorkflowRunEvent,
+  executionKey: string,
+): boolean {
+  if (event.type === "loop_step_state") {
+    return event.loopStep.executionKey === executionKey;
+  }
+  return event.type === "node_event" &&
+    event.loopStep?.executionKey === executionKey;
 }
 
 export function readRunParsed(log: string): ParsedWorkflow | undefined {
@@ -101,6 +154,7 @@ function readRunResultFromEvents(events: WorkflowRunEvent[]) {
         outputs: {},
         nodeStatuses: {},
         nodeSessions: {},
+        loopStepRuns: {},
       },
       logPath: null,
       startedAt: new Date(0).toISOString(),
@@ -121,6 +175,9 @@ function formatRunNodeEvent(event: WorkflowRunEvent): string {
   }
   if (event.type === "node_event") {
     return `event: ${formatCompactJson(event.event)}`;
+  }
+  if (event.type === "loop_step_state") {
+    return `${event.loopStep.executionKey}: ${event.status}${event.promptMode ? ` via ${event.promptMode}` : ""}`;
   }
   if (event.type === "node_completed") {
     return "completed";

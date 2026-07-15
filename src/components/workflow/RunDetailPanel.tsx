@@ -14,7 +14,11 @@ import {
 import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
-import type { RunDetail, RunNodeDetail } from "@/lib/workflow/run-detail";
+import type {
+  RunDetail,
+  RunLoopStepAttemptDetail,
+  RunNodeDetail,
+} from "@/lib/workflow/run-detail";
 import {
   canRetryRun,
   canResumeRun,
@@ -431,6 +435,17 @@ function RunNodeDetailSection(props: {
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
   const { nodeRun } = props;
+  if (nodeRun.loopStep) {
+    return (
+      <RunLoopStepDetailSection
+        runId={props.runId}
+        nodeRun={nodeRun}
+        copiedRunField={props.copiedRunField}
+        onCopyRunText={props.onCopyRunText}
+        onOpenAgentSession={props.onOpenAgentSession}
+      />
+    );
+  }
   const session = nodeRun.session;
 
   return (
@@ -494,6 +509,124 @@ function RunNodeDetailSection(props: {
         onCopy={props.onCopyRunText}
       />
     </section>
+  );
+}
+
+function RunLoopStepDetailSection(props: {
+  runId: string;
+  nodeRun: RunNodeDetail;
+  copiedRunField?: string;
+  onCopyRunText: (key: string, text: string) => void;
+  onOpenAgentSession: (agentSessionId: string) => void;
+}) {
+  const loopStep = props.nodeRun.loopStep;
+  if (!loopStep) {
+    return null;
+  }
+  return (
+    <section className="run-node-detail loop-step-run-detail">
+      <div className="field-heading">
+        <label>Loop step execution</label>
+        <Badge variant="muted">{loopStep.attempts.length} iterations</Badge>
+      </div>
+      <div className="run-facts run-node-facts">
+        <RunFact label="Loop" value={props.nodeRun.node.id} />
+        <RunFact label="Step" value={loopStep.step.id} />
+        <RunFact label="Label" value={loopStep.step.label} />
+      </div>
+      {loopStep.attempts.length === 0 ? (
+        <div className="field-hint">
+          This run predates structured loop-step telemetry, so only the aggregate loop result is available.
+        </div>
+      ) : (
+        <div className="loop-step-attempt-list">
+          {loopStep.attempts.map((attempt) => (
+            <RunLoopStepAttempt
+              key={attempt.executionKey}
+              runId={props.runId}
+              attempt={attempt}
+              copiedRunField={props.copiedRunField}
+              onCopyRunText={props.onCopyRunText}
+              onOpenAgentSession={props.onOpenAgentSession}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RunLoopStepAttempt(props: {
+  runId: string;
+  attempt: RunLoopStepAttemptDetail;
+  copiedRunField?: string;
+  onCopyRunText: (key: string, text: string) => void;
+  onOpenAgentSession: (agentSessionId: string) => void;
+}) {
+  const { attempt } = props;
+  const output = attempt.output === undefined
+    ? "No output captured."
+    : typeof attempt.output === "string"
+      ? attempt.output
+      : formatJson(attempt.output);
+  return (
+    <div className="loop-step-attempt">
+      <div className="field-heading">
+        <label>Iteration {attempt.iteration}</label>
+        <Badge variant={nodeStatusBadge(attempt.status)}>{attempt.status}</Badge>
+      </div>
+      <div className="run-facts run-node-facts">
+        <RunFact label="Execution" value={attempt.executionKey} />
+        {attempt.promptMode ? <RunFact label="Prompt mode" value={attempt.promptMode} /> : null}
+        {attempt.sessionKey ? <RunFact label="Session key" value={attempt.sessionKey} /> : null}
+        {attempt.agent ? (
+          <RunFact
+            label="Agent"
+            value={`${attempt.agent}${attempt.model ? ` · ${attempt.model}` : ""}`}
+          />
+        ) : null}
+      </div>
+      {attempt.session ? (
+        <div className="agent-session-actions">
+          <Badge variant={nodeStatusBadge(sessionStatusToNodeStatus(attempt.session.status))}>
+            {attempt.session.status}
+          </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            onClick={() => props.onOpenAgentSession(attempt.session!.agentSessionId)}
+          >
+            <LaunchIcon data-icon="inline-start" />
+            Open session
+          </Button>
+        </div>
+      ) : null}
+      {attempt.input ? (
+        <RunTextBlock
+          label="Input"
+          text={attempt.input}
+          copyKey={`loop-input:${props.runId}:${attempt.executionKey}`}
+          copiedRunField={props.copiedRunField}
+          onCopy={props.onCopyRunText}
+        />
+      ) : null}
+      <RunTextBlock
+        label="Output"
+        text={attempt.error ? `${output}\n\nError: ${attempt.error}` : output}
+        copyKey={`loop-output:${props.runId}:${attempt.executionKey}`}
+        copiedRunField={props.copiedRunField}
+        onCopy={props.onCopyRunText}
+      />
+      <RunTextBlock
+        label="Timeline"
+        text={attempt.log}
+        variant="event"
+        copyKey={`loop-log:${props.runId}:${attempt.executionKey}`}
+        copiedRunField={props.copiedRunField}
+        onCopy={props.onCopyRunText}
+      />
+    </div>
   );
 }
 

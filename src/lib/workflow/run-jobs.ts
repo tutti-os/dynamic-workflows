@@ -626,6 +626,10 @@ function mergePersistedRunResult(
       ...summary.nodeSessions,
       ...persisted.nodeSessions,
     },
+    loopStepRuns: {
+      ...summary.loopStepRuns,
+      ...persisted.loopStepRuns,
+    },
     error: options.clearError ? undefined : summary.error,
     errorCode: options.clearError ? undefined : summary.errorCode,
   };

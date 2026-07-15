@@ -358,6 +358,28 @@ export type WorkflowNodeSessionRef = {
   lastError?: string;
 };
 
+export type WorkflowLoopStepExecutionRef = {
+  executionKey: string;
+  parentNodeId: string;
+  stepId: string;
+  iteration: number;
+};
+
+export type WorkflowLoopStepRun = WorkflowLoopStepExecutionRef & {
+  kind: WorkflowLoopStep["kind"];
+  label: string;
+  status: WorkflowNodeStatus;
+  agent?: string;
+  model?: string;
+  sessionKey?: string;
+  promptMode?: "full" | "append";
+  input?: string;
+  restored?: boolean;
+  output?: WorkflowValue;
+  error?: string;
+  session?: WorkflowNodeSessionRef;
+};
+
 export type WorkflowRunEvent =
   | {
       type: "run_started";
@@ -377,7 +399,24 @@ export type WorkflowRunEvent =
       type: "node_event";
       runId: string;
       nodeId: string;
+      loopStep?: WorkflowLoopStepExecutionRef;
       event: unknown;
+    }
+  | {
+      type: "loop_step_state";
+      runId: string;
+      loopStep: WorkflowLoopStepExecutionRef;
+      kind: WorkflowLoopStep["kind"];
+      label: string;
+      status: WorkflowNodeStatus;
+      agent?: string;
+      model?: string;
+      sessionKey?: string;
+      promptMode?: "full" | "append";
+      input?: string;
+      restored?: boolean;
+      output?: WorkflowValue;
+      error?: string;
     }
   | {
       type: "node_completed";

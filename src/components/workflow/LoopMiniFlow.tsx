@@ -8,6 +8,7 @@ import { resolveLoopStepSessionSpec } from "@/lib/workflow/session";
 import type {
   WorkflowLoopSpec,
   WorkflowLoopStep,
+  WorkflowLoopStepRun,
 } from "@/lib/workflow/types";
 import type { FlowNodeData } from "@/components/workflow/WorkflowWorkbench.types";
 
@@ -15,6 +16,7 @@ type LoopMiniFlowProps = {
   loop: NonNullable<FlowNodeData["workflowNode"]["loop"]>;
   loopNodeId: string;
   selectedStepId?: string;
+  stepRuns?: WorkflowLoopStepRun[];
   onStepSelect?: (loopNodeId: string, stepId: string) => void;
 };
 
@@ -27,6 +29,9 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
         {props.loop.steps.map((step, index) => {
           const isFirstIterationEntry =
             props.loop.firstIteration?.startAt === step.id;
+          const latestRun = props.stepRuns
+            ?.filter((run) => run.stepId === step.id)
+            .sort((left, right) => right.iteration - left.iteration)[0];
           if (step.kind === "human") {
             return (
               <div className="loop-mini-flow-step-group" key={step.id}>
@@ -37,7 +42,7 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                       ? "loop-mini-flow-step selected"
                       : "loop-mini-flow-step"
                   }
-                  aria-label={`${index + 1} ${step.label} ${step.id} human task`}
+                  aria-label={`${index + 1} ${step.label} ${step.id} human task${latestRun ? ` iteration ${latestRun.iteration} ${latestRun.status}` : ""}`}
                   title={`Inspect ${step.label}`}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -52,6 +57,11 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                   </div>
                   <div className="loop-mini-flow-step-session">{step.id} · waits for input</div>
                   <div className="loop-mini-flow-badges">
+                    {latestRun ? (
+                      <span className={`loop-step-badge loop-step-status-${latestRun.status}`}>
+                        I{latestRun.iteration} · {latestRun.status}
+                      </span>
+                    ) : null}
                     {isFirstIterationEntry ? (
                       <span className="loop-step-badge">first entry</span>
                     ) : null}
@@ -76,6 +86,7 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
             sessionView.badge,
             targetView?.label,
             promptModeView?.label,
+            latestRun ? `iteration ${latestRun.iteration} ${latestRun.status}` : undefined,
           ]
             .filter(Boolean)
             .join(" ");
@@ -108,6 +119,11 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                   {step.id} · {sessionView.label}
                 </div>
                 <div className="loop-mini-flow-badges">
+                  {latestRun ? (
+                    <span className={`loop-step-badge loop-step-status-${latestRun.status}`}>
+                      I{latestRun.iteration} · {latestRun.status}
+                    </span>
+                  ) : null}
                   {isFirstIterationEntry ? (
                     <span className="loop-step-badge">first entry</span>
                   ) : null}

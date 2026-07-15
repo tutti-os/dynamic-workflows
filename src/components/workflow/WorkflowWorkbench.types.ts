@@ -1,8 +1,13 @@
-import type { WorkflowNode, WorkflowNodeStatus } from "@/lib/workflow/types";
+import type {
+  WorkflowLoopStepRun,
+  WorkflowNode,
+  WorkflowNodeStatus,
+} from "@/lib/workflow/types";
 
 export type FlowNodeData = {
   onLoopStepSelect?: (loopNodeId: string, stepId: string) => void;
   selectedLoopStepId?: string;
+  loopStepRuns?: WorkflowLoopStepRun[];
   workflowNode: WorkflowNode;
   status: WorkflowNodeStatus;
 };

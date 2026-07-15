@@ -179,6 +179,14 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
       return;
     }
 
+    if (event.type === "loop_step_state") {
+      setEventLog((events) => [
+        ...events,
+        `${event.loopStep.parentNodeId} · iteration ${event.loopStep.iteration} · ${event.label}: ${event.status}${event.promptMode ? ` via ${event.promptMode}` : ""}`,
+      ]);
+      return;
+    }
+
     if (event.type === "node_event") {
       const agentEvent = event.event as {
         type?: string;
@@ -284,6 +292,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
           outputs: {},
           nodeStatuses: statuses,
           nodeSessions: {},
+          loopStepRuns: {},
         },
         event,
       ).nodeStatuses,
@@ -295,6 +304,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
           outputs,
           nodeStatuses: {},
           nodeSessions: {},
+          loopStepRuns: {},
         },
         event,
       ).outputs;

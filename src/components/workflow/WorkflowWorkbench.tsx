@@ -219,6 +219,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     graphParsed,
     selectedRunNodeDetail,
     displayNodeStatuses,
+    displayLoopStepRuns,
     completedCount,
     runningCount,
     failedCount,
@@ -228,6 +229,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     parsed,
     nodeStatuses,
     selectedNodeId,
+    selectedLoopStepId,
   });
 
   const { flowNodes, flowEdges, flowLayoutKey } = useWorkflowFlowLayout({
@@ -240,6 +242,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     },
     parsed: graphParsed,
     nodeStatuses: displayNodeStatuses,
+    loopStepRuns: displayLoopStepRuns,
     selectedLoopStepId,
     selectedNodeId,
   });

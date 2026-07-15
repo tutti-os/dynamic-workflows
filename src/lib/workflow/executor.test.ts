@@ -898,6 +898,20 @@ feedback: {{acceptance}}\`,
         output: expect.stringContaining("[acceptance]\nPASS: accepted"),
       }),
     );
+    expect(
+      events
+        .filter((event) => event.type === "loop_step_state")
+        .map((event) => [
+          event.loopStep.executionKey,
+          event.status,
+          event.promptMode,
+        ]),
+    ).toEqual(expect.arrayContaining([
+      ["loop:delivery:1:rd", "running", "full"],
+      ["loop:delivery:1:acceptance", "completed", undefined],
+      ["loop:delivery:2:rd", "running", "append"],
+      ["loop:delivery:2:acceptance", "completed", undefined],
+    ]));
   });
 
   it("matches finalStatus only against the final non-empty output line", async () => {
