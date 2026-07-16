@@ -14,6 +14,7 @@ import {
 } from "@/lib/workflow/run-state";
 import type {
   ParsedWorkflow,
+  WorkflowLoopStepRun,
   WorkflowNodeStatus,
   WorkflowRunEvent,
 } from "@/lib/workflow/types";
@@ -40,6 +41,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
   selectedRun: RunDetail | null;
   visibleRuns: WorkflowDetail["runs"];
   nodeStatuses: Record<string, WorkflowNodeStatus>;
+  loopStepRuns: WorkflowLoopStepRun[];
   nodeOutputs: Record<string, string>;
   latestOutput: [string, string] | undefined;
   eventLog: string[];
@@ -65,6 +67,9 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
   const [nodeStatuses, setNodeStatuses] = useState<
     Record<string, WorkflowNodeStatus>
   >({});
+  const [loopStepRunsByKey, setLoopStepRunsByKey] = useState<
+    Record<string, WorkflowLoopStepRun>
+  >({});
   const [nodeOutputs, setNodeOutputs] = useState<Record<string, string>>({});
   const [eventLog, setEventLog] = useState<string[]>([]);
   const activeRunIdRef = useRef<string | undefined>(undefined);
@@ -76,6 +81,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
 
   const resetVersionRunState = useCallback(() => {
     setNodeStatuses({});
+    setLoopStepRunsByKey({});
     setNodeOutputs({});
   }, []);
 
@@ -120,6 +126,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
       setSelectedRun(initialLiveRun);
       setNodeOutputs({});
       setNodeStatuses(createInitialRunSummary(input.parsed).nodeStatuses);
+      setLoopStepRunsByKey({});
       setEventLog([options.initialLog]);
     },
     [input.parsed],
@@ -274,6 +281,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     if (event.type === "run_started") {
       const initialSummary = createInitialRunSummary(event.parsed);
       setNodeStatuses(initialSummary.nodeStatuses);
+      setLoopStepRunsByKey(initialSummary.loopStepRuns);
       setNodeOutputs(
         Object.fromEntries(
           Object.entries(initialSummary.outputs).map(([nodeId, value]) => [
@@ -296,6 +304,18 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
         },
         event,
       ).nodeStatuses,
+    );
+    setLoopStepRunsByKey((loopStepRuns) =>
+      applyWorkflowRunEvent(
+        {
+          status: "running",
+          outputs: {},
+          nodeStatuses: {},
+          nodeSessions: {},
+          loopStepRuns,
+        },
+        event,
+      ).loopStepRuns,
     );
     setNodeOutputs((outputs) => {
       const nextOutputs = applyWorkflowRunEvent(
@@ -363,6 +383,7 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
     selectedRun,
     visibleRuns,
     nodeStatuses,
+    loopStepRuns: Object.values(loopStepRunsByKey),
     nodeOutputs,
     latestOutput,
     eventLog,

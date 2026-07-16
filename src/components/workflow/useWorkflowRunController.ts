@@ -15,6 +15,7 @@ import type { RunDetail } from "@/lib/workflow/run-detail";
 import type {
   ParsedWorkflow,
   WorkflowInputValue,
+  WorkflowLoopStepRun,
   WorkflowNodeStatus,
   WorkflowValue,
 } from "@/lib/workflow/types";
@@ -53,6 +54,7 @@ export function useWorkflowRunController(input: {
   selectedRun: RunDetail | null;
   visibleRuns: WorkflowDetail["runs"];
   nodeStatuses: Record<string, WorkflowNodeStatus>;
+  loopStepRuns: WorkflowLoopStepRun[];
   nodeOutputs: Record<string, string>;
   latestOutput: [string, string] | undefined;
   eventLog: string[];
@@ -88,6 +90,7 @@ export function useWorkflowRunController(input: {
     selectedRun,
     visibleRuns,
     nodeStatuses,
+    loopStepRuns,
     nodeOutputs,
     latestOutput,
     eventLog,
@@ -490,6 +493,7 @@ export function useWorkflowRunController(input: {
     selectedRun,
     visibleRuns,
     nodeStatuses,
+    loopStepRuns,
     nodeOutputs,
     latestOutput,
     eventLog,

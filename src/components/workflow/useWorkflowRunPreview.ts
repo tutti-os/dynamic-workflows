@@ -19,6 +19,7 @@ export function useWorkflowRunPreview(input: {
   selectedRun: RunDetail | null;
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
+  loopStepRuns: WorkflowLoopStepRun[];
   selectedNodeId?: string;
   selectedLoopStepId?: string;
 }): {
@@ -113,7 +114,7 @@ export function useWorkflowRunPreview(input: {
     displayNodeStatuses,
     displayLoopStepRuns: isRunPreview
       ? Object.values(selectedRunResult.loopStepRuns)
-      : [],
+      : input.loopStepRuns,
     ...statusCounts,
   };
 }

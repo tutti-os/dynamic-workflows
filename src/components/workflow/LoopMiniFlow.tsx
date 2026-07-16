@@ -54,14 +54,16 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                     <span className="loop-mini-flow-step-label" title={step.label}>
                       {step.label}
                     </span>
-                  </div>
-                  <div className="loop-mini-flow-step-session">{step.id} · waits for input</div>
-                  <div className="loop-mini-flow-badges">
                     {latestRun ? (
-                      <span className={`loop-step-badge loop-step-status-${latestRun.status}`}>
+                      <span
+                        className={`loop-step-badge loop-mini-flow-step-status loop-step-status-${latestRun.status}`}
+                      >
                         I{latestRun.iteration} · {latestRun.status}
                       </span>
                     ) : null}
+                  </div>
+                  <div className="loop-mini-flow-step-session">{step.id} · waits for input</div>
+                  <div className="loop-mini-flow-badges">
                     {isFirstIterationEntry ? (
                       <span className="loop-step-badge">first entry</span>
                     ) : null}
@@ -111,6 +113,13 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                   <span className="loop-mini-flow-step-label" title={step.label}>
                     {step.label}
                   </span>
+                  {latestRun ? (
+                    <span
+                      className={`loop-step-badge loop-mini-flow-step-status loop-step-status-${latestRun.status}`}
+                    >
+                      I{latestRun.iteration} · {latestRun.status}
+                    </span>
+                  ) : null}
                 </div>
                 <div
                   className="loop-mini-flow-step-session"
@@ -119,11 +128,6 @@ export function LoopMiniFlow(props: LoopMiniFlowProps) {
                   {step.id} · {sessionView.label}
                 </div>
                 <div className="loop-mini-flow-badges">
-                  {latestRun ? (
-                    <span className={`loop-step-badge loop-step-status-${latestRun.status}`}>
-                      I{latestRun.iteration} · {latestRun.status}
-                    </span>
-                  ) : null}
                   {isFirstIterationEntry ? (
                     <span className="loop-step-badge">first entry</span>
                   ) : null}

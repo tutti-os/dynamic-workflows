@@ -171,6 +171,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     selectedRun,
     visibleRuns,
     nodeStatuses,
+    loopStepRuns,
     nodeOutputs,
     latestOutput,
     eventLog,
@@ -228,6 +229,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     selectedRun,
     parsed,
     nodeStatuses,
+    loopStepRuns,
     selectedNodeId,
     selectedLoopStepId,
   });
