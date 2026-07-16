@@ -22,11 +22,11 @@ const architecture = await agent({
   label: "Architecture review",
   inputs: { inventory },
   prompt: \`
-Review the architecture using this inventory:
+Review the architecture. Focus on module boundaries, data flow, and likely
+extension points, and return only the findings.
 
+Inventory:
 {{inventory}}
-
-Focus on module boundaries, data flow, and likely extension points.
   \`,
 })
 
@@ -35,11 +35,11 @@ const security = await agent({
   label: "Security review",
   inputs: { inventory },
   prompt: \`
-Review security-sensitive areas using this inventory:
+Review security-sensitive areas. Look for auth, secrets, shell execution,
+file writes, and network access, and return only the findings.
 
+Inventory:
 {{inventory}}
-
-Look for auth, secrets, shell execution, file writes, and network access.
   \`,
 })
 

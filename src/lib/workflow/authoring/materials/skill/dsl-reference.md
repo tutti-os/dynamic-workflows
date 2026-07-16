@@ -8,6 +8,10 @@ A workflow script is a single JavaScript module using only the workflow primitiv
 - Every prompt must be one plain string literal. Double quotes and backticks are both fine, but `+` concatenation and `${...}` interpolation are rejected by the validator — use `{{...}}` placeholders for dynamic values instead.
 - Keep the workflow readable and editable in a UI: short ids, human labels, focused prompts.
 
+## Execution model
+
+Scheduling is dataflow-driven: a node runs once every node referenced in its `inputs` (and any session predecessor) has completed, and independent ready nodes run concurrently. Declaration order does not serialize execution — only `inputs`, session continuity, and loop membership create ordering. Wire dependencies deliberately: an unused input both serializes branches that could run in parallel and leaks context across role boundaries (see `patterns.md`).
+
 ## meta
 
 ```js
@@ -72,8 +76,9 @@ agent({
 ```
 
 - Every agent needs a non-empty `prompt`; a missing, empty, or non-literal prompt is a validation error.
+- An agent's final message is the node's output value: downstream prompts receive it verbatim and `until` matchers test it directly. Prompt for the deliverable itself, and when the output feeds a matcher, state the exact required token and position (for example "Put PASS or FAIL alone on the final non-empty line") in the prompt.
 - Put upstream values in `inputs` (for example `inputs: { inventory }`) and reference them in the prompt as `{{inventory}}`.
-- Use `{{workflow.cwd}}` when an agent needs the actual run cwd; never declare a normal `{{cwd}}` input for this.
+- Use `{{workflow.cwd}}` when an agent needs the actual run cwd; never declare a normal `{{cwd}}` input for this. A workflow whose prompts reference `{{workflow.cwd}}` should also set `meta.requiresCwd: true` — without it, the reference renders as an empty string when the run provides no cwd.
 - Optional per-node fields: `agent`, `model`, `cwd`, `session`.
   - `agent` must be an exact agent target id discovered through `tutti --json agent list`; never derive it from provider metadata. `"local:codex"` is only an example and the available catalog is dynamic.
   - `cwd: "relative/path"` runs the agent in a directory relative to the run cwd.
@@ -83,7 +88,7 @@ agent({
 
 - `session: { mode: "inherit", key: "name" }` lets multiple steps share one agent conversation. Reuse the same key only for calls that must share context; keep independent agents sessionless.
 - A key identifies the conversation, not the node or loop. The same continuing role may reuse one key across different step ids and different loops when its agent target and effective `cwd` remain compatible. Different roles must use different keys.
-- `session: { mode: "independent" }` only when a step must explicitly start a fresh session each time.
+- `session: { mode: "independent" }` only when a step must explicitly start a fresh session each time — the right default for reviewer-style loop steps that should re-judge from scratch (see `patterns.md` on long-running roles). Independent steps re-run their full `prompt` every iteration; `appendPrompt` does not apply.
 - Never reuse an inherited session key across different `cwd` values.
 - Never use legacy string session values.
 - Use `appendPrompt` on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas. Apply this to every inherited loop step — a reviewer step repeating its full initial prompt each round wastes context and confuses the session.
@@ -148,8 +153,8 @@ loop({
 - Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `cwd`, and `session`.
 - A loop can set `agent`, `model`, and `cwd` as defaults for its steps; step values override loop values.
 - Loop `session` scope: `"step"` derives per-step session keys; `"loop"` shares one loop-level session.
-- `until` may use the legacy text matcher `{ source: "<agent step>", finalStatus: "PASS" }` or an exact structured matcher such as `{ source: "review.action", equals: "pass" }`.
-- Inside loop step prompts, reference other step ids with `{{step_id}}` (most recent output) and use `{{iteration}}` for the current 1-based iteration number.
+- `until` may use the legacy text matcher `{ source: "<agent step>", finalStatus: "PASS" }` or an exact structured matcher such as `{ source: "review.action", equals: "pass" }`. When a human step supplies the decision, prefer the structured matcher; when an agent supplies it, the text matcher only works if the step prompt pins the same token to the final non-empty line.
+- Inside loop step prompts, reference other step ids with `{{step_id}}` (most recent output) and use `{{iteration}}` for the current 1-based iteration number. A step may also reference its own id, which resolves to its previous-iteration output and renders as an empty string on the step's first run — this lets an independent-session step receive its own history through dataflow instead of session memory.
 - A first-iteration step should not require output from a skipped prefix step. For an initial reviewer entry, instruct the reviewer to inspect the current repository; on later iterations, `{{reviewer}}` resolves to the previous review and can drive the preceding repair step.
 
 ## Runtime option templates for agent / model

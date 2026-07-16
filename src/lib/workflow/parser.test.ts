@@ -770,7 +770,11 @@ const broken = await loop({
     );
     expect(acceptance?.templateRefs).not.toContain("rd");
     expect(acceptance?.prompt).not.toContain("{{rd}}");
-    expect(acceptance?.appendPrompt).not.toContain("{{rd}}");
+    // The reviewer runs each round in a fresh session; its only history is its
+    // own previous review, carried through dataflow rather than session memory.
+    expect(acceptance?.session).toEqual({ mode: "independent" });
+    expect(acceptance?.appendPrompt).toBeUndefined();
+    expect(acceptance?.templateRefs).toContain("acceptance");
   });
 
   it("keeps the human-gated RD blueprint on one RD session across both loops", () => {

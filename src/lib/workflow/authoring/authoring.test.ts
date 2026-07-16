@@ -58,6 +58,7 @@ describe("authoring workspace", () => {
     const expectedContents: Record<string, string> = {
       "SKILL.md": "name: workflow-authoring",
       "dsl-reference.md": "# Workflow Script DSL Reference",
+      "patterns.md": "# Workflow Design Patterns",
       "blueprint-guide.md": "# Blueprint Guide",
     };
     for (const root of ["skills", ".claude/skills", ".codex/skills"]) {

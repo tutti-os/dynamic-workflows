@@ -38,3 +38,5 @@ If these do not substantially match the request, start from the DSL rather than 
 5. Remove all placeholder and blueprint-specific wording, then validate the complete adapted script before submission.
 
 For a Human-approved implementation followed by independent acceptance, search for `human rd acceptance session`. The `rd-human-acceptance-delivery-v1` pattern deliberately orders the acceptance steps as `[rd_fix, reviewer]` but starts the first iteration at `reviewer`. Reviewer failure therefore runs `rd_fix` and then re-review without repeating the Human gate. The initial RD and `rd_fix` share one session key; the reviewer uses another.
+
+For the contrasting sessionless-reviewer shape, see `loop-primitive-rd-acceptance-test-v1`: the RD keeps one inherited session with `appendPrompt` deltas, while the reviewer runs each round as a fresh independent session and receives its own previous review through a self-reference (`{{acceptance}}`, empty on the first round). Choose it when the reviewer should re-judge from scratch every iteration.

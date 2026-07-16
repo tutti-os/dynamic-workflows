@@ -80,6 +80,8 @@ const acceptance = loop({
 
 Here the initial repository state is reviewed immediately. A failed review makes the next iteration run `rd_fix` and then `reviewer`. `maxIterations` counts reviewer evaluation cycles, including that first review.
 
+A loop step may also reference its own id, such as `{{reviewer}}` inside the reviewer prompt. It resolves to the step's previous-iteration output and renders as an empty string on the step's first run. Combined with `session: { mode: "independent" }`, this passes a reviewer its own history through dataflow instead of session memory, so it re-judges from scratch each round.
+
 ## Human Tasks
 
 Use `human({...})` as a top-level node or loop step to persist a request for user input. The dependent branch waits without keeping the runner process alive; unrelated branches may continue and a run can contain multiple pending tasks.

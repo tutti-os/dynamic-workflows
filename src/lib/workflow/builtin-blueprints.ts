@@ -32,11 +32,11 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     difficulty: "advanced",
     requiresCwd: true,
     patternSummary:
-      "In a bounded two-role loop, an RD agent implements the requirement while an independent acceptance reviewer evaluates only the original requirement and the repository's current implementation, without receiving the RD delivery summary or claimed change scope. The reviewer fails only on blocking issues and returns PASS or FAIL on the final line. Both roles keep inherited sessions with appendPrompt deltas. A final step uses the acceptance result only as a gate, then creates an MR/PR from the current repository changes or reports remaining blockers when iterations run out.",
+      "In a bounded two-role loop, an RD agent implements the requirement while an independent acceptance reviewer judges only the original requirement and current repository state, never the RD delivery narrative. The RD keeps an inherited session with appendPrompt deltas; the reviewer runs each round in a fresh independent session, receiving only its own previous review through dataflow, and fails only on blocking issues with PASS or FAIL on the final line. A final step uses the acceptance result only as a gate, then creates an MR/PR from current changes or reports remaining blockers.",
     useCases: [
       "Implement a requirement in a local repository with adversarial acceptance review.",
       "Keep reviewer judgment independent from the implementer's delivery narrative and claimed change scope.",
-      "Demonstrate a bounded loop, inherited sessions, appendPrompt, and until finalStatus primitives.",
+      "Demonstrate a bounded loop, an inherited RD session with appendPrompt, a fresh reviewer session per round, and until finalStatus primitives.",
       "Create a reusable RD/reviewer delivery pattern that degrades to a status report instead of failing silently.",
     ],
     script: readBuiltinBlueprintScript(

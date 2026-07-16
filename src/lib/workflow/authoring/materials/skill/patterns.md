@@ -1,0 +1,96 @@
+# Workflow Design Patterns
+
+Patterns are structural choices, not templates. Pick by what the task needs and compose freely; the blueprint library shows full worked examples, this file explains the mechanics to reuse.
+
+Execution model that makes them work: the scheduler is dataflow-driven. A node runs as soon as every node referenced in its `inputs` (and any session predecessor) has completed, and independent ready nodes run concurrently. Dependencies exist only where you declare them — the graph you wire is the parallelism you get.
+
+## Outputs are data, not narrative
+
+An agent's final message IS the node's output: downstream prompts receive it verbatim through `{{node_id}}`, and `until` matchers test it directly. Nobody reads it as chat.
+
+- Prompt for the deliverable itself (the list, the diff summary, the verdict), not a report about producing it.
+- When a loop matches a verdict, pin the contract: one exact token alone on the final non-empty line, stated in the prompt with the same spelling `until.finalStatus` expects.
+- When a human node supplies the decision, prefer the structured matcher (`{ source: "gate.action", equals: "pass" }`) over parsing text.
+
+## Node prompt anatomy
+
+Order prompt sections by stability — durable identity and rules first, per-run variable context last:
+
+1. **Identity** — one opening line: the role, its mission, and what the deliverable is.
+2. **Instructions** — numbered rules: authority, required actions, side-effect gates, failure honesty.
+3. **Output contract** — the exact sections to emit and any matched verdict token.
+4. **Context** — every injected `{{...}}` value in its own labeled block at the end.
+
+Two more rules from hard experience:
+
+- Delivery roles need a persistence line ("complete the implementation and verification within this turn; do not end on a plan or an open question list") — without it, agents yield control after analysis.
+- Prompts run on whatever agent target the run selects. State the contract precisely — role, constraints, output — but do not script internal steps a capable runtime should decide itself, and phrase runtime-specific abilities conditionally ("if your runtime supports subagents, …").
+
+## Fan-out / fan-in
+
+Independent perspectives are separate agent nodes with no edges between them; a downstream synthesizer takes all of them via `inputs`.
+
+```js
+const security = agent({ id: "security", label: "Security review", prompt: "Review the change in {{workflow.cwd}} for security issues only. Output the issue list, nothing else." });
+const correctness = agent({ id: "correctness", label: "Correctness review", prompt: "Review the change in {{workflow.cwd}} for correctness bugs only. Output the bug list, nothing else." });
+agent({
+  id: "verdict",
+  label: "Synthesize verdict",
+  inputs: { security, correctness },
+  prompt: "Merge and dedupe these findings.\nSecurity:\n{{security}}\nCorrectness:\n{{correctness}}",
+});
+```
+
+- Do not pass a node an output its prompt never uses: a false dependency serializes branches that could run concurrently and leaks one role's narrative into another that should judge independently.
+- Fan-in is the only place cross-branch context belongs.
+
+## Adversarial verify
+
+A reviewer asked "is this good?" tends to agree. Prompt the reviewer to REFUTE — find a concrete reason the work fails — and to fail when uncertain. This kills plausible-but-wrong acceptance.
+
+- The independent reviewer inspects the actual artifact (repository state, produced file), never the implementer's self-assessment; a prior Human approval is not acceptance evidence either.
+- Pair with a machine-checkable verdict contract (see above) so the loop gate cannot be satisfied by success-shaped prose.
+
+## Perspective-diverse review
+
+When work can fail in more than one way, run parallel reviewers with distinct lenses (correctness, security, regressions, requirements coverage) instead of one generalist or N identical copies — diversity catches failure modes redundancy cannot. Fan the verdicts into a synthesizer or a Human gate.
+
+## Judge panel
+
+For wide solution spaces (design, naming, architecture), fan out N independent attempts from different angles, then a judge node scores them and synthesizes from the winner. Expensive — reserve it for requests that ask for exploration or comparison.
+
+## Acceptance loop
+
+The core delivery shape: `[worker, reviewer]` with `until` on the reviewer and a bounded `maxIterations`.
+
+- Evaluate-first variant: order steps `[fix, reviewer]` and set `firstIteration.startAt: "reviewer"` so the existing state is judged before any repair runs.
+- Keep `onMaxIterations: "fail"` unless downstream steps can genuinely run on unaccepted work.
+- A continuing role keeps one inherited session key across iterations and sends only the delta via `appendPrompt`; repeating the full initial prompt each round wastes context and confuses the session.
+
+## Long-running roles
+
+An inherited session accumulates every iteration's exploration dumps, check logs, and summaries. By late iterations most of that context is stale, and the role drifts: it edits from memory of old file contents, repeats abandoned approaches, and buries its own decisions. Counter drift in this order — the steps compose:
+
+1. **Delegation discipline** (in the role prompt): if the runtime supports subagents or background tasks, delegate bulk conclusion-shaped work — exploration returns "file:line + key finding", check runs return "pass/fail + minimal failure excerpt" — and never keep whole files or full logs in the main conversation. Phrase it conditionally; agent targets vary. Without subagents, focused searches and excerpt reads approximate the same effect.
+2. **Re-anchoring** (in `appendPrompt`): every iteration starts from actual state — `git status`, `git diff`, targeted re-reads of files about to change — and when session memory conflicts with the repository, the repository wins.
+3. **Stateless variant**: when the durable state lives outside the session (the repository, upstream outputs), switch the step to `session: { mode: "independent" }` and pass what it needs through dataflow — a loop step may reference its own id to receive its previous-iteration output (empty on the first round). A fresh context cannot drift. Reviewer roles are the natural candidates: they are supposed to re-judge from scratch anyway, and an inherited reviewer that has failed several rounds tends to anchor on its old verdict or fatigue into PASS.
+
+Implementer roles usually keep the inherited session (their decisions and tradeoffs are genuine cross-iteration state) plus disciplines 1–2; reviewer roles prefer discipline 3.
+
+## Completeness critic
+
+Before delivery, add one agent that asks only "what is missing — requirement not covered, file not checked, claim not verified?" and route its findings into a Human gate or the acceptance loop. Cheap insurance on thorough-audit requests.
+
+## No silent caps
+
+If any step bounds its coverage (top-N items, sampling, skip-on-error), its prompt must require reporting what was excluded. Silent truncation reads downstream as full coverage and corrupts every later judgment.
+
+## Scale to the request
+
+Match structure to stakes; more graph is not more quality.
+
+- "Quick check", "draft", "summarize" → the simplest linear graph, at most one reviewer.
+- "Deliver until accepted" → one acceptance loop.
+- "Thorough audit", "be comprehensive", "production-critical" → perspective-diverse fan-out, adversarial gating, a synthesizer, possibly a completeness critic.
+
+When unsure, lean thorough for review/audit/research requests and lean minimal for everything else.

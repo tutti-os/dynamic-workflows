@@ -10,6 +10,7 @@ const MATERIAL_URLS = {
   guide: new URL("./materials/authoring-guide.md", import.meta.url),
   skill: new URL("./materials/skill/SKILL.md", import.meta.url),
   dslReference: new URL("./materials/skill/dsl-reference.md", import.meta.url),
+  patterns: new URL("./materials/skill/patterns.md", import.meta.url),
   blueprintGuide: new URL(
     "./materials/skill/blueprint-guide.md",
     import.meta.url,
@@ -44,6 +45,10 @@ export function prepareAuthoringWorkspace(input: {
     {
       name: "dsl-reference.md",
       content: readMaterial(MATERIAL_URLS.dslReference),
+    },
+    {
+      name: "patterns.md",
+      content: readMaterial(MATERIAL_URLS.patterns),
     },
     {
       name: "blueprint-guide.md",
