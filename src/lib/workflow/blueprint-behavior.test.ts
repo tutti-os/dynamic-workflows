@@ -467,4 +467,56 @@ describe("builtin blueprint behavior", () => {
       );
     });
   });
+
+  describe("map-fan-out-demo-v1", () => {
+    const SCRIPT = loadBlueprint("map-fan-out-demo-v1.workflow.js");
+
+    const DISCOVERED = [
+      { file: "src/a.ts", line: 1, summary: "fix a" },
+      { file: "src/b.ts", line: 2, summary: "fix b" },
+    ];
+
+    it("fans out a per-item process→verify pipeline and synthesizes the record", async () => {
+      const calls = mockAgentRuntime((input) => {
+        if (input.title === "Discover work items") {
+          return { text: JSON.stringify(DISCOVERED) };
+        }
+        if ((input.title ?? "").startsWith("Process ")) {
+          return { text: `deliverable ${(input.title ?? "").slice("Process ".length)}` };
+        }
+        if ((input.title ?? "").startsWith("Verify ")) {
+          return { text: `verdict ${(input.title ?? "").slice("Verify ".length)}\nVERIFIED` };
+        }
+        return { text: "MERGED REPORT" };
+      });
+
+      const events = await collectRun({
+        script: SCRIPT,
+        agent: "mock",
+        cwd: process.cwd(),
+        inputs: { discovery_focus: "TODO comments in src" },
+      });
+
+      // Each discovered item runs BOTH pipeline steps, in order.
+      for (const file of ["src/a.ts", "src/b.ts"]) {
+        expect(callsWithTitle(calls, `Process ${file}`)).toHaveLength(1);
+        expect(callsWithTitle(calls, `Verify ${file}`)).toHaveLength(1);
+      }
+
+      // The verify step adversarially checks the SAME item's deliverable — its
+      // prompt carries {{process_one}} for that item.
+      const verifyA = callsWithTitle(calls, "Verify src/a.ts")[0];
+      expect(verifyA.prompt).toContain("deliverable src/a.ts");
+      expect(verifyA.prompt).toContain("VERIFIED");
+
+      // The report receives the map record; item outputs are the verify verdicts.
+      const report = callsWithTitle(calls, "Synthesize report")[0];
+      expect(report.prompt).toContain('"total":2');
+      expect(report.prompt).toContain("verdict src/a.ts");
+
+      expect(LAST(events)).toEqual(
+        expect.objectContaining({ type: "run_completed", status: "completed" }),
+      );
+    });
+  });
 });

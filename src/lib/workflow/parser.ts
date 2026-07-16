@@ -21,6 +21,7 @@ import type {
   WorkflowPhase,
   WorkflowSessionSpec,
   WorkflowScalarValue,
+  WorkflowValue,
 } from "./types";
 import {
   listOptionalInputNames,
@@ -434,6 +435,9 @@ function readLoopFirstIteration(
   return { startAt };
 }
 
+const MAP_LITERAL_SOURCE = "inline list";
+const MAP_MAX_ITEMS_LIMIT = 50;
+
 function addMapNode(
   callExpression: AnyNode,
   variableName: string | undefined,
@@ -445,48 +449,57 @@ function addMapNode(
     variableName ??
     `map_${state.anonymousIndex++}`;
   const label = readObjectString(options, "label") ?? humanize(id);
-  const maxItems = readObjectNumber(options, "maxItems");
   const onItemFailure = readMapOnItemFailure(options, state);
-  const step = readMapStep(options, callExpression, state);
+  const steps = readMapSteps(options, callExpression, state);
   const inputs = readInputs(options, state);
-  const { source, sourceNodeId } = readMapSource(options, callExpression, state);
+  const parsedSource = readMapSource(options, callExpression, state);
+  const maxItems = resolveMapMaxItems(options, callExpression, parsedSource, state);
 
-  if (source && !inputs.some((input) => input.name === source)) {
+  if (
+    parsedSource.kind === "node" &&
+    parsedSource.source &&
+    !inputs.some((input) => input.name === parsedSource.source)
+  ) {
     // Bind the source node so the map waits for it and the DAG edge exists.
-    inputs.push({ name: source, sourceVariable: source, sourceNodeId });
-  }
-
-  if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > 50) {
-    state.diagnostics.push({
-      severity: "error",
-      message: "map(...) requires maxItems as an integer from 1 to 50.",
-      range:
-        readObjectPropertyValueRange(options, "maxItems") ??
-        toRange(callExpression),
+    inputs.push({
+      name: parsedSource.source,
+      sourceVariable: parsedSource.source,
+      sourceNodeId: parsedSource.sourceNodeId,
     });
   }
 
-  // Item refs (`item`, `item.<path>`, `item_index`) resolve per child and must
-  // not be treated as workflow inputs or upstream bindings.
-  const templateRefs = step
-    ? [
-        ...new Set(
-          step.templateRefs.filter(
-            (ref) => !isMapItemTemplateRef(ref) && !isReservedTemplateRef(ref),
-          ),
-        ),
-      ]
-    : [];
+  const stepIds = new Set(steps.map((step) => step.id));
 
-  const map: WorkflowMapSpec | undefined = step
-    ? {
-        source,
-        ...(sourceNodeId ? { sourceNodeId } : {}),
-        maxItems: Number.isInteger(maxItems) ? maxItems : 1,
-        onItemFailure,
-        step,
-      }
-    : undefined;
+  // Item refs (`item`, `item.<path>`, `item_index`), reserved refs, and sibling
+  // step ids resolve per child and must not become workflow inputs or bindings.
+  const templateRefs = [
+    ...new Set(
+      steps.flatMap((step) =>
+        step.templateRefs.filter(
+          (ref) =>
+            !isMapItemTemplateRef(ref) &&
+            !isReservedTemplateRef(ref) &&
+            !stepIds.has(templateRefRoot(ref)),
+        ),
+      ),
+    ),
+  ];
+
+  const map: WorkflowMapSpec | undefined =
+    steps.length > 0
+      ? {
+          source: parsedSource.source,
+          ...(parsedSource.kind === "node" && parsedSource.sourceNodeId
+            ? { sourceNodeId: parsedSource.sourceNodeId }
+            : {}),
+          ...(parsedSource.kind === "literal"
+            ? { items: parsedSource.items }
+            : {}),
+          maxItems,
+          onItemFailure,
+          steps,
+        }
+      : undefined;
 
   const node: WorkflowNode = {
     id,
@@ -512,21 +525,32 @@ function addMapNode(
   addInputEdges(node, state);
 }
 
+type ParsedMapSource =
+  | { kind: "node"; source: string; sourceNodeId?: string }
+  | { kind: "literal"; source: string; items: WorkflowValue[] }
+  | { kind: "invalid"; source: string };
+
 function readMapSource(
   options: AnyNode | undefined,
   callExpression: AnyNode,
   state: ParserState,
-): { source: string; sourceNodeId?: string } {
+): ParsedMapSource {
   const value = readObjectPropertyValue(options, "source");
+
+  if (value?.type === "ArrayExpression") {
+    const items = readJsonArrayLiteral(value, state);
+    return { kind: "literal", source: MAP_LITERAL_SOURCE, items };
+  }
+
   const sourceVariable = readIdentifierName(value);
   if (!sourceVariable) {
     state.diagnostics.push({
       severity: "error",
       message:
-        "map(...) requires source to reference an upstream node variable, for example source: discover.",
+        "map(...) requires source to reference an upstream node variable (source: discover) or an inline array literal.",
       range: toRange(value) ?? toRange(callExpression),
     });
-    return { source: "" };
+    return { kind: "invalid", source: "" };
   }
   const sourceNodeId = state.variableToNodeId[sourceVariable];
   if (!sourceNodeId) {
@@ -536,46 +560,263 @@ function readMapSource(
       range: toRange(value) ?? toRange(callExpression),
     });
   }
-  return { source: sourceVariable, ...(sourceNodeId ? { sourceNodeId } : {}) };
+  return {
+    kind: "node",
+    source: sourceVariable,
+    ...(sourceNodeId ? { sourceNodeId } : {}),
+  };
 }
 
-function readMapStep(
+// maxItems is required for node sources; for literal sources it is optional and
+// defaults to the literal length. Statically-knowable cap violations (a literal
+// longer than maxItems or the hard 50 ceiling) are parse-time errors so they
+// fail early instead of at run time.
+function resolveMapMaxItems(
+  options: AnyNode | undefined,
+  callExpression: AnyNode,
+  source: ParsedMapSource,
+  state: ParserState,
+): number {
+  const declared = readObjectPropertyValue(options, "maxItems");
+  const maxItems = readObjectNumber(options, "maxItems");
+  const range =
+    readObjectPropertyValueRange(options, "maxItems") ??
+    toRange(callExpression);
+
+  if (source.kind === "literal") {
+    const literalLength = source.items.length;
+    if (declared === undefined) {
+      if (literalLength > MAP_MAX_ITEMS_LIMIT) {
+        state.diagnostics.push({
+          severity: "error",
+          message: `map(...) inline list has ${literalLength} items, exceeding the map limit of ${MAP_MAX_ITEMS_LIMIT}.`,
+          range: readObjectPropertyValueRange(options, "source") ?? range,
+        });
+      }
+      return literalLength > 0 ? literalLength : 1;
+    }
+    if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > MAP_MAX_ITEMS_LIMIT) {
+      state.diagnostics.push({
+        severity: "error",
+        message: `map(...) requires maxItems as an integer from 1 to ${MAP_MAX_ITEMS_LIMIT}.`,
+        range,
+      });
+      return Number.isInteger(maxItems) && maxItems >= 1 ? maxItems : 1;
+    }
+    if (literalLength > maxItems) {
+      state.diagnostics.push({
+        severity: "error",
+        message: `map(...) inline list has ${literalLength} items, exceeding maxItems ${maxItems}.`,
+        range: readObjectPropertyValueRange(options, "source") ?? range,
+      });
+    }
+    return maxItems;
+  }
+
+  if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > MAP_MAX_ITEMS_LIMIT) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `map(...) requires maxItems as an integer from 1 to ${MAP_MAX_ITEMS_LIMIT}.`,
+      range,
+    });
+    return Number.isInteger(maxItems) && maxItems >= 1 ? maxItems : 1;
+  }
+  return maxItems;
+}
+
+// Reads an array literal of plain JSON data (objects/arrays/scalars). Template
+// refs are NOT resolved inside literal items — a "{{item}}" string stays
+// literal. Non-JSON elements (identifiers, calls, interpolation) are errors.
+function readJsonArrayLiteral(
+  arrayNode: AnyNode,
+  state: ParserState,
+): WorkflowValue[] {
+  const elements = (arrayNode.elements as AnyNode[] | undefined) ?? [];
+  return elements.flatMap((element) => {
+    const value = readJsonLiteralValue(element, state);
+    return value === undefined ? [] : [value];
+  });
+}
+
+function readJsonLiteralValue(
+  node: AnyNode | undefined,
+  state: ParserState,
+): WorkflowValue | undefined {
+  if (!node) {
+    return undefined;
+  }
+  const scalar = readScalarLike(node);
+  if (scalar !== undefined) {
+    return scalar;
+  }
+  if (node.type === "ArrayExpression") {
+    return readJsonArrayLiteral(node, state);
+  }
+  if (node.type === "ObjectExpression") {
+    const properties = (node.properties as AnyNode[] | undefined) ?? [];
+    const object: { [key: string]: WorkflowValue } = {};
+    for (const property of properties) {
+      if (property.type !== "ObjectProperty") {
+        state.diagnostics.push({
+          severity: "error",
+          message:
+            "map inline list objects must use plain key: value properties (no spreads or methods).",
+          range: toRange(property),
+        });
+        continue;
+      }
+      const key = readKeyName(property.key as AnyNode);
+      const value = readJsonLiteralValue(property.value as AnyNode, state);
+      if (key === undefined || value === undefined) {
+        continue;
+      }
+      object[key] = value;
+    }
+    return object;
+  }
+  state.diagnostics.push({
+    severity: "error",
+    message:
+      "map inline list items must be plain JSON data (strings, numbers, booleans, null, arrays, or objects); templates and expressions are not resolved inside literal items.",
+    range: toRange(node),
+  });
+  return undefined;
+}
+
+function readMapSteps(
   options: AnyNode | undefined,
   callExpression: AnyNode,
   state: ParserState,
-): WorkflowAgentLoopStep | undefined {
-  const value = readObjectPropertyValue(options, "step");
-  if (!value) {
+): WorkflowAgentLoopStep[] {
+  const stepValue = readObjectPropertyValue(options, "step");
+  const stepsValue = readObjectPropertyValue(options, "steps");
+
+  if (stepValue && stepsValue) {
     state.diagnostics.push({
       severity: "error",
-      message: "map(...) requires step: agent({...}).",
+      message:
+        "map(...) declares both step and steps; use step: agent({...}) for one stage or steps: [agent({...}), ...] for a pipeline.",
+      range: readObjectPropertyValueRange(options, "steps") ?? toRange(callExpression),
+    });
+  }
+
+  if (!stepValue && !stepsValue) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "map(...) requires step: agent({...}) or steps: [agent({...}), ...].",
       range: toRange(callExpression),
     });
-    return undefined;
+    return [];
   }
+
+  const stepExpressions: AnyNode[] = stepsValue
+    ? readMapStepsArray(stepsValue, state)
+    : stepValue
+      ? [stepValue]
+      : [];
+
+  const seenIds = new Set<string>();
+  const steps = stepExpressions.flatMap((value, index): WorkflowAgentLoopStep[] => {
+    const step = readMapAgentStep(value, index, state);
+    if (!step) {
+      return [];
+    }
+    if (seenIds.has(step.id)) {
+      state.diagnostics.push({
+        severity: "error",
+        message: `Duplicate map step id "${step.id}". Step ids must be unique within a map.`,
+        range: step.sourceRange,
+      });
+    }
+    seenIds.add(step.id);
+    return [step];
+  });
+
+  validateMapStepReferences(steps, state);
+  return steps;
+}
+
+function readMapStepsArray(
+  stepsValue: AnyNode,
+  state: ParserState,
+): AnyNode[] {
+  if (stepsValue.type !== "ArrayExpression") {
+    state.diagnostics.push({
+      severity: "error",
+      message: "map(...) steps must be an array literal of agent({...}) steps.",
+      range: toRange(stepsValue),
+    });
+    return [];
+  }
+  const elements = (stepsValue.elements as AnyNode[] | undefined) ?? [];
+  if (elements.length === 0) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "map(...) steps must declare at least one agent({...}) step.",
+      range: toRange(stepsValue),
+    });
+  }
+  return elements;
+}
+
+function readMapAgentStep(
+  value: AnyNode,
+  index: number,
+  state: ParserState,
+): WorkflowAgentLoopStep | undefined {
   const expression = unwrapExpression(unwrapFunctionBody(value));
   if (!isCallExpression(expression, "agent")) {
     state.diagnostics.push({
       severity: "error",
       message:
-        "map step must be a single agent({...}); human, loop, map, and array steps are not supported in v1.",
+        "map steps must each be an agent({...}); human, loop, and map steps are not supported.",
       range: toRange(value),
     });
     return undefined;
   }
 
-  const step = readLoopAgentStep(expression, 0, state) as WorkflowAgentLoopStep;
+  const step = readLoopAgentStep(expression, index, state) as WorkflowAgentLoopStep;
   if (step.session?.mode === "inherit") {
     state.diagnostics.push({
       severity: "error",
       message:
         'map step session cannot be { mode: "inherit" }; map children always run independent sessions.',
-      range: readObjectPropertyValueRange(firstArg(expression), "session") ??
+      range:
+        readObjectPropertyValueRange(firstArg(expression), "session") ??
         step.sourceRange,
     });
     return { ...step, session: undefined };
   }
   return step;
+}
+
+// A later step may reference EARLIER step ids of the same item; referencing a
+// later step or itself is a validation error (there is no output yet).
+function validateMapStepReferences(
+  steps: WorkflowAgentLoopStep[],
+  state: ParserState,
+): void {
+  const stepIds = new Set(steps.map((step) => step.id));
+  const priorIds = new Set<string>();
+  for (const step of steps) {
+    for (const ref of step.templateRefs) {
+      const root = templateRefRoot(ref);
+      if (isMapItemTemplateRef(ref) || isReservedTemplateRef(ref)) {
+        continue;
+      }
+      if (stepIds.has(root) && !priorIds.has(root)) {
+        state.diagnostics.push({
+          severity: "error",
+          message:
+            root === step.id
+              ? `map step "${step.id}" references its own output "${ref}"; a step cannot read its own result.`
+              : `map step "${step.id}" references "${ref}" from a later step; steps may only reference earlier step ids of the same item.`,
+          range: step.promptRange ?? step.sourceRange,
+        });
+      }
+    }
+    priorIds.add(step.id);
+  }
 }
 
 function readMapOnItemFailure(
@@ -1249,26 +1490,29 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
     });
 
     if (node.map) {
-      const disallowedInputNames = new Set([
-        ...workflowNames,
-        node.map.step.id,
-      ]);
-      validateRuntimeOptionField({
-        value: node.map.step.agent,
-        fieldName: "agent",
-        ownerLabel: `map step "${node.id}.${node.map.step.id}"`,
-        range: node.map.step.sourceRange,
-        disallowedInputNames,
-        state,
-      });
-      validateRuntimeOptionField({
-        value: node.map.step.model,
-        fieldName: "model",
-        ownerLabel: `map step "${node.id}.${node.map.step.id}"`,
-        range: node.map.step.sourceRange,
-        disallowedInputNames,
-        state,
-      });
+      const mapStepNames = new Set(node.map.steps.map((step) => step.id));
+      for (const step of node.map.steps) {
+        const disallowedInputNames = new Set([
+          ...workflowNames,
+          ...mapStepNames,
+        ]);
+        validateRuntimeOptionField({
+          value: step.agent,
+          fieldName: "agent",
+          ownerLabel: `map step "${node.id}.${step.id}"`,
+          range: step.sourceRange,
+          disallowedInputNames,
+          state,
+        });
+        validateRuntimeOptionField({
+          value: step.model,
+          fieldName: "model",
+          ownerLabel: `map step "${node.id}.${step.id}"`,
+          range: step.sourceRange,
+          disallowedInputNames,
+          state,
+        });
+      }
     }
 
     if (!node.loop) {
@@ -1432,10 +1676,9 @@ function collectAgentPromptUnits(node: WorkflowNode): AgentPromptUnit[] {
     }
   }
   if (node.map) {
-    units.push({
-      text: node.map.step.prompt,
-      range: node.map.step.promptRange,
-    });
+    for (const step of node.map.steps) {
+      units.push({ text: step.prompt, range: step.promptRange });
+    }
   }
   return units;
 }
@@ -1494,13 +1737,17 @@ function addJsonContractDiagnostics(
       }
     }
   }
-  if (node.map && node.map.step.output === "json") {
-    addJsonContractDiagnostic(
-      node.map.step.prompt,
-      `map step "${node.id}.${node.map.step.id}"`,
-      node.map.step.promptRange ?? node.sourceRange,
-      state,
-    );
+  if (node.map) {
+    for (const step of node.map.steps) {
+      if (step.output === "json") {
+        addJsonContractDiagnostic(
+          step.prompt,
+          `map step "${node.id}.${step.id}"`,
+          step.promptRange ?? node.sourceRange,
+          state,
+        );
+      }
+    }
   }
 }
 
@@ -1683,12 +1930,10 @@ function collectRuntimeOptionRefs(node: WorkflowNode): {
       ...collectRuntimeOptionFieldRefs(step.agent),
       ...collectRuntimeOptionFieldRefs(step.model),
     ]) ?? []),
-    ...(node.map
-      ? [
-          ...collectRuntimeOptionFieldRefs(node.map.step.agent),
-          ...collectRuntimeOptionFieldRefs(node.map.step.model),
-        ]
-      : []),
+    ...(node.map?.steps.flatMap((step) => [
+      ...collectRuntimeOptionFieldRefs(step.agent),
+      ...collectRuntimeOptionFieldRefs(step.model),
+    ]) ?? []),
   ];
   return {
     required: [

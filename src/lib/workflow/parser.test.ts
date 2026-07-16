@@ -886,9 +886,9 @@ const migrated = await map({
         onItemFailure: "skip",
       }),
     );
-    expect(map?.map?.step).toEqual(
+    expect(map?.map?.steps).toEqual([
       expect.objectContaining({ id: "migrate_one", kind: "agent" }),
-    );
+    ]);
     // The source is a DAG dependency.
     expect(parsed.edges).toContainEqual(
       expect.objectContaining({ source: "discover", target: "migrated" }),
@@ -973,7 +973,7 @@ const migrated = await map({
 `);
     expect(parsed.diagnostics.map((item) => item.message)).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("map step must be a single agent({...})"),
+        expect.stringContaining("map steps must each be an agent({...})"),
       ]),
     );
   });
@@ -994,7 +994,7 @@ const migrated = await map({
       ]),
     );
     const map = parsed.nodes.find((node) => node.id === "migrated");
-    expect(map?.map?.step.session).toBeUndefined();
+    expect(map?.map?.steps[0].session).toBeUndefined();
   });
 
   it("allows a redundant independent session on a map step", () => {
@@ -1011,7 +1011,7 @@ const migrated = await map({
       parsed.diagnostics.filter((item) => item.severity === "error"),
     ).toEqual([]);
     const map = parsed.nodes.find((node) => node.id === "migrated");
-    expect(map?.map?.step.session).toEqual({ mode: "independent" });
+    expect(map?.map?.steps[0].session).toEqual({ mode: "independent" });
   });
 
   it("rejects an unknown map onItemFailure", () => {
@@ -1028,6 +1028,216 @@ const migrated = await map({
     expect(parsed.diagnostics.map((item) => item.message)).toEqual(
       expect.arrayContaining([
         'map onItemFailure must be "skip" or "fail".',
+      ]),
+    );
+  });
+
+  it("parses a multi-step map pipeline and keeps later step refs internal", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List work as JSON." })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  steps: [
+    agent({ id: "process_one", label: "Process {{item.file}}", prompt: "Process {{item.file}}." }),
+    agent({ id: "verify_one", label: "Verify {{item.file}}", prompt: "Verify {{process_one}} for {{item.file}}." }),
+  ],
+})
+`);
+    expect(
+      parsed.diagnostics.filter((item) => item.severity === "error"),
+    ).toEqual([]);
+    const map = parsed.nodes.find((node) => node.id === "migrated");
+    expect(map?.map?.steps.map((step) => step.id)).toEqual([
+      "process_one",
+      "verify_one",
+    ]);
+    // The earlier-step ref never leaks out as a workflow input / binding / edge.
+    expect(map?.templateRefs).not.toContain("process_one");
+    expect(map?.inputs.some((input) => input.name === "process_one")).toBe(false);
+    expect(
+      parsed.edges.some((edge) => edge.target === "migrated" && edge.label === "process_one"),
+    ).toBe(false);
+  });
+
+  it("treats step: as sugar for a single-entry steps: pipeline", () => {
+    const sugar = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({ id: "m", source: discover, maxItems: 5, step: agent({ id: "one", prompt: "Do {{item}}" }) })
+`);
+    const array = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({ id: "m", source: discover, maxItems: 5, steps: [agent({ id: "one", prompt: "Do {{item}}" })] })
+`);
+    const sugarSteps = sugar.nodes.find((node) => node.id === "m")?.map?.steps;
+    const arraySteps = array.nodes.find((node) => node.id === "m")?.map?.steps;
+    expect(sugarSteps).toHaveLength(1);
+    expect(sugarSteps?.[0].id).toBe("one");
+    expect(arraySteps?.[0].id).toBe("one");
+    expect(
+      sugar.diagnostics.filter((item) => item.severity === "error"),
+    ).toEqual([]);
+  });
+
+  it("rejects declaring both step and steps on a map", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({
+  id: "m",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+  steps: [agent({ id: "two", prompt: "Do {{item}}" })],
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("map(...) declares both step and steps"),
+      ]),
+    );
+  });
+
+  it("rejects duplicate map step ids", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({
+  id: "m",
+  source: discover,
+  maxItems: 5,
+  steps: [
+    agent({ id: "dup", prompt: "First {{item}}" }),
+    agent({ id: "dup", prompt: "Second {{item}}" }),
+  ],
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Duplicate map step id "dup"'),
+      ]),
+    );
+  });
+
+  it("rejects a map step referencing a later or its own step id", () => {
+    const forward = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({
+  id: "m",
+  source: discover,
+  maxItems: 5,
+  steps: [
+    agent({ id: "first", prompt: "Use {{second}} for {{item}}" }),
+    agent({ id: "second", prompt: "Do {{item}}" }),
+  ],
+})
+`);
+    expect(forward.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('references "second" from a later step'),
+      ]),
+    );
+
+    const self = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({
+  id: "m",
+  source: discover,
+  maxItems: 5,
+  steps: [agent({ id: "solo", prompt: "Loop {{solo}} on {{item}}" })],
+})
+`);
+    expect(self.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('references its own output "solo"'),
+      ]),
+    );
+  });
+
+  it("accepts a static inline array source without a discover node", () => {
+    const parsed = parseWorkflowScript(`
+const checks = await map({
+  id: "checks",
+  source: [{ env: "dev" }, { env: "staging" }, { env: "prod" }],
+  step: agent({ id: "one", prompt: "Check {{item.env}}: {{item}}" }),
+})
+`);
+    expect(
+      parsed.diagnostics.filter((item) => item.severity === "error"),
+    ).toEqual([]);
+    const map = parsed.nodes.find((node) => node.id === "checks");
+    expect(map?.map?.items).toEqual([
+      { env: "dev" },
+      { env: "staging" },
+      { env: "prod" },
+    ]);
+    // maxItems defaults to the literal length; there is no source binding/edge.
+    expect(map?.map?.maxItems).toBe(3);
+    expect(map?.map?.sourceNodeId).toBeUndefined();
+    expect(map?.inputs).toEqual([]);
+    expect(parsed.edges.some((edge) => edge.target === "checks")).toBe(false);
+  });
+
+  it("allows a literal source with an explicit maxItems at least its length", () => {
+    const parsed = parseWorkflowScript(`
+const checks = await map({
+  id: "checks",
+  source: [{ env: "dev" }, { env: "prod" }],
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Check {{item.env}}" }),
+})
+`);
+    expect(
+      parsed.diagnostics.filter((item) => item.severity === "error"),
+    ).toEqual([]);
+    const map = parsed.nodes.find((node) => node.id === "checks");
+    expect(map?.map?.maxItems).toBe(5);
+    expect(map?.map?.items).toHaveLength(2);
+  });
+
+  it("errors when a literal source is longer than maxItems", () => {
+    const parsed = parseWorkflowScript(`
+const checks = await map({
+  id: "checks",
+  source: [{ env: "dev" }, { env: "staging" }, { env: "prod" }],
+  maxItems: 2,
+  step: agent({ id: "one", prompt: "Check {{item.env}}" }),
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("inline list has 3 items, exceeding maxItems 2"),
+      ]),
+    );
+  });
+
+  it("errors when a literal source without maxItems exceeds the map limit of 50", () => {
+    const items = Array.from({ length: 51 }, (_, index) => `"item-${index}"`).join(", ");
+    const parsed = parseWorkflowScript(`
+const checks = await map({
+  id: "checks",
+  source: [${items}],
+  step: agent({ id: "one", prompt: "Check {{item}}" }),
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("inline list has 51 items, exceeding the map limit of 50"),
+      ]),
+    );
+  });
+
+  it("still requires maxItems for a node-bound map source", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List as JSON." })
+const m = await map({
+  id: "m",
+  source: discover,
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("map(...) requires maxItems as an integer from 1 to 50"),
       ]),
     );
   });

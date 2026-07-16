@@ -1090,7 +1090,6 @@ async function* runMapNode(input: {
     return;
   }
 
-  const stepCwd = resolveEffectiveNodeCwd(mapCwd, map.step.cwd);
   const recovered = input.mapStatesByNodeId[input.node.id];
 
   try {
@@ -1103,6 +1102,21 @@ async function* runMapNode(input: {
         runId: input.runId,
         nodeId: input.node.id,
         message: `Map "${input.node.id}" restored ${items.length} item(s) from checkpoint.`,
+      });
+    } else if (map.items) {
+      // Static inline list: skip source resolution and checkpoint the literal
+      // items so recovery/retry behave identically to a resolved source.
+      items = map.items;
+      yield loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.node.id,
+        message: `Map "${input.node.id}" expanded to ${items.length} inline item(s).`,
+      });
+      await saveMapCheckpoint(input.request, {
+        runId: input.runId,
+        nodeId: input.node.id,
+        items,
+        completions: [],
       });
     } else {
       const sourceValue = map.sourceNodeId
@@ -1137,22 +1151,29 @@ async function* runMapNode(input: {
     }
 
     // Restored per-item states so the run log reflects already-finished items.
+    // Recovery is item-level, so a restored completion is attributed to its
+    // failing step (failures) or the last step (successes).
+    const lastStep = map.steps[map.steps.length - 1];
     for (const { index, item } of indexed) {
       const completion = completions.get(index);
       if (!completion) {
         continue;
       }
+      const restoredStep =
+        map.steps.find((step) => step.id === completion.step) ?? lastStep;
+      const restoredStepCwd = resolveEffectiveNodeCwd(mapCwd, restoredStep.cwd);
       yield mapItemStateEvent({
         runId: input.runId,
-        mapItem: createMapItemExecutionRef(input.node.id, index, map.step.id),
-        label: renderMapItemText(map.step.label, {
+        mapItem: createMapItemExecutionRef(input.node.id, index, restoredStep.id),
+        label: renderMapItemText(restoredStep.label, {
           map,
           index,
           item,
           node: input.node,
           workflowOutputs: input.outputs,
           workflowInputs: input.request.inputs,
-          cwd: stepCwd,
+          cwd: restoredStepCwd,
+          stepOutputs: {},
         }),
         status: completion.status,
         restored: true,
@@ -1219,7 +1240,7 @@ async function* runMapNode(input: {
                 break;
               }
               const { index, item } = pending[position];
-              const generator = runMapItemStep({
+              const generator = runMapItem({
                 runId: input.runId,
                 node: input.node,
                 map,
@@ -1227,7 +1248,7 @@ async function* runMapNode(input: {
                 item,
                 defaultAgent: agent,
                 defaultModel: model,
-                stepCwd,
+                mapCwd,
                 workflowOutputs: input.outputs,
                 request: input.request,
               });
@@ -1289,7 +1310,12 @@ async function* runMapNode(input: {
   }
 }
 
-async function* runMapItemStep(input: {
+// Runs one item through its step pipeline sequentially. There is no cross-item
+// barrier — the outer pool schedules ITEMS, and each item's steps run inside
+// its own slot. The first failing step fails the item (attributed via `step`)
+// and its remaining steps are skipped; the last step's output is the item
+// output. Earlier step outputs are available to later steps by step id.
+async function* runMapItem(input: {
   runId: string;
   node: WorkflowNode;
   map: WorkflowMapSpec;
@@ -1297,120 +1323,134 @@ async function* runMapItemStep(input: {
   item: WorkflowValue;
   defaultAgent: string;
   defaultModel?: string;
-  stepCwd: string;
+  mapCwd: string;
   workflowOutputs: Record<string, WorkflowValue>;
   request: WorkflowRunRequest;
 }): AsyncGenerator<WorkflowRunEvent, WorkflowMapItemCompletion> {
-  const step = input.map.step;
-  const mapItem = createMapItemExecutionRef(input.node.id, input.index, step.id);
-  const syntheticId = createMapItemId(input.node.id, input.index, step.id);
-  const context = {
-    map: input.map,
-    index: input.index,
-    item: input.item,
-    node: input.node,
-    workflowOutputs: input.workflowOutputs,
-    workflowInputs: input.request.inputs,
-    cwd: input.stepCwd,
-  };
-  const label = renderMapItemText(step.label, context);
-  const agent =
-    resolveRuntimeOption(step.agent, input.defaultAgent, input.request.inputs) ??
-    input.defaultAgent;
-  const model = resolveRuntimeOption(
-    step.model,
-    input.defaultModel,
-    input.request.inputs,
-  );
-  const prompt = renderMapItemText(step.prompt, context);
-  let output = "";
+  const stepOutputs: Record<string, WorkflowValue> = {};
+  let lastOutput: WorkflowValue = "";
 
-  yield mapItemStateEvent({
-    runId: input.runId,
-    mapItem,
-    label,
-    status: "running",
-    agent,
-    model,
-    promptMode: "full",
-    input: prompt,
-  });
-  yield loopStatusEvent({
-    runId: input.runId,
-    nodeId: input.node.id,
-    message: `Map item ${syntheticId} started.`,
-  });
+  for (const step of input.map.steps) {
+    const mapItem = createMapItemExecutionRef(input.node.id, input.index, step.id);
+    const syntheticId = createMapItemId(input.node.id, input.index, step.id);
+    const stepCwd = resolveEffectiveNodeCwd(input.mapCwd, step.cwd);
+    const context = {
+      map: input.map,
+      index: input.index,
+      item: input.item,
+      node: input.node,
+      workflowOutputs: input.workflowOutputs,
+      workflowInputs: input.request.inputs,
+      cwd: stepCwd,
+      stepOutputs,
+    };
+    const label = renderMapItemText(step.label, context);
+    const agent =
+      resolveRuntimeOption(step.agent, input.defaultAgent, input.request.inputs) ??
+      input.defaultAgent;
+    const model = resolveRuntimeOption(
+      step.model,
+      input.defaultModel,
+      input.request.inputs,
+    );
+    const prompt = renderMapItemText(step.prompt, context);
+    let output = "";
 
-  try {
-    for await (const event of runAgent({
-      runId: `${input.runId}:${syntheticId}`,
+    yield mapItemStateEvent({
+      runId: input.runId,
+      mapItem,
+      label,
+      status: "running",
       agent,
-      cwd: input.stepCwd,
-      prompt,
-      title: label,
       model,
-      signal: input.request.signal,
-    })) {
-      throwIfAborted(input.request.signal);
+      promptMode: "full",
+      input: prompt,
+    });
+    yield loopStatusEvent({
+      runId: input.runId,
+      nodeId: input.node.id,
+      message: `Map item ${syntheticId} started.`,
+    });
 
-      if (event.type === "text_delta") {
-        output += event.text;
+    try {
+      for await (const event of runAgent({
+        runId: `${input.runId}:${syntheticId}`,
+        agent,
+        cwd: stepCwd,
+        prompt,
+        title: label,
+        model,
+        signal: input.request.signal,
+      })) {
+        throwIfAborted(input.request.signal);
+
+        if (event.type === "text_delta") {
+          output += event.text;
+        }
+        if (event.type === "error") {
+          throw new Error(event.message);
+        }
+        if (event.type === "done" && event.status === "canceled") {
+          throw new WorkflowRunCanceledError();
+        }
+        if (event.type === "done" && event.status === "failed") {
+          throw new Error(event.reason ?? "Agent run failed");
+        }
+        yield {
+          type: "node_event",
+          runId: input.runId,
+          nodeId: input.node.id,
+          mapItem,
+          event,
+        };
       }
-      if (event.type === "error") {
-        throw new Error(event.message);
-      }
-      if (event.type === "done" && event.status === "canceled") {
-        throw new WorkflowRunCanceledError();
-      }
-      if (event.type === "done" && event.status === "failed") {
-        throw new Error(event.reason ?? "Agent run failed");
-      }
-      yield {
-        type: "node_event",
+
+      // Extract before signaling completion so a parse failure fails the step.
+      const stepOutput =
+        step.output === "json" ? extractAgentJsonOutput(output) : output;
+
+      yield mapItemStateEvent({
+        runId: input.runId,
+        mapItem,
+        label,
+        status: "completed",
+        output: stepOutput,
+      });
+      yield loopStatusEvent({
         runId: input.runId,
         nodeId: input.node.id,
+        message: `Map item ${syntheticId} completed.`,
+      });
+      stepOutputs[step.id] = stepOutput;
+      lastOutput = stepOutput;
+    } catch (error) {
+      if (isCancellationError(error)) {
+        // Cancellation aborts the whole map node, not a single skippable item.
+        throw error;
+      }
+      const message = toRunErrorMessage(error);
+      yield mapItemStateEvent({
+        runId: input.runId,
         mapItem,
-        event,
+        label,
+        status: "failed",
+        error: message,
+      });
+      yield loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.node.id,
+        message: `Map item ${syntheticId} failed at step ${step.id}: ${message}`,
+      });
+      return {
+        index: input.index,
+        status: "failed",
+        step: step.id,
+        error: message,
       };
     }
-
-    // Extract before signaling completion so a parse failure fails the item.
-    const itemOutput =
-      step.output === "json" ? extractAgentJsonOutput(output) : output;
-
-    yield mapItemStateEvent({
-      runId: input.runId,
-      mapItem,
-      label,
-      status: "completed",
-      output: itemOutput,
-    });
-    yield loopStatusEvent({
-      runId: input.runId,
-      nodeId: input.node.id,
-      message: `Map item ${syntheticId} completed.`,
-    });
-    return { index: input.index, status: "completed", output: itemOutput };
-  } catch (error) {
-    if (isCancellationError(error)) {
-      // Cancellation aborts the whole map node, not a single skippable item.
-      throw error;
-    }
-    const message = toRunErrorMessage(error);
-    yield mapItemStateEvent({
-      runId: input.runId,
-      mapItem,
-      label,
-      status: "failed",
-      error: message,
-    });
-    yield loopStatusEvent({
-      runId: input.runId,
-      nodeId: input.node.id,
-      message: `Map item ${syntheticId} failed: ${message}`,
-    });
-    return { index: input.index, status: "failed", error: message };
   }
+
+  return { index: input.index, status: "completed", output: lastOutput };
 }
 
 type MapItemContext = {
@@ -1421,6 +1461,8 @@ type MapItemContext = {
   workflowOutputs: Record<string, WorkflowValue>;
   workflowInputs: Record<string, WorkflowInputValue> | undefined;
   cwd: string;
+  /** Outputs of this item's earlier steps, keyed by step id. */
+  stepOutputs: Record<string, WorkflowValue>;
 };
 
 function renderMapItemText(template: string, context: MapItemContext): string {
@@ -1444,6 +1486,9 @@ function resolveMapItemTemplateValue(
   const [root, ...path] = input.name.split(".");
   if (root === "item") {
     return resolveWorkflowValuePath(input.item, path);
+  }
+  if (input.stepOutputs[root] !== undefined) {
+    return resolveWorkflowValuePath(input.stepOutputs[root], path);
   }
   const binding = input.node.inputs.find(
     (item) => item.name === input.name || item.name === root,
@@ -1514,7 +1559,12 @@ function buildMapOutput(
         output: completion.output ?? "",
       });
     } else if (completion?.status === "failed") {
-      failed.push({ index, item, error: completion.error ?? "unknown error" });
+      failed.push({
+        index,
+        item,
+        ...(completion.step ? { step: completion.step } : {}),
+        error: completion.error ?? "unknown error",
+      });
     }
   }
   return { items, failed, total: indexed.length };
@@ -1706,6 +1756,7 @@ function sanitizeMapItemCompletion(
     {
       index: value.index,
       status: value.status,
+      ...(typeof value.step === "string" ? { step: value.step } : {}),
       ...(value.output !== undefined && isWorkflowValue(value.output)
         ? { output: value.output }
         : {}),

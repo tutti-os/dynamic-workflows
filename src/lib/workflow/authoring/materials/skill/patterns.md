@@ -45,6 +45,8 @@ agent({
 - Do not pass a node an output its prompt never uses: a false dependency serializes branches that could run concurrently and leaks one role's narrative into another that should judge independently.
 - Fan-in is the only place cross-branch context belongs.
 - The examples above are static fan-out: the branches are known at authoring time. When the width is only known at run time (process each of N discovered items), use `map` — an upstream node emits a JSON array, and `map({ source, maxItems, step: agent({...}) })` runs the step per item, fanning the `{ items, failed, total }` record into a downstream synthesizer.
+- Per-item quality gate: give a map `steps: [migrate, verify]` instead of one step to run a pipeline per item — `migrate` produces the deliverable, then `verify` (a second step reading `{{migrate}}`) adversarially checks that one item's output. There is no batch barrier: each item advances through its own steps independently, so a slow item never holds up the others, and a failing step fails only its item (attributed by `step` in `failed`). This is fan-out's answer to the adversarial-verify pattern below, applied item by item. Keep verify sessionless so it judges the artifact, not the migrator's narrative.
+- Choose a static list source (`source: [{ env: "dev" }, { env: "staging" }, { env: "prod" }]`) when the items are a fixed checklist known at authoring time — per-environment deploy checks, fixed audit dimensions. You get map's per-item badges and failure isolation without a discovery node or hand-writing N parallel nodes; `maxItems` is optional and defaults to the list length. Use a node source only when the width is genuinely discovered at run time.
 
 ## Adversarial verify
 

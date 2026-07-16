@@ -266,7 +266,9 @@ function createFlowLayoutKey(parsed: ParsedWorkflow): string {
       }
 
       if (node.map) {
-        return `${node.id}:${node.phase ?? "Workflow"}:map:${node.map.step.id}:${node.map.source}:${node.map.maxItems}:${node.map.onItemFailure}`;
+        return `${node.id}:${node.phase ?? "Workflow"}:map:${node.map.steps
+          .map((step) => step.id)
+          .join(",")}:${node.map.source}:${node.map.items?.length ?? "node"}:${node.map.maxItems}:${node.map.onItemFailure}`;
       }
 
       return `${node.id}:${node.phase ?? "Workflow"}`;

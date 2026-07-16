@@ -140,14 +140,27 @@ export type WorkflowLoopSpec = {
 };
 
 export type WorkflowMapSpec = {
-  /** Variable name of the upstream node whose output supplies the item array. */
+  /**
+   * Display/binding name of the source. For node-bound sources this is the
+   * upstream variable name; for an inline literal source it is a fixed marker
+   * (`"inline list"`) and `items` carries the data instead.
+   */
   source: string;
-  /** Resolved node id for `source`, undefined when the binding is unresolved. */
+  /** Resolved node id for a node-bound `source`; undefined for literals. */
   sourceNodeId?: string;
+  /**
+   * Inline static list items when `source` is an array literal. Mutually
+   * exclusive with `sourceNodeId`; resolved at parse time, no templates.
+   */
+  items?: WorkflowValue[];
   maxItems: number;
   onItemFailure: "skip" | "fail";
-  /** Exactly one agent step in v1; children always run independent sessions. */
-  step: WorkflowAgentLoopStep;
+  /**
+   * One or more agent steps forming a per-item pipeline (1..N). Steps run
+   * sequentially within an item; across items there is no barrier. Children
+   * always run independent sessions.
+   */
+  steps: WorkflowAgentLoopStep[];
 };
 
 export type WorkflowNode = {
@@ -342,6 +355,11 @@ export type WorkflowRunRecoveryState = {
 export type WorkflowMapItemCompletion = {
   index: number;
   status: "completed" | "failed";
+  /**
+   * For a failed item, the id of the step that failed (remaining steps are
+   * skipped). Absent on completed items and on legacy single-step checkpoints.
+   */
+  step?: string;
   output?: WorkflowValue;
   error?: string;
 };

@@ -585,12 +585,17 @@ function RunMapItemDetailSection(props: {
     <section className="run-node-detail loop-step-run-detail map-item-run-detail">
       <div className="field-heading">
         <label>Map item executions</label>
-        <Badge variant="muted">{mapItem.items.length} items</Badge>
+        <Badge variant="muted">
+          {new Set(mapItem.items.map((attempt) => attempt.index)).size} items
+          {mapItem.steps.length > 1 ? ` · ${mapItem.items.length} executions` : ""}
+        </Badge>
       </div>
       <div className="run-facts run-node-facts">
         <RunFact label="Map" value={props.nodeRun.node.id} />
-        <RunFact label="Step" value={mapItem.step.id} />
-        <RunFact label="Label" value={mapItem.step.label} />
+        <RunFact
+          label={mapItem.steps.length > 1 ? "Pipeline" : "Step"}
+          value={mapItem.steps.map((step) => step.id).join(" → ")}
+        />
       </div>
       {mapItem.items.length === 0 ? (
         <div className="field-hint">
@@ -604,7 +609,11 @@ function RunMapItemDetailSection(props: {
               key={item.executionKey}
               runId={props.runId}
               attempt={item}
-              heading={`#${item.index} · ${item.label}`}
+              heading={
+                mapItem.steps.length > 1
+                  ? `#${item.index} · ${item.stepId} · ${item.label}`
+                  : `#${item.index} · ${item.label}`
+              }
               copyPrefix="map"
               copiedRunField={props.copiedRunField}
               onCopyRunText={props.onCopyRunText}

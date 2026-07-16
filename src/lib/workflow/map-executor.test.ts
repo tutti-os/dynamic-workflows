@@ -114,6 +114,58 @@ const synthesis = await agent({
 `;
 }
 
+const TWO_STEP_SCRIPT = `
+const discover = await agent({
+  id: "discover",
+  label: "Discover",
+  output: "json",
+  prompt: "List work items as a JSON array.",
+})
+const migrated = await map({
+  id: "migrated",
+  label: "Migrate each site",
+  source: discover,
+  maxItems: 5,
+  onItemFailure: "skip",
+  steps: [
+    agent({
+      id: "process_one",
+      label: "Process {{item.file}}",
+      prompt: "Process {{item.file}} at line {{item.line}}",
+    }),
+    agent({
+      id: "verify_one",
+      label: "Verify {{item.file}}",
+      prompt: "Verify {{process_one}} for {{item.file}} (item {{item_index}})",
+    }),
+  ],
+})
+const synthesis = await agent({
+  id: "synthesis",
+  label: "Synthesize",
+  prompt: "Summarize {{migrated}}",
+})
+`;
+
+const LITERAL_SCRIPT = `
+const checks = await map({
+  id: "checks",
+  label: "Check each env",
+  source: [{ env: "dev" }, { env: "staging" }, { env: "prod" }],
+  onItemFailure: "skip",
+  step: agent({
+    id: "check_one",
+    label: "Check {{item.env}}",
+    prompt: "Check {{item.env}} (item {{item_index}}): {{item}}",
+  }),
+})
+const synthesis = await agent({
+  id: "synthesis",
+  label: "Synthesize",
+  prompt: "Summarize {{checks}}",
+})
+`;
+
 type MapItemStateEvent = Extract<WorkflowRunEvent, { type: "map_item_state" }>;
 type NodeCompletedEvent = Extract<WorkflowRunEvent, { type: "node_completed" }>;
 
@@ -495,5 +547,196 @@ describe("map node runtime", () => {
         id: "run-regression",
       }),
     ).not.toThrow();
+  });
+
+  it("runs a per-item pipeline where step 2 sees step 1's output and item refs", async () => {
+    const calls = mockAgentRuntime((input) => {
+      if ((input.title ?? "") === "Discover") {
+        return { text: JSON.stringify(DISCOVER_ITEMS) };
+      }
+      if ((input.title ?? "").startsWith("Process ")) {
+        return { text: `processed ${(input.title ?? "").slice("Process ".length)}` };
+      }
+      if ((input.title ?? "").startsWith("Verify ")) {
+        return { text: `verified ${(input.title ?? "").slice("Verify ".length)}` };
+      }
+      return { text: "SYNTHESIS" };
+    });
+
+    const events = await collectRun({
+      script: TWO_STEP_SCRIPT,
+      agent: "mock",
+      cwd: process.cwd(),
+    });
+
+    // Step 2's prompt carries step 1's output plus the item refs for item 1.
+    const verifyA = calls.find((call) => (call.title ?? "") === "Verify a.ts");
+    expect(verifyA?.prompt).toContain("Verify processed a.ts for a.ts (item 1)");
+
+    // Both steps ran for item 1 in order, each an individually visible execution.
+    expect(
+      mapItemStates(events, "map:migrated:1:process_one").map((event) => event.status),
+    ).toEqual(["running", "completed"]);
+    expect(
+      mapItemStates(events, "map:migrated:1:verify_one").map((event) => event.status),
+    ).toEqual(["running", "completed"]);
+
+    // The LAST step's output shapes items[].
+    const output = nodeOutput(events, "migrated") as {
+      items: Array<{ index: number; output: string }>;
+      failed: unknown[];
+      total: number;
+    };
+    expect(output.total).toBe(3);
+    expect(output.failed).toEqual([]);
+    expect(output.items.find((entry) => entry.index === 1)?.output).toBe(
+      "verified a.ts",
+    );
+  });
+
+  it("has no cross-item barrier: a failing step 1 on one item still completes the others", async () => {
+    const calls = mockAgentRuntime((input) => {
+      if ((input.title ?? "") === "Discover") {
+        return { text: JSON.stringify(DISCOVER_ITEMS) };
+      }
+      if ((input.title ?? "") === "Process b.ts") {
+        return { text: "boom on b.ts", fail: true };
+      }
+      if ((input.title ?? "").startsWith("Process ")) {
+        return { text: `processed ${(input.title ?? "").slice("Process ".length)}` };
+      }
+      if ((input.title ?? "").startsWith("Verify ")) {
+        return { text: `verified ${(input.title ?? "").slice("Verify ".length)}` };
+      }
+      return { text: "SYNTHESIS" };
+    });
+
+    const events = await collectRun({
+      script: TWO_STEP_SCRIPT,
+      agent: "mock",
+      cwd: process.cwd(),
+    });
+
+    // Interleaving-insensitive invariant: items a and c complete BOTH steps even
+    // though item b's first step failed.
+    for (const index of [1, 3]) {
+      expect(
+        LAST(mapItemStates(events, `map:migrated:${index}:process_one`))?.status,
+      ).toBe("completed");
+      expect(
+        LAST(mapItemStates(events, `map:migrated:${index}:verify_one`))?.status,
+      ).toBe("completed");
+    }
+
+    // Item b failed at step 1 and its step 2 was skipped (never ran).
+    expect(
+      LAST(mapItemStates(events, "map:migrated:2:process_one"))?.status,
+    ).toBe("failed");
+    expect(mapItemStates(events, "map:migrated:2:verify_one")).toHaveLength(0);
+    expect(calls.some((call) => (call.title ?? "") === "Verify b.ts")).toBe(false);
+
+    // The failed item attributes the failing step id in failed[].
+    const output = nodeOutput(events, "migrated") as {
+      items: Array<{ index: number }>;
+      failed: Array<{ index: number; step?: string; error: string }>;
+      total: number;
+    };
+    expect(output.total).toBe(3);
+    expect(output.items).toHaveLength(2);
+    expect(output.failed).toEqual([
+      expect.objectContaining({
+        index: 2,
+        step: "process_one",
+        error: expect.stringContaining("boom on b.ts"),
+      }),
+    ]);
+
+    expect(LAST(events)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "completed" }),
+    );
+  });
+
+  it("runs a static inline list source without a discover node and resumes it", async () => {
+    // Fresh run: no discover agent, the literal items become children directly.
+    const firstCheckpoints: Array<{ kind: string; state: unknown }> = [];
+    const firstCalls = mockAgentRuntime((input) => {
+      if ((input.title ?? "").startsWith("Check ")) {
+        return { text: `checked ${(input.title ?? "").slice("Check ".length)}` };
+      }
+      return { text: "SYNTHESIS" };
+    });
+
+    const firstEvents = await collectRun({
+      script: LITERAL_SCRIPT,
+      agent: "mock",
+      cwd: process.cwd(),
+      onCheckpoint: (checkpoint) => {
+        firstCheckpoints.push({ kind: checkpoint.kind, state: checkpoint.state });
+      },
+    });
+
+    expect(firstCalls.some((call) => (call.title ?? "") === "Discover")).toBe(false);
+    const checkTitles = firstCalls
+      .filter((call) => (call.title ?? "").startsWith("Check "))
+      .map((call) => call.title ?? "")
+      .sort();
+    expect(checkTitles).toEqual(["Check dev", "Check prod", "Check staging"]);
+
+    // The literal items are checkpointed exactly like a resolved source.
+    const literalCheckpoint = firstCheckpoints.find((entry) => entry.kind === "map");
+    expect((literalCheckpoint?.state as { items: unknown[] }).items).toEqual([
+      { env: "dev" },
+      { env: "staging" },
+      { env: "prod" },
+    ]);
+
+    const firstOutput = nodeOutput(firstEvents, "checks") as { total: number };
+    expect(firstOutput.total).toBe(3);
+    expect(LAST(firstEvents)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "completed" }),
+    );
+
+    // Resume: with one item already completed, only the unfinished items run.
+    const resumeCalls = mockAgentRuntime((input) => {
+      if ((input.title ?? "").startsWith("Check ")) {
+        return { text: `checked ${(input.title ?? "").slice("Check ".length)}` };
+      }
+      return { text: "SYNTHESIS" };
+    });
+
+    const resumeItems = [{ env: "dev" }, { env: "staging" }, { env: "prod" }];
+    const resumeEvents = await collectRun({
+      script: LITERAL_SCRIPT,
+      agent: "mock",
+      cwd: process.cwd(),
+      recovery: {
+        mapStates: {
+          checks: {
+            items: resumeItems,
+            completions: [
+              { index: 1, status: "completed", output: "checked dev (restored)" },
+            ],
+          },
+        },
+      },
+    });
+
+    const resumedTitles = resumeCalls
+      .filter((call) => (call.title ?? "").startsWith("Check "))
+      .map((call) => call.title ?? "")
+      .sort();
+    expect(resumedTitles).toEqual(["Check prod", "Check staging"]);
+
+    const resumeOutput = nodeOutput(resumeEvents, "checks") as {
+      items: Array<{ index: number; output: string }>;
+      total: number;
+    };
+    expect(resumeOutput.total).toBe(3);
+    expect(resumeOutput.items.find((entry) => entry.index === 1)?.output).toBe(
+      "checked dev (restored)",
+    );
+    expect(LAST(resumeEvents)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "completed" }),
+    );
   });
 });

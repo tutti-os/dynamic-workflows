@@ -224,6 +224,11 @@ function isWorkflowMapItemCompletion(value: unknown): boolean {
   if (value.status !== "completed" && value.status !== "failed") {
     return false;
   }
+  // `step` records the failing step for multi-step items. Legacy single-step
+  // completions omit it, so undefined must stay valid for backward compat.
+  if (value.step !== undefined && typeof value.step !== "string") {
+    return false;
+  }
   if (value.output !== undefined && !isJsonValue(value.output)) {
     return false;
   }

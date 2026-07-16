@@ -214,4 +214,45 @@ describe("workflow JSON column schemas", () => {
       ),
     ).toThrow("has invalid shape");
   });
+
+  it("accepts map completions with and without a step attribution", () => {
+    // The multi-step failure record carries `step`; legacy single-step
+    // checkpoints omit it and must stay valid for backward compat.
+    const checkpoint = {
+      kind: "map",
+      state: {
+        items: [{ file: "a.ts" }, { file: "b.ts" }],
+        completions: [
+          // Legacy: no `step`.
+          { index: 1, status: "completed", output: "migrated a.ts" },
+          // New: failing step attributed.
+          { index: 2, status: "failed", step: "process_one", error: "boom" },
+        ],
+      },
+    };
+
+    expect(
+      parseWorkflowRunCheckpointStateColumn(
+        JSON.stringify(checkpoint),
+        checkpointContext,
+      ),
+    ).toEqual(checkpoint);
+    expect(
+      stringifyWorkflowRunCheckpointStateColumn(checkpoint, checkpointContext),
+    ).toBe(JSON.stringify(checkpoint));
+
+    // A non-string `step` is rejected.
+    expect(() =>
+      parseWorkflowRunCheckpointStateColumn(
+        JSON.stringify({
+          kind: "map",
+          state: {
+            items: [],
+            completions: [{ index: 1, status: "failed", step: 7, error: "x" }],
+          },
+        }),
+        checkpointContext,
+      ),
+    ).toThrow("has invalid shape");
+  });
 });

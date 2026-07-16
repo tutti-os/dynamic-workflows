@@ -97,16 +97,16 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     id: "map-fan-out-demo-v1",
     title: "Dynamic Fan-Out Demo",
     description:
-      "A discover agent returns a JSON work list, map fans out one independent agent per item with per-item failure isolation, and a synthesizer merges the results while keeping skipped items visible.",
+      "A discover agent returns a JSON work list, map fans out a per-item pipeline (process, then adversarially verify) with per-item failure isolation, and a synthesizer merges the results while keeping skipped items visible.",
     category: "coding",
-    tags: ["map", "fan-out", "dynamic", "json-output", "synthesis", "cwd"],
+    tags: ["map", "fan-out", "dynamic", "json-output", "pipeline", "synthesis", "cwd"],
     difficulty: "starter",
     requiresCwd: true,
     patternSummary:
-      "The reference dynamic-width pattern: a discovery step with output json ends its message with a bounded JSON array, map expands it into at most maxItems child executions that run concurrently in independent sessions, onItemFailure skip isolates per-item failures, and the final report receives { items, failed, total } so dropped work stays visible. Each child is told it owns exactly one item and must not touch its siblings' scope.",
+      "The reference dynamic-width pattern: a discovery step with output json ends with a bounded JSON array, and map expands it into at most maxItems items that run concurrently in independent sessions. Each item is a two-step pipeline — process_one produces the deliverable, then verify_one adversarially checks that item's output ({{process_one}}) — with no cross-item barrier. onItemFailure skip isolates per-item failures (attributed to the failing step), and the final report receives { items, failed, total } so dropped work stays visible.",
     useCases: [
       "Process a runtime-discovered work list (TODOs, deprecated call sites, untested files) item by item.",
-      "Demonstrate output json discovery, map expansion, item refs, and failure-visible synthesis.",
+      "Demonstrate output json discovery, map expansion, a per-item process→verify pipeline, and failure-visible synthesis.",
       "Serve as the acceptance fixture for map node UI and runtime behavior.",
     ],
     script: readBuiltinBlueprintScript(

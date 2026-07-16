@@ -32,11 +32,18 @@ const processed = map({
   source: findings,
   maxItems: 8,
   onItemFailure: "skip",
-  step: agent({
-    id: "process_one",
-    label: "Process {{item.file}}",
-    prompt: "You handle exactly one work item from a larger list; other items are handled by parallel agents, so stay strictly within this item's scope. Investigate the item in the repository and produce the per-item deliverable requested by the discovery focus. Output only the deliverable for this item — it is merged with the others by a later step.\n\nWorking directory:\n{{workflow.cwd}}\n\nDiscovery focus:\n{{discovery_focus}}\n\nWork item {{item_index}}:\n{{item}}",
-  }),
+  steps: [
+    agent({
+      id: "process_one",
+      label: "Process {{item.file}}",
+      prompt: "You handle exactly one work item from a larger list; other items are handled by parallel agents, so stay strictly within this item's scope. Investigate the item in the repository and produce the per-item deliverable requested by the discovery focus. Output only the deliverable for this item — it is merged with the others by a later step.\n\nWorking directory:\n{{workflow.cwd}}\n\nDiscovery focus:\n{{discovery_focus}}\n\nWork item {{item_index}}:\n{{item}}",
+    }),
+    agent({
+      id: "verify_one",
+      label: "Verify {{item.file}}",
+      prompt: "You independently verify the deliverable produced for exactly this one work item. Be adversarial: inspect the actual repository state for this item and try to find a concrete reason the deliverable is wrong, incomplete, or fabricated; when you cannot confirm it, reject it. Do not redo the work and do not touch other items. Restate the deliverable you accept (correcting it only where the evidence forces a change), then end your message with a final line containing only VERIFIED or REJECTED.\n\nWorking directory:\n{{workflow.cwd}}\n\nDiscovery focus:\n{{discovery_focus}}\n\nWork item {{item_index}}:\n{{item}}\n\nProposed deliverable to verify:\n{{process_one}}",
+    }),
+  ],
 });
 
 phase("Synthesize");
@@ -45,5 +52,5 @@ agent({
   id: "report",
   label: "Synthesize report",
   inputs: { processed },
-  prompt: "Merge the per-item results below into one report ordered by the original item index. Keep each item's deliverable intact, and end with a Coverage section that lists every item in the failed list with its error — skipped work must stay visible, never summarized away.\n\nDiscovery focus:\n{{discovery_focus}}\n\nMap results (items, failed, total):\n{{processed}}",
+  prompt: "Merge the per-item results below into one report ordered by the original item index. Each item's result ends with a VERIFIED or REJECTED verdict from an independent check: present VERIFIED deliverables intact, and list REJECTED items in the Coverage section with the verifier's reason instead of treating their deliverables as accepted. End with that Coverage section covering both REJECTED items and every item in the failed list with its error — unaccepted work must stay visible, never summarized away.\n\nDiscovery focus:\n{{discovery_focus}}\n\nMap results (items, failed, total):\n{{processed}}",
 });

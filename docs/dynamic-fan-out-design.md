@@ -118,12 +118,49 @@ Map children render like loop step executions:
 - The inspector shows per-item executions: `run-detail.ts` builds `mapItem.items` (sorted by 1-based index) and `RunDetailPanel` renders a "Map item executions" section. The loop-attempt card was generalized into a shared `RunExecutionAttempt` (heading + copy-key prefix) reused by both loop and map, showing each item's label, status badge, agent, and expandable input/output/error/timeline.
 - Not visually verified in a browser here (no runtime). Compensated with typecheck, the run-state map reducer test, and the map-node layout dimension test. A visual pass in a running app is still worth doing to confirm map-node spacing and the item-badge wrap look right; the layout math is conservative but only eyeballing confirms no clipping.
 
-## Phase 2 — polish
+## Phase 2 — spec (approved 2026-07-17)
 
-- Multi-step items: allow `steps: [agent, agent]` with per-item sequential order (pipeline semantics — items do not wait for each other between steps).
-- Per-item retry from the run detail (mirrors existing run retry).
-- Authoring assets: dsl-reference section, patterns.md fan-out pattern upgraded to use `map`, one blueprint (e.g. discover-and-migrate), validator warnings for map-specific mistakes.
-- Consider `map` over a static declared list (array literal in the script) as a degenerate case.
+Three independent pieces, shipped as two batches: A = multi-step items + static list sources (DSL/runtime), B = failed-item retry (persistence/API/UI, depends on A's event shapes).
+
+### Multi-step items (pipeline semantics)
+
+- `steps: [agent({...}), agent({...})]` (1..N agent steps) replaces `step` for multi-stage items; `step: agent({...})` stays as sugar for a single-entry `steps`. Declaring both is a validation error.
+- Within one item, steps run sequentially in declared order; across items there is NO barrier — item 3 may be on its verify step while item 7 is still on its first step. This is the per-item quality-gate shape (migrate → verify) without serializing the batch.
+- A later step's prompt may reference earlier step ids of the same item (`{{migrate_one}}`), plus the item refs (`{{item}}`, `{{item.<path>}}`, `{{item_index}}`); referencing a later or same step is a validation error. Step ids must be unique within the map.
+- Sessions stay independent for every step of every item (inherit remains rejected). Cross-step context flows through dataflow, which keeps verify steps adversarially clean.
+- Failure: the first failing step fails the item; remaining steps of that item are skipped. The item's failure record carries the failing step id (`failed: [{ index, item, step, error }]`).
+- The LAST step's output is the item's `output` in `items[]`; each step's execution is individually visible through `map_item_state` (the execution key already carries the step id).
+- `output: "json"` is allowed per step; on the last step it shapes the item output.
+- Recovery granularity stays item-level: a resumed run re-runs an unfinished item from its first step. Mutating steps must therefore be written idempotently, same as Phase 1.
+
+### Static list sources
+
+- `source` may be an inline array literal of plain JSON data (objects/arrays/strings/numbers/booleans; no template refs resolved inside items): `source: [{ env: "dev" }, { env: "staging" }, { env: "prod" }]`.
+- For literal sources `maxItems` is optional (defaults to the literal length); a literal longer than 50, or longer than an explicit `maxItems`, is a parse-time validation ERROR — statically knowable violations fail early instead of at run time.
+- For dynamic (node-bound) sources everything stays as in Phase 1, `maxItems` required.
+- Executor skips source resolution and checkpoints the literal items exactly like resolved ones, so recovery and retry behave identically for both source kinds.
+- Scenario: fixed checklists — per-environment deploy checks, fixed audit dimensions — gaining map's per-item badges and failure isolation without hand-writing N parallel nodes.
+
+### Failed-item retry (batch B)
+
+- Built on the existing recovery machinery rather than a parallel path: retrying failed items = restore the run's checkpoints with the failed map completions REMOVED, mark the map node and every node downstream of it as not-completed, and resume execution. Recovery then re-runs only the cleared items; downstream nodes (synthesis) re-run on the corrected map output. Upstream completed nodes keep their outputs.
+- Precondition: run in a terminal state with at least one failed map item. Exposed as a variant of the existing run retry (`{ mapNodeId }` scope), surfaced in the UI on the map node's failed-item list.
+- Scenario: a 20-item, 40-minute fan-out with 2 transient failures gets patched in minutes instead of rerun wholesale.
+
+### Authoring assets (rides with batch A)
+
+- dsl-reference: document `steps`, static list sources, and the failure-record `step` field.
+- patterns.md: extend the fan-out pattern with the per-item pipeline shape and when to choose static lists.
+- Extend `map-fan-out-demo-v1` with a per-item verify step so the demo (and the acceptance fixture) exercises the pipeline shape.
+
+### Batch A — as implemented (2026-07-17)
+
+Shipped as specified; no behavioral deviations. Notes for maintainers:
+
+- **`WorkflowMapSpec.step` became `steps: WorkflowAgentLoopStep[]`.** The single-step form (`step:`) is parsed into a one-entry `steps` array; there is no longer a `step` field on the spec. All consumers (parser diagnostics, executor, run-detail/run-state, `MapMiniFlow`, layout key) read `steps`. `step` remains only as DSL sugar.
+- **Failure attribution.** `WorkflowMapItemCompletion` gained an optional `step?: string`, set to the failing step id on a failed item and absent on success and on legacy single-step checkpoints. It flows into the map output's `failed: [{ index, item, step, error }]` and into the DB checkpoint JSON guard (`isWorkflowMapItemCompletion` accepts records with or without `step`; a non-string `step` is rejected). Recovery stays item-level: a resumed item re-runs from its first step.
+- **Static list sources.** A literal `source` is stored as `map.items` with `source` set to the marker string `"inline list"` (no `sourceNodeId`, no input binding/edge). `maxItems` defaults to the literal length when omitted; over-limit literals fail at parse time. The executor uses `map.items` directly and checkpoints them identically to a resolved source, so recovery/retry are uniform.
+- **Cross-step references** resolve inside the item runner by step id (against the item's earlier step outputs), ahead of node-input and workflow-input lookup; sibling step ids are excluded from the map node's `templateRefs`, so they never auto-bind as inputs or create edges.
 
 ## Testing strategy
 

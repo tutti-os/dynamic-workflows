@@ -42,7 +42,7 @@ export type RunNodeDetail = {
     attempts: RunLoopStepAttemptDetail[];
   };
   mapItem?: {
-    step: WorkflowAgentLoopStep;
+    steps: WorkflowAgentLoopStep[];
     items: RunMapItemAttemptDetail[];
   };
 };
@@ -95,15 +95,23 @@ export function buildRunNodeDetail(
         }))
     : [];
 
-  const mapStep = node.map?.step;
+  const mapSteps = node.map?.steps;
+  const mapStepOrder = new Map(
+    (mapSteps ?? []).map((step, position) => [step.id, position] as const),
+  );
   const mapItemRuns = {
     ...(allEventResult.mapItemRuns ?? {}),
     ...(result.mapItemRuns ?? {}),
   };
-  const mapItemAttempts = mapStep
+  const mapItemAttempts = mapSteps
     ? Object.values(mapItemRuns)
         .filter((run) => run.parentNodeId === node.id)
-        .sort((left, right) => left.index - right.index)
+        .sort(
+          (left, right) =>
+            left.index - right.index ||
+            (mapStepOrder.get(left.stepId) ?? 0) -
+              (mapStepOrder.get(right.stepId) ?? 0),
+        )
         .map((run) => ({
           ...run,
           log: parseRunLogEvents(detail.log)
@@ -134,10 +142,10 @@ export function buildRunNodeDetail(
           },
         }
       : {}),
-    ...(mapStep
+    ...(mapSteps
       ? {
           mapItem: {
-            step: mapStep,
+            steps: mapSteps,
             items: mapItemAttempts,
           },
         }
