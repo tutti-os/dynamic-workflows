@@ -1,7 +1,9 @@
 import type {
   WorkflowDiagnostic,
   WorkflowLoopRecoveryState,
+  WorkflowMapRecoveryState,
   WorkflowMeta,
+  WorkflowRunCheckpointState,
 } from "@/lib/workflow/types";
 import type {
   WorkflowEditJobError,
@@ -58,11 +60,26 @@ export function parseWorkflowEditJobErrorColumn(
   return parseJsonColumn(value, context, isWorkflowError);
 }
 
-export function parseWorkflowLoopRecoveryStateColumn(
+export function parseWorkflowRunCheckpointStateColumn(
   value: string,
   context: JsonColumnContext,
-): WorkflowLoopRecoveryState {
-  return parseJsonColumn(value, context, isWorkflowLoopRecoveryState);
+): WorkflowRunCheckpointState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw invalidJsonColumnError(context, "is not valid JSON", error);
+  }
+  // Tagged `{ kind, state }` checkpoints are the current shape. Rows written
+  // before map support stored a bare loop recovery state; normalize those to a
+  // `loop` checkpoint so old runs keep resuming.
+  if (isWorkflowRunCheckpointState(parsed)) {
+    return parsed;
+  }
+  if (isWorkflowLoopRecoveryState(parsed)) {
+    return { kind: "loop", state: parsed };
+  }
+  throw invalidJsonColumnError(context, "has invalid shape");
 }
 
 export function stringifyWorkflowMetaColumn(
@@ -100,11 +117,11 @@ export function stringifyWorkflowEditJobErrorColumn(
   return stringifyJsonColumn(value, context, isWorkflowError);
 }
 
-export function stringifyWorkflowLoopRecoveryStateColumn(
+export function stringifyWorkflowRunCheckpointStateColumn(
   value: unknown,
   context: JsonColumnContext,
 ): string {
-  return stringifyJsonColumn(value, context, isWorkflowLoopRecoveryState);
+  return stringifyJsonColumn(value, context, isWorkflowRunCheckpointState);
 }
 
 export function isWorkflowMeta(value: unknown): value is WorkflowMeta {
@@ -165,6 +182,52 @@ export function isWorkflowLoopRecoveryState(
   }
   return Array.isArray(value.iterations) &&
     value.iterations.every(isWorkflowLoopRecoveryIteration);
+}
+
+export function isWorkflowRunCheckpointState(
+  value: unknown,
+): value is WorkflowRunCheckpointState {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  if (value.kind === "loop") {
+    return isWorkflowLoopRecoveryState(value.state);
+  }
+  if (value.kind === "map") {
+    return isWorkflowMapRecoveryState(value.state);
+  }
+  return false;
+}
+
+export function isWorkflowMapRecoveryState(
+  value: unknown,
+): value is WorkflowMapRecoveryState {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  if (!Array.isArray(value.items) || !value.items.every(isJsonValue)) {
+    return false;
+  }
+  return (
+    Array.isArray(value.completions) &&
+    value.completions.every(isWorkflowMapItemCompletion)
+  );
+}
+
+function isWorkflowMapItemCompletion(value: unknown): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  if (!Number.isInteger(value.index)) {
+    return false;
+  }
+  if (value.status !== "completed" && value.status !== "failed") {
+    return false;
+  }
+  if (value.output !== undefined && !isJsonValue(value.output)) {
+    return false;
+  }
+  return value.error === undefined || typeof value.error === "string";
 }
 
 function isWorkflowValueRecord(value: unknown): boolean {

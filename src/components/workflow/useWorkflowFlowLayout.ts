@@ -9,6 +9,7 @@ import { formatLoopUntil } from "@/lib/workflow/loop-until";
 import type {
   ParsedWorkflow,
   WorkflowLoopStepRun,
+  WorkflowMapItemRun,
   WorkflowNodeStatus,
 } from "@/lib/workflow/types";
 import type { FlowNodeData } from "@/components/workflow/WorkflowWorkbench.types";
@@ -22,6 +23,8 @@ const FLOW_LOOP_NODE_WIDTH = 430;
 const FLOW_LOOP_NODE_BASE_HEIGHT = 280;
 const FLOW_LOOP_FIRST_ENTRY_HEIGHT = 42;
 const FLOW_LOOP_INPUTS_HEIGHT = 36;
+const FLOW_MAP_NODE_BASE_HEIGHT = 244;
+const FLOW_MAP_ITEMS_HEIGHT = 34;
 const FLOW_ORIGIN_X = 80;
 const FLOW_ORIGIN_Y = 56;
 const FLOW_PHASE_GAP = 112;
@@ -31,6 +34,7 @@ export function useWorkflowFlowLayout(input: {
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   loopStepRuns?: WorkflowLoopStepRun[];
+  mapItemRuns?: WorkflowMapItemRun[];
   selectedNodeId?: string;
   selectedLoopStepId?: string;
 }): {
@@ -44,6 +48,7 @@ export function useWorkflowFlowLayout(input: {
         parsed: input.parsed,
         nodeStatuses: input.nodeStatuses,
         loopStepRuns: input.loopStepRuns,
+        mapItemRuns: input.mapItemRuns,
         onLoopStepSelect: input.onLoopStepSelect,
         selectedNodeId: input.selectedNodeId,
         selectedLoopStepId: input.selectedLoopStepId,
@@ -51,6 +56,7 @@ export function useWorkflowFlowLayout(input: {
     [
       input.nodeStatuses,
       input.loopStepRuns,
+      input.mapItemRuns,
       input.onLoopStepSelect,
       input.parsed.nodes,
       input.parsed.phases,
@@ -81,6 +87,7 @@ function buildFlowNodes(input: {
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   loopStepRuns?: WorkflowLoopStepRun[];
+  mapItemRuns?: WorkflowMapItemRun[];
   selectedNodeId?: string;
   selectedLoopStepId?: string;
 }): Node<FlowNodeData>[] {
@@ -103,7 +110,9 @@ function buildFlowNodes(input: {
       phase,
       Math.max(
         phaseLaneWidth,
-        workflowNode.kind === "loop" ? FLOW_LOOP_LANE_WIDTH : FLOW_LANE_WIDTH,
+        workflowNode.kind === "loop" || workflowNode.kind === "map"
+          ? FLOW_LOOP_LANE_WIDTH
+          : FLOW_LANE_WIDTH,
       ),
     );
 
@@ -123,6 +132,9 @@ function buildFlowNodes(input: {
       data: {
         onLoopStepSelect: input.onLoopStepSelect,
         loopStepRuns: input.loopStepRuns?.filter(
+          (run) => run.parentNodeId === workflowNode.id,
+        ),
+        mapItemRuns: input.mapItemRuns?.filter(
           (run) => run.parentNodeId === workflowNode.id,
         ),
         selectedLoopStepId:
@@ -172,6 +184,16 @@ function createPhaseYPositions(parsed: ParsedWorkflow): Map<string, number> {
 export function getFlowNodeDimensions(
   workflowNode: ParsedWorkflow["nodes"][number],
 ): { width: number; height: number } {
+  if (workflowNode.kind === "map") {
+    return {
+      width: FLOW_LOOP_NODE_WIDTH,
+      height:
+        FLOW_MAP_NODE_BASE_HEIGHT +
+        FLOW_MAP_ITEMS_HEIGHT +
+        (workflowNode.inputs.length > 0 ? FLOW_LOOP_INPUTS_HEIGHT : 0),
+    };
+  }
+
   if (workflowNode.kind !== "loop") {
     return { width: FLOW_NODE_WIDTH, height: FLOW_NODE_HEIGHT };
   }
@@ -241,6 +263,10 @@ function createFlowLayoutKey(parsed: ParsedWorkflow): string {
         return `${node.id}:${node.phase ?? "Workflow"}:${node.loop.steps
           .map((step) => step.id)
           .join(",")}:${node.loop.maxIterations}:${node.loop.firstIteration?.startAt ?? "all"}:${formatLoopUntil(node.loop.until)}`;
+      }
+
+      if (node.map) {
+        return `${node.id}:${node.phase ?? "Workflow"}:map:${node.map.step.id}:${node.map.source}:${node.map.maxItems}:${node.map.onItemFailure}`;
       }
 
       return `${node.id}:${node.phase ?? "Workflow"}`;

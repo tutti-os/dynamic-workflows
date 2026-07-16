@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   parseJsonObjectColumn,
   parseWorkflowEditJobErrorColumn,
-  parseWorkflowLoopRecoveryStateColumn,
+  parseWorkflowRunCheckpointStateColumn,
   parseWorkflowMetaColumn,
   stringifyJsonObjectColumn,
   stringifyJsonValueColumn,
   stringifyWorkflowGenerationErrorColumn,
-  stringifyWorkflowLoopRecoveryStateColumn,
+  stringifyWorkflowRunCheckpointStateColumn,
   stringifyWorkflowMetaColumn,
 } from "./json-schemas";
 
@@ -114,8 +114,14 @@ describe("workflow JSON column schemas", () => {
     ).toThrow("has invalid shape");
   });
 
+  const checkpointContext = {
+    table: "workflow_run_checkpoints",
+    column: "checkpoint_json",
+    id: "run-1:loop",
+  };
+
   it("validates loop checkpoint boundaries", () => {
-    const checkpoint = {
+    const loopState = {
       nextIteration: 2,
       currentIteration: 1,
       currentStepOutputs: { draft: "one" },
@@ -129,45 +135,83 @@ describe("workflow JSON column schemas", () => {
         },
       ],
     };
+    const checkpoint = { kind: "loop", state: loopState };
 
     expect(
-      parseWorkflowLoopRecoveryStateColumn(JSON.stringify(checkpoint), {
-        table: "workflow_run_checkpoints",
-        column: "checkpoint_json",
-        id: "run-1:loop",
-      }),
+      parseWorkflowRunCheckpointStateColumn(
+        JSON.stringify(checkpoint),
+        checkpointContext,
+      ),
     ).toEqual(checkpoint);
     expect(
-      stringifyWorkflowLoopRecoveryStateColumn(checkpoint, {
-        table: "workflow_run_checkpoints",
-        column: "checkpoint_json",
-        id: "run-1:loop",
-      }),
+      stringifyWorkflowRunCheckpointStateColumn(checkpoint, checkpointContext),
     ).toBe(JSON.stringify(checkpoint));
     expect(
-      stringifyWorkflowLoopRecoveryStateColumn(
+      stringifyWorkflowRunCheckpointStateColumn(
         {
-          ...checkpoint,
-          previousStepOutputs: {
-            draft: { action: "revise", values: { comment: "fix it" } },
+          kind: "loop",
+          state: {
+            ...loopState,
+            previousStepOutputs: {
+              draft: { action: "revise", values: { comment: "fix it" } },
+            },
           },
         },
-        {
-          table: "workflow_run_checkpoints",
-          column: "checkpoint_json",
-          id: "run-1:loop",
-        },
+        checkpointContext,
       ),
     ).toContain('"action":"revise"');
     expect(() =>
-      stringifyWorkflowLoopRecoveryStateColumn(
-        { ...checkpoint, previousStepOutputs: { draft: undefined } },
+      stringifyWorkflowRunCheckpointStateColumn(
         {
-          table: "workflow_run_checkpoints",
-          column: "checkpoint_json",
-          id: "run-1:loop",
+          kind: "loop",
+          state: { ...loopState, previousStepOutputs: { draft: undefined } },
         },
+        checkpointContext,
       ),
     ).toThrow("is not JSON serializable");
+  });
+
+  it("reads legacy untagged loop checkpoints as loop state", () => {
+    const legacyLoopState = {
+      nextIteration: 1,
+      previousStepOutputs: { draft: "one" },
+      iterations: [],
+    };
+
+    expect(
+      parseWorkflowRunCheckpointStateColumn(
+        JSON.stringify(legacyLoopState),
+        checkpointContext,
+      ),
+    ).toEqual({ kind: "loop", state: legacyLoopState });
+  });
+
+  it("validates map checkpoint boundaries", () => {
+    const checkpoint = {
+      kind: "map",
+      state: {
+        items: [{ file: "a.ts" }, { file: "b.ts" }],
+        completions: [
+          { index: 1, status: "completed", output: "migrated a.ts" },
+          { index: 2, status: "failed", error: "boom" },
+        ],
+      },
+    };
+
+    expect(
+      parseWorkflowRunCheckpointStateColumn(
+        JSON.stringify(checkpoint),
+        checkpointContext,
+      ),
+    ).toEqual(checkpoint);
+    expect(
+      stringifyWorkflowRunCheckpointStateColumn(checkpoint, checkpointContext),
+    ).toBe(JSON.stringify(checkpoint));
+    expect(() =>
+      parseWorkflowRunCheckpointStateColumn(
+        JSON.stringify({ kind: "map", state: { items: "nope", completions: [] } }),
+        checkpointContext,
+      ),
+    ).toThrow("has invalid shape");
   });
 });

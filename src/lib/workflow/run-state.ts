@@ -172,7 +172,7 @@ export function applyWorkflowRunEvent(
           next.nodeSessions[event.nodeId],
           {
             nodeId: event.nodeId,
-            lastText: typeof outputText === "string" ? outputText : undefined,
+            ...(typeof outputText === "string" ? { lastText: outputText } : {}),
           },
         );
       }
@@ -266,8 +266,9 @@ export function applyWorkflowRunEvent(
         {
           nodeId: event.nodeId,
           status: "completed",
-          lastText:
-            typeof event.output === "string" ? event.output : undefined,
+          ...(typeof event.output === "string"
+            ? { lastText: event.output }
+            : {}),
         },
       );
     }
@@ -821,6 +822,11 @@ function withNodeSessionPatch(
   current: WorkflowNodeSessionRef | undefined,
   patch: Partial<WorkflowNodeSessionRef> & { nodeId: string },
 ): WorkflowNodeSessionRef {
+  // Explicit undefined values must never land in the session object: the run
+  // result is persisted through a strict JSON guard that rejects them.
+  const defined = Object.fromEntries(
+    Object.entries(patch).filter(([, value]) => value !== undefined),
+  ) as Partial<WorkflowNodeSessionRef> & { nodeId: string };
   const next = {
     ...(current ?? {
       nodeId: patch.nodeId,
@@ -828,7 +834,7 @@ function withNodeSessionPatch(
       agent: "",
       status: "running" as const,
     }),
-    ...patch,
+    ...defined,
   };
   return {
     ...next,

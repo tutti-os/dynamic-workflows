@@ -57,6 +57,7 @@ import type {
   WorkflowInputValue,
   WorkflowNode,
   WorkflowLoopRecoveryState,
+  WorkflowMapRecoveryState,
   WorkflowRunEvent,
   WorkflowRunRecoveryState,
 } from "@/lib/workflow/types";
@@ -393,15 +394,15 @@ async function executeWorkflowRunJob(
           recovery: executionOptions.recovery,
           onHumanTask: (request) => createOrGetWorkflowHumanTask(request),
           onCheckpoint: async (checkpoint) => {
-            if (checkpoint.kind !== "loop") {
-              return;
-            }
             ensureWorkflowRunJobOwned(run.id, job);
             try {
               upsertWorkflowRunCheckpoint({
                 runId: run.id,
                 nodeId: checkpoint.nodeId,
-                checkpoint: checkpoint.state,
+                checkpoint:
+                  checkpoint.kind === "map"
+                    ? { kind: "map", state: checkpoint.state }
+                    : { kind: "loop", state: checkpoint.state },
               });
             } catch (error) {
               throw new Error(
@@ -645,7 +646,7 @@ function createRecoveryStateFromSummary(input: {
     nodeSessions: summary.nodeSessions,
     runCwd: input.run.cwd ?? undefined,
   });
-  const loopStates = readLoopRecoveryStates(input.checkpoints);
+  const { loopStates, mapStates } = readRecoveryCheckpoints(input.checkpoints);
 
   return {
     recovery: {
@@ -655,17 +656,28 @@ function createRecoveryStateFromSummary(input: {
       sessionCwdsByKey,
       attachSessionIdsByNodeId,
       loopStates,
+      mapStates,
     },
     summary,
   };
 }
 
-function readLoopRecoveryStates(
+function readRecoveryCheckpoints(
   checkpoints: WorkflowRunCheckpointRecord[],
-): Record<string, WorkflowLoopRecoveryState> {
-  return Object.fromEntries(
-    checkpoints.map((checkpoint) => [checkpoint.nodeId, checkpoint.checkpoint]),
-  );
+): {
+  loopStates: Record<string, WorkflowLoopRecoveryState>;
+  mapStates: Record<string, WorkflowMapRecoveryState>;
+} {
+  const loopStates: Record<string, WorkflowLoopRecoveryState> = {};
+  const mapStates: Record<string, WorkflowMapRecoveryState> = {};
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.checkpoint.kind === "map") {
+      mapStates[checkpoint.nodeId] = checkpoint.checkpoint.state;
+    } else {
+      loopStates[checkpoint.nodeId] = checkpoint.checkpoint.state;
+    }
+  }
+  return { loopStates, mapStates };
 }
 
 function mergePersistedRunResult(

@@ -12,6 +12,7 @@ import type {
   ParsedWorkflow,
   WorkflowNodeStatus,
   WorkflowLoopStepRun,
+  WorkflowMapItemRun,
 } from "@/lib/workflow/types";
 
 export function useWorkflowRunPreview(input: {
@@ -20,6 +21,7 @@ export function useWorkflowRunPreview(input: {
   parsed: ParsedWorkflow;
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   loopStepRuns: WorkflowLoopStepRun[];
+  mapItemRuns: WorkflowMapItemRun[];
   selectedNodeId?: string;
   selectedLoopStepId?: string;
 }): {
@@ -28,6 +30,7 @@ export function useWorkflowRunPreview(input: {
   selectedRunNodeDetail: RunNodeDetail | null;
   displayNodeStatuses: Record<string, WorkflowNodeStatus>;
   displayLoopStepRuns: WorkflowLoopStepRun[];
+  displayMapItemRuns: WorkflowMapItemRun[];
   completedCount: number;
   runningCount: number;
   failedCount: number;
@@ -115,6 +118,9 @@ export function useWorkflowRunPreview(input: {
     displayLoopStepRuns: isRunPreview
       ? Object.values(selectedRunResult.loopStepRuns)
       : input.loopStepRuns,
+    displayMapItemRuns: isRunPreview
+      ? Object.values(selectedRunResult.mapItemRuns ?? {})
+      : input.mapItemRuns,
     ...statusCounts,
   };
 }

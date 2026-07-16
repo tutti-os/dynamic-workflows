@@ -16,6 +16,7 @@ import {
 } from "@tutti-os/ui-system";
 import type { WorkflowNodeStatus } from "@/lib/workflow/types";
 import { LoopMiniFlow } from "@/components/workflow/LoopMiniFlow";
+import { MapMiniFlow } from "@/components/workflow/MapMiniFlow";
 import type { FlowNodeData } from "@/components/workflow/WorkflowWorkbench.types";
 
 export const NODE_TYPES = { workflowNode: WorkflowNodeCard };
@@ -24,11 +25,18 @@ function WorkflowNodeCard(props: NodeProps<Node<FlowNodeData>>) {
   const { workflowNode, status } = props.data;
   const refs = workflowNode.inputs.map((input) => input.name);
   const loop = workflowNode.loop;
+  const map = workflowNode.map;
+  const isWide = Boolean(loop || map);
 
   return (
     <div
-      className={clsx("workflow-node", status, loop ? "loop-node" : null)}
-      style={loop ? { width: 430 } : undefined}
+      className={clsx(
+        "workflow-node",
+        status,
+        loop ? "loop-node" : null,
+        map ? "map-node" : null,
+      )}
+      style={isWide ? { width: 430 } : undefined}
     >
       <Handle id="target-top" type="target" position={Position.Top} />
       <Handle
@@ -74,6 +82,13 @@ function WorkflowNodeCard(props: NodeProps<Node<FlowNodeData>>) {
             selectedStepId={props.data.selectedLoopStepId}
             stepRuns={props.data.loopStepRuns}
             onStepSelect={props.data.onLoopStepSelect}
+          />
+        ) : null}
+        {map ? (
+          <MapMiniFlow
+            map={map}
+            mapNodeId={workflowNode.id}
+            itemRuns={props.data.mapItemRuns}
           />
         ) : null}
         {refs.length > 0 ? (

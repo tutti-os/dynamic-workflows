@@ -9,6 +9,12 @@ vi.mock("@/lib/agents/runtime", () => ({
 }));
 
 import { runWorkflow } from "./executor";
+import {
+  applyWorkflowRunEvent,
+  createInitialRunSummary,
+  toWorkflowRunResult,
+} from "./run-state";
+import { stringifyJsonObjectColumn } from "@/lib/db/workflows/json-schemas";
 
 // ---------------------------------------------------------------------------
 // Harness (mirrors blueprint-behavior.test.ts idioms)
@@ -443,5 +449,51 @@ describe("map node runtime", () => {
     expect(LAST(events)).toEqual(
       expect.objectContaining({ type: "run_completed", status: "completed" }),
     );
+  });
+
+  it("produces a run result that survives the result_json persistence guard", async () => {
+    // Regression: map children emit session_ref events attributed to the map
+    // node; combined with the map's object output this used to leave an
+    // explicit-undefined lastText in nodeSessions, which the strict JSON
+    // guard rejected — completed runs then never persisted and stayed
+    // "running" in the UI.
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      const isDiscover = (input.title ?? "") === "Discover";
+      if (!isDiscover) {
+        yield {
+          type: "session_ref",
+          session: {
+            agentSessionId: "child-session",
+            agent: input.agent,
+            status: "running",
+          },
+        };
+      }
+      yield {
+        type: "text_delta",
+        text: isDiscover ? JSON.stringify(DISCOVER_ITEMS.slice(0, 2)) : "done",
+      };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    let summary: ReturnType<typeof createInitialRunSummary> | undefined;
+    for await (const event of runWorkflow({ script: MAP_SCRIPT, agent: "mock" })) {
+      if (event.type === "run_started") {
+        summary = createInitialRunSummary(event.parsed);
+      } else if (summary) {
+        summary = applyWorkflowRunEvent(summary, event);
+      }
+    }
+
+    expect(summary?.status).toBe("completed");
+    expect(() =>
+      stringifyJsonObjectColumn(toWorkflowRunResult(summary!), {
+        table: "workflow_runs",
+        column: "result_json",
+        id: "run-regression",
+      }),
+    ).not.toThrow();
   });
 });

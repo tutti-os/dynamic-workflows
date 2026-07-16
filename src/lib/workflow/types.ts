@@ -366,19 +366,20 @@ export type WorkflowLoopRecoveryState = {
   }>;
 };
 
-export type WorkflowRunCheckpoint =
+export type WorkflowRunCheckpointState =
   | {
-      runId: string;
-      nodeId: string;
       kind: "loop";
       state: WorkflowLoopRecoveryState;
     }
   | {
-      runId: string;
-      nodeId: string;
       kind: "map";
       state: WorkflowMapRecoveryState;
     };
+
+export type WorkflowRunCheckpoint = {
+  runId: string;
+  nodeId: string;
+} & WorkflowRunCheckpointState;
 
 export type WorkflowNodeSessionStatus =
   | "running"

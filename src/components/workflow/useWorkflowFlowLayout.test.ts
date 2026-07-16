@@ -26,4 +26,25 @@ const review = loop({
       height: 358,
     });
   });
+
+  it("reserves loop-style width and height for map nodes", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "list" })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "migrate_one", label: "Migrate {{item.file}}", prompt: "do {{item}}" }),
+})
+`);
+    const mapNode = parsed.nodes.find((node) => node.id === "migrated");
+
+    expect(mapNode).toBeDefined();
+    expect(mapNode!.kind).toBe("map");
+    const dimensions = getFlowNodeDimensions(mapNode!);
+    expect(dimensions.width).toBe(430);
+    // A map node reserves a mini-flow container plus item badge row, well above
+    // the default node height so the MapMiniFlow is not clipped.
+    expect(dimensions.height).toBeGreaterThan(240);
+  });
 });

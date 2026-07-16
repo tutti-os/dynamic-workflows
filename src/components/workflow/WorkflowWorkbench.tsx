@@ -172,6 +172,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     visibleRuns,
     nodeStatuses,
     loopStepRuns,
+    mapItemRuns,
     nodeOutputs,
     latestOutput,
     eventLog,
@@ -221,6 +222,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     selectedRunNodeDetail,
     displayNodeStatuses,
     displayLoopStepRuns,
+    displayMapItemRuns,
     completedCount,
     runningCount,
     failedCount,
@@ -230,6 +232,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     parsed,
     nodeStatuses,
     loopStepRuns,
+    mapItemRuns,
     selectedNodeId,
     selectedLoopStepId,
   });
@@ -245,6 +248,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     parsed: graphParsed,
     nodeStatuses: displayNodeStatuses,
     loopStepRuns: displayLoopStepRuns,
+    mapItemRuns: displayMapItemRuns,
     selectedLoopStepId,
     selectedNodeId,
   });

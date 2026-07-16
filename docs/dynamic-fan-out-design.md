@@ -31,7 +31,7 @@ Scope: parser field + validation, executor extraction, template/`until` resoluti
 
 ## Phase 1 — `map` MVP
 
-Status: runtime implemented (2026-07-17). Parser, executor, run-event consumers, and executor-level recovery ship; the UI and DB-backed checkpoint persistence are deliberately deferred (see "Deviations from this proposal" below). The rest of this section is the original proposal; deviations are recorded at the end.
+Status: implemented (2026-07-17). Parser, executor, run-event consumers, executor-level recovery, DB-backed checkpoint persistence, and the run/graph UI all ship. The rest of this section is the original proposal; deviations and the final implementation notes are recorded at the end.
 
 ### Syntax
 
@@ -98,7 +98,25 @@ Reuse the loop step executions presentation: child executions grouped under the 
 - **`onItemFailure: "fail"` lets in-flight children finish.** On the first item failure the pool stops scheduling new items and, once the already-running children settle, the map node fails with the first failure's message. Running children are not aborted mid-flight.
 - **Output shape.** `items` holds only the completed entries (`{ index, item, status: "completed", output }`); failures live in `failed` (`{ index, item, error }`); `total` is the resolved item count. `failed` is always populated for failures, satisfying "failures always visible."
 - **Step prompts may reference upstream node outputs.** The proposal restricted v1 step prompts to item refs plus workflow inputs. Because loop steps already auto-bind cross-node refs cheaply (via `connectTemplateRefs` → node `inputs` → edges), map reuses that exact machinery: a step prompt referencing another node's variable auto-binds it as a map input. Item refs (`item`, `item.<path>`, `item_index`) and `workflow.cwd` never require declaration.
-- **Events and recovery are wired at the executor layer.** A `map_item_state` event mirrors `loop_step_state` (child ref `map:<nodeId>:<index>:<stepId>`), and `node_event` carries an optional `mapItem` ref alongside `loopStep`. Recovery mirrors `recovery.loopStates` via `recovery.mapStates` (the resolved item array plus per-item completions), and the executor emits `onCheckpoint({ kind: "map", ... })` at expansion time and after each item. Persisting those map checkpoints through the DB checkpoint store (currently typed to `WorkflowLoopRecoveryState`, and the job runner only forwards `kind: "loop"` checkpoints) is left as a follow-up; the executor honors `recovery.mapStates` today, which is what the recovery test exercises.
+- **Events and recovery are wired at the executor layer.** A `map_item_state` event mirrors `loop_step_state` (child ref `map:<nodeId>:<index>:<stepId>`), and `node_event` carries an optional `mapItem` ref alongside `loopStep`. Recovery mirrors `recovery.loopStates` via `recovery.mapStates` (the resolved item array plus per-item completions), and the executor emits `onCheckpoint({ kind: "map", ... })` at expansion time and after each item.
+
+### DB checkpoint persistence (closed)
+
+The persistence layer now forwards map checkpoints end to end, so a crashed/stopped run resumes only unfinished map items across the DB boundary (not just in-memory):
+
+- The stored checkpoint type widened from `WorkflowLoopRecoveryState` to the tagged `WorkflowRunCheckpointState = { kind: "loop"; state } | { kind: "map"; state }` (mirrors `WorkflowRunCheckpoint`). `WorkflowRunCheckpointRecord.checkpoint`, `upsertWorkflowRunCheckpoint`, and the JSON column codec all use the union.
+- No SQLite migration is needed: `workflow_run_checkpoints.checkpoint_json` is opaque JSON. On write we persist `{ kind, state }`; on read, `parseWorkflowRunCheckpointStateColumn` accepts the tagged shape and normalizes any legacy untagged row (a bare loop recovery state) to `{ kind: "loop", state }`, so pre-existing loop checkpoints keep resuming.
+- `run-jobs.ts` `onCheckpoint` now forwards both kinds, and `readRecoveryCheckpoints` splits stored checkpoints into `recovery.loopStates` / `recovery.mapStates` by `kind`.
+- Cross-boundary coverage: `run-jobs.test.ts` "persists a map checkpoint and resumes only unfinished items" (map checkpoint → DB → `recovery.mapStates` on resume), `workflows.test.ts` persists a loop+map checkpoint pair, and `json-schemas.test.ts` covers map round-trip plus legacy untagged-loop normalization.
+
+### UI (implemented)
+
+Map children render like loop step executions:
+
+- The graph node renders a `MapMiniFlow` container (loop-style width/badges) for any node with `node.map`; `getFlowNodeDimensions` reserves loop-style width and height for `map` nodes so the mini-flow is not clipped, and the lane width / layout key handle `map` alongside `loop`. A map node no longer renders blank.
+- `mapItemRuns` is threaded from `run-state` through the run-event hooks (`useWorkflowRunEvents`, `useWorkflowRunPreview`, `useWorkflowRunController`) and `useWorkflowFlowLayout` into `FlowNodeData`, mirroring `loopStepRuns` (live streaming and historical run preview).
+- The inspector shows per-item executions: `run-detail.ts` builds `mapItem.items` (sorted by 1-based index) and `RunDetailPanel` renders a "Map item executions" section. The loop-attempt card was generalized into a shared `RunExecutionAttempt` (heading + copy-key prefix) reused by both loop and map, showing each item's label, status badge, agent, and expandable input/output/error/timeline.
+- Not visually verified in a browser here (no runtime). Compensated with typecheck, the run-state map reducer test, and the map-node layout dimension test. A visual pass in a running app is still worth doing to confirm map-node spacing and the item-badge wrap look right; the layout math is conservative but only eyeballing confirms no clipping.
 
 ## Phase 2 — polish
 

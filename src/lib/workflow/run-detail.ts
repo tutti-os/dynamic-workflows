@@ -9,9 +9,11 @@ import { renderPrompt } from "@/lib/workflow/templates";
 import { stringifyWorkflowValue } from "@/lib/workflow/templates";
 import type {
   ParsedWorkflow,
+  WorkflowAgentLoopStep,
   WorkflowInputValue,
   WorkflowLoopStep,
   WorkflowLoopStepRun,
+  WorkflowMapItemRun,
   WorkflowNode,
   WorkflowNodeSessionRef,
   WorkflowNodeStatus,
@@ -39,9 +41,17 @@ export type RunNodeDetail = {
     step: WorkflowLoopStep;
     attempts: RunLoopStepAttemptDetail[];
   };
+  mapItem?: {
+    step: WorkflowAgentLoopStep;
+    items: RunMapItemAttemptDetail[];
+  };
 };
 
 export type RunLoopStepAttemptDetail = WorkflowLoopStepRun & {
+  log: string;
+};
+
+export type RunMapItemAttemptDetail = WorkflowMapItemRun & {
   log: string;
 };
 
@@ -85,6 +95,24 @@ export function buildRunNodeDetail(
         }))
     : [];
 
+  const mapStep = node.map?.step;
+  const mapItemRuns = {
+    ...(allEventResult.mapItemRuns ?? {}),
+    ...(result.mapItemRuns ?? {}),
+  };
+  const mapItemAttempts = mapStep
+    ? Object.values(mapItemRuns)
+        .filter((run) => run.parentNodeId === node.id)
+        .sort((left, right) => left.index - right.index)
+        .map((run) => ({
+          ...run,
+          log: parseRunLogEvents(detail.log)
+            .filter((event) => isMapItemRunEvent(event, run.executionKey))
+            .map(formatRunNodeEvent)
+            .join("\n") || "No item log events.",
+        }))
+    : [];
+
   return {
     node,
     status:
@@ -106,7 +134,26 @@ export function buildRunNodeDetail(
           },
         }
       : {}),
+    ...(mapStep
+      ? {
+          mapItem: {
+            step: mapStep,
+            items: mapItemAttempts,
+          },
+        }
+      : {}),
   };
+}
+
+function isMapItemRunEvent(
+  event: WorkflowRunEvent,
+  executionKey: string,
+): boolean {
+  if (event.type === "map_item_state") {
+    return event.mapItem.executionKey === executionKey;
+  }
+  return event.type === "node_event" &&
+    event.mapItem?.executionKey === executionKey;
 }
 
 function isLoopStepRunEvent(

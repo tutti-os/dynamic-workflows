@@ -159,6 +159,62 @@ describe("workflow run state", () => {
     );
   });
 
+  it("tracks map item executions separately from top-level node status", () => {
+    let summary = createInitialRunSummary(undefined, {
+      queueExecutableNodes: false,
+    });
+    const mapItem = {
+      executionKey: "map:migrate_all:2:migrate_one",
+      parentNodeId: "migrate_all",
+      stepId: "migrate_one",
+      index: 2,
+    };
+    const events: WorkflowRunEvent[] = [
+      {
+        type: "map_item_state",
+        runId: "run-1",
+        mapItem,
+        kind: "agent",
+        label: "Migrate b.ts",
+        status: "running",
+        agent: "local:codex",
+        input: "Migrate b.ts",
+      },
+      {
+        type: "node_event",
+        runId: "run-1",
+        nodeId: "migrate_all.migrate_one",
+        mapItem,
+        event: { type: "text_delta", text: "done" },
+      },
+      {
+        type: "map_item_state",
+        runId: "run-1",
+        mapItem,
+        kind: "agent",
+        label: "Migrate b.ts",
+        status: "completed",
+        output: "done",
+      },
+    ];
+
+    for (const event of events) {
+      summary = applyWorkflowRunEvent(summary, event);
+    }
+
+    expect(summary.nodeStatuses).toEqual({});
+    expect(summary.mapItemRuns?.[mapItem.executionKey]).toEqual(
+      expect.objectContaining({
+        ...mapItem,
+        kind: "agent",
+        label: "Migrate b.ts",
+        status: "completed",
+        input: "Migrate b.ts",
+        output: "done",
+      }),
+    );
+  });
+
   it("stores compact node session refs and final text", () => {
     if (!scanNode) {
       throw new Error("scan node missing");

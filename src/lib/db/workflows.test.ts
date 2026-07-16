@@ -215,35 +215,22 @@ describe("workflow version publishing", () => {
       runId: run.id,
       nodeId: "loop",
       checkpoint: {
-        nextIteration: 1,
-        currentIteration: 1,
-        currentStepOutputs: { draft: "one" },
-        previousStepOutputs: { draft: "one" },
-        iterations: [],
+        kind: "loop",
+        state: {
+          nextIteration: 1,
+          currentIteration: 1,
+          currentStepOutputs: { draft: "one" },
+          previousStepOutputs: { draft: "one" },
+          iterations: [],
+        },
       },
     });
     upsertWorkflowRunCheckpoint({
       runId: run.id,
       nodeId: "loop",
       checkpoint: {
-        nextIteration: 2,
-        previousStepOutputs: { draft: "one", review: "PASS" },
-        iterations: [
-          {
-            index: 1,
-            outputs: { draft: "one", review: "PASS" },
-            untilOutput: "PASS",
-            untilMatched: true,
-          },
-        ],
-      },
-    });
-
-    expect(listWorkflowRunCheckpoints(run.id)).toEqual([
-      expect.objectContaining({
-        runId: run.id,
-        nodeId: "loop",
-        checkpoint: {
+        kind: "loop",
+        state: {
           nextIteration: 2,
           previousStepOutputs: { draft: "one", review: "PASS" },
           iterations: [
@@ -255,8 +242,58 @@ describe("workflow version publishing", () => {
             },
           ],
         },
-      }),
-    ]);
+      },
+    });
+    upsertWorkflowRunCheckpoint({
+      runId: run.id,
+      nodeId: "migrate_all",
+      checkpoint: {
+        kind: "map",
+        state: {
+          items: [{ file: "a.ts" }, { file: "b.ts" }],
+          completions: [{ index: 1, status: "completed", output: "done a.ts" }],
+        },
+      },
+    });
+
+    const checkpoints = listWorkflowRunCheckpoints(run.id);
+    expect(checkpoints).toHaveLength(2);
+    expect(checkpoints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          runId: run.id,
+          nodeId: "loop",
+          checkpoint: {
+            kind: "loop",
+            state: {
+              nextIteration: 2,
+              previousStepOutputs: { draft: "one", review: "PASS" },
+              iterations: [
+                {
+                  index: 1,
+                  outputs: { draft: "one", review: "PASS" },
+                  untilOutput: "PASS",
+                  untilMatched: true,
+                },
+              ],
+            },
+          },
+        }),
+        expect.objectContaining({
+          runId: run.id,
+          nodeId: "migrate_all",
+          checkpoint: {
+            kind: "map",
+            state: {
+              items: [{ file: "a.ts" }, { file: "b.ts" }],
+              completions: [
+                { index: 1, status: "completed", output: "done a.ts" },
+              ],
+            },
+          },
+        }),
+      ]),
+    );
   });
 });
 
@@ -567,9 +604,12 @@ const first = await agent({ id: "first", prompt: "first" })
       runId: run.id,
       nodeId: "loop",
       checkpoint: {
-        nextIteration: 1,
-        previousStepOutputs: {},
-        iterations: [],
+        kind: "loop",
+        state: {
+          nextIteration: 1,
+          previousStepOutputs: {},
+          iterations: [],
+        },
       },
     });
 

@@ -85,7 +85,7 @@ import {
   parseJsonValueColumn,
   parseWorkflowEditJobErrorColumn,
   parseWorkflowGenerationErrorColumn,
-  parseWorkflowLoopRecoveryStateColumn,
+  parseWorkflowRunCheckpointStateColumn,
   parseWorkflowMetaColumn,
 } from "./json-schemas";
 import type {
@@ -195,7 +195,7 @@ export function mapRunCheckpoint(row: RunCheckpointRow): WorkflowRunCheckpointRe
   return {
     runId: row.run_id,
     nodeId: row.node_id,
-    checkpoint: parseWorkflowLoopRecoveryStateColumn(row.checkpoint_json, {
+    checkpoint: parseWorkflowRunCheckpointStateColumn(row.checkpoint_json, {
       table: "workflow_run_checkpoints",
       column: "checkpoint_json",
       id: `${row.run_id}:${row.node_id}`,

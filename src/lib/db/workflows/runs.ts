@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { getDb, getRunLogPath } from "../client";
-import type { WorkflowLoopRecoveryState } from "@/lib/workflow/types";
+import type { WorkflowRunCheckpointState } from "@/lib/workflow/types";
 import {
   stringifyJsonObjectColumn,
-  stringifyWorkflowLoopRecoveryStateColumn,
+  stringifyWorkflowRunCheckpointStateColumn,
 } from "./json-schemas";
 import {
   mapRun,
@@ -467,7 +467,7 @@ export function getWorkflowRun(runId: string): WorkflowRunRecord | null {
 export function upsertWorkflowRunCheckpoint(input: {
   runId: string;
   nodeId: string;
-  checkpoint: WorkflowLoopRecoveryState;
+  checkpoint: WorkflowRunCheckpointState;
 }): WorkflowRunCheckpointRecord {
   const now = new Date().toISOString();
   const database = getDb();
@@ -486,7 +486,7 @@ export function upsertWorkflowRunCheckpoint(input: {
       .run(
         input.runId,
         input.nodeId,
-        stringifyWorkflowLoopRecoveryStateColumn(input.checkpoint, {
+        stringifyWorkflowRunCheckpointStateColumn(input.checkpoint, {
           table: "workflow_run_checkpoints",
           column: "checkpoint_json",
           id: `${input.runId}:${input.nodeId}`,

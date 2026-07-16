@@ -1,6 +1,6 @@
 import type {
   WorkflowHumanTask,
-  WorkflowLoopRecoveryState,
+  WorkflowRunCheckpointState,
   WorkflowDiagnostic,
   WorkflowMeta,
 } from "@/lib/workflow/types";
@@ -116,7 +116,7 @@ export type WorkflowRunRecord = {
 export type WorkflowRunCheckpointRecord = {
   runId: string;
   nodeId: string;
-  checkpoint: WorkflowLoopRecoveryState;
+  checkpoint: WorkflowRunCheckpointState;
   updatedAt: string;
 };
 

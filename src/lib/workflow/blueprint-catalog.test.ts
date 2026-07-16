@@ -26,6 +26,7 @@ describe("workflow blueprint catalog", () => {
       "loop-primitive-rd-acceptance-test-v1",
       "rd-human-acceptance-delivery-v1",
       "parallel-review-synthesis-v1",
+      "map-fan-out-demo-v1",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
     expect(BUILTIN_WORKFLOW_BLUEPRINTS.map((blueprint) => blueprint.id)).toEqual(

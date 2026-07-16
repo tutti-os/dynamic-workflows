@@ -436,6 +436,120 @@ const afterFirst = await agent({ id: "after-first", prompt: "{{first.action}}" }
     expect(getWorkflowRun(run.id)?.status).toBe("completed");
   });
 
+  it("persists a map checkpoint and resumes only unfinished items", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(SCRIPT);
+    const mapState = {
+      items: [{ file: "a.ts" }, { file: "b.ts" }, { file: "c.ts" }],
+      completions: [
+        { index: 1, status: "completed" as const, output: "migrated a.ts" },
+      ],
+    };
+    let invocation = 0;
+    let resumedRecovery: WorkflowRunRequest["recovery"];
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      invocation += 1;
+      const runId = request.runId ?? "run";
+      yield { type: "run_started", runId, parsed };
+      if (invocation === 1) {
+        await request.onCheckpoint?.({
+          runId,
+          nodeId: "migrate_all",
+          kind: "map",
+          state: mapState,
+        });
+        const task = await request.onHumanTask?.({
+          runId,
+          nodeId: "gate",
+          executionKey: "human:gate",
+          spec: {
+            context: [],
+            actions: [
+              { id: "pass", label: "Pass", intent: "primary", fields: [] },
+            ],
+          },
+        });
+        if (!task) {
+          throw new Error("task missing");
+        }
+        yield { type: "human_task_requested", runId, nodeId: "gate", task };
+        yield {
+          type: "run_waiting",
+          runId,
+          pendingTaskIds: [task.id],
+          outputs: {},
+        };
+        return;
+      }
+      resumedRecovery = request.recovery;
+      yield {
+        type: "run_completed",
+        runId,
+        status: "completed",
+        outputs: {},
+      };
+    });
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { listWorkflowHumanTasks, resolveWorkflowHumanTask } = await import(
+      "@/lib/db/workflows/human-tasks"
+    );
+    const { getWorkflowRun } = await import("@/lib/db/workflows/runs");
+    const {
+      isWorkflowRunJobActive,
+      resumeWorkflowRunAfterHumanTask,
+      startWorkflowRunJob,
+    } = await import("@/lib/workflow/run-jobs");
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: process.cwd(),
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    expect(getWorkflowRun(run.id)?.status).toBe("waiting_for_human");
+    const [task] = listWorkflowHumanTasks(run.id, "pending");
+    resolveWorkflowHumanTask({
+      runId: run.id,
+      taskId: task.id,
+      action: "pass",
+      values: {},
+      revision: task.revision,
+    });
+    await resumeWorkflowRunAfterHumanTask({
+      workflowId: detail.workflow.id,
+      runId: run.id,
+    });
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    expect(invocation).toBe(2);
+    // The map checkpoint crossed the DB persistence boundary and was reloaded
+    // into recovery.mapStates so only the two unfinished items re-run.
+    expect(resumedRecovery?.mapStates?.migrate_all).toEqual(mapState);
+    expect(
+      resumedRecovery?.mapStates?.migrate_all?.completions.map(
+        (completion) => completion.index,
+      ),
+    ).toEqual([1]);
+    expect(getWorkflowRun(run.id)?.status).toBe("completed");
+  });
+
   it("reconciles a stale running run from a terminal log event", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;

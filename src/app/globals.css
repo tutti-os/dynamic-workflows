@@ -1919,6 +1919,28 @@ a {
   white-space: nowrap;
 }
 
+.map-mini-flow-step {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  cursor: default;
+  box-shadow: none;
+}
+
+.map-mini-flow-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 7px 8px;
+}
+
+.map-mini-flow-item {
+  white-space: nowrap;
+}
+
 .inspector {
   min-height: 0;
   flex: 1;
