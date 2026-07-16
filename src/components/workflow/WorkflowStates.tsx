@@ -97,21 +97,14 @@ export function WorkflowGridSkeleton() {
     <div className="workflow-grid" aria-label="Loading workflows">
       {Array.from({ length: 3 }, (_, index) => (
         <div className="workflow-card workflow-card-skeleton" key={index}>
-          <div className="workflow-card-header">
-            <SkeletonBlock className="skeleton-icon" />
-            <div className="skeleton-stack">
-              <SkeletonBlock height="16px" width="62%" />
-              <SkeletonBlock height="12px" width="88%" />
-              <SkeletonBlock height="12px" width="52%" />
-            </div>
+          <SkeletonBlock className="skeleton-icon" />
+          <div className="skeleton-stack">
+            <SkeletonBlock height="16px" width="42%" />
+            <SkeletonBlock height="12px" width="72%" />
           </div>
-          <div className="workflow-card-footer">
-            <SkeletonBlock height="20px" width="54px" />
-            <SkeletonBlock height="20px" width="80px" />
-            <span className="workflow-card-actions">
-              <SkeletonBlock height="28px" width="72px" />
-              <SkeletonBlock height="28px" width="92px" />
-            </span>
+          <div className="workflow-card-skeleton-state">
+            <SkeletonBlock height="20px" width="72px" />
+            <SkeletonBlock height="12px" width="54px" />
           </div>
         </div>
       ))}

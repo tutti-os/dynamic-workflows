@@ -14,19 +14,21 @@ import {
   Badge,
   Button,
   Card,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   EyeIcon,
   FileCreateIcon,
   Input,
   LoadingIcon,
+  MoreHorizontalIcon,
   SearchIcon,
   UnderlineTabs,
 } from "@tutti-os/ui-system";
@@ -181,11 +183,15 @@ export function WorkflowBlueprintLibrary() {
   }
 
   return (
-    <section className="blueprint-library" aria-labelledby="blueprint-library-title">
+    <section
+      className="blueprint-library"
+      id="workflow-templates"
+      aria-labelledby="blueprint-library-title"
+    >
       <div className="section-heading">
         <div className="section-heading-main">
-          <h2 id="blueprint-library-title">Built-in blueprints</h2>
-          <p>{blueprints.length} blueprints</p>
+          <h2 id="blueprint-library-title">Templates</h2>
+          <p>Start with a proven workflow pattern.</p>
         </div>
         <label className="blueprint-search">
           <SearchIcon size={16} />
@@ -255,52 +261,65 @@ function BlueprintCard(props: {
 
   return (
     <Card className="blueprint-card" size="sm">
-      <CardHeader className="blueprint-card-header">
-        <div className="blueprint-card-title-row">
-          <CardTitle>{blueprint.title}</CardTitle>
-          {blueprint.requiresCwd ? <Badge variant="warning">Project</Badge> : null}
-        </div>
-        <p>{blueprint.description}</p>
-      </CardHeader>
-      <div className="blueprint-card-body">
-        <p>{blueprint.patternSummary}</p>
-        <div className="blueprint-tags">
-          {blueprint.tags.slice(0, 5).map((tag) => (
-            <Badge key={tag} variant="outline">
-              {tag}
+      <button
+        className="blueprint-card-main"
+        type="button"
+        onClick={() => props.onPreviewBlueprint(blueprint.id)}
+      >
+        <span className="blueprint-card-icon">
+          <FileCreateIcon size={22} />
+        </span>
+        <span className="blueprint-card-copy">
+          <span className="blueprint-card-title-row">
+            <span className="blueprint-card-title">{blueprint.title}</span>
+          </span>
+          <span className="blueprint-card-description">{blueprint.description}</span>
+          <span className="blueprint-card-meta">
+            <Badge
+              variant={blueprint.difficulty === "starter" ? "success" : "pending"}
+            >
+              {blueprint.difficulty}
             </Badge>
-          ))}
-        </div>
+            {blueprint.requiresCwd ? (
+              <Badge variant="warning">Project</Badge>
+            ) : null}
+          </span>
+        </span>
+      </button>
+      <div className="blueprint-card-menu">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              className="card-overflow-trigger"
+              variant="outline"
+              size="icon-lg"
+              type="button"
+              aria-label={`More actions for ${blueprint.title}`}
+            >
+              <MoreHorizontalIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onSelect={() => props.onPreviewBlueprint(blueprint.id)}
+            >
+              <EyeIcon data-icon="inline-start" />
+              Preview
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => void props.onUseBlueprint(blueprint.id)}
+              disabled={props.loading}
+            >
+              {props.loading ? (
+                <LoadingIcon className="spin" data-icon="inline-start" />
+              ) : (
+                <FileCreateIcon data-icon="inline-start" />
+              )}
+              Create workflow
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      <CardFooter className="blueprint-card-footer">
-        <Badge variant={blueprint.difficulty === "starter" ? "success" : "pending"}>
-          {blueprint.difficulty}
-        </Badge>
-        <div className="blueprint-card-actions">
-          <Button
-            size="sm"
-            variant="outline"
-            type="button"
-            onClick={() => props.onPreviewBlueprint(blueprint.id)}
-          >
-            <EyeIcon data-icon="inline-start" />
-            Preview
-          </Button>
-          <Button
-            size="sm"
-            type="button"
-            onClick={() => void props.onUseBlueprint(blueprint.id)}
-            disabled={props.loading}
-          >
-            {props.loading ? (
-              <LoadingIcon className="spin" data-icon="inline-start" />
-            ) : (
-              <FileCreateIcon data-icon="inline-start" />
-            )}
-            Create
-          </Button>
-        </div>
-      </CardFooter>
     </Card>
   );
 }

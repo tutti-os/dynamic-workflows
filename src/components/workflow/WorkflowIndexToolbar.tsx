@@ -1,5 +1,6 @@
 import {
   Input,
+  SearchIcon,
   Select,
   SelectContent,
   SelectItem,
@@ -19,13 +20,16 @@ type WorkflowIndexToolbarProps = {
 export function WorkflowIndexToolbar(props: WorkflowIndexToolbarProps) {
   return (
     <div className="workflow-tools">
-      <Input
-        className="workflow-search"
-        value={props.query}
-        placeholder="Search workflows"
-        aria-label="Search workflows"
-        onChange={(event) => props.onQueryChange(event.target.value)}
-      />
+      <label className="workflow-search-wrap">
+        <SearchIcon size={15} />
+        <Input
+          className="workflow-search"
+          value={props.query}
+          placeholder="Search workflows"
+          aria-label="Search workflows"
+          onChange={(event) => props.onQueryChange(event.target.value)}
+        />
+      </label>
       <RunStatusFilterSelect
         value={props.statusFilter}
         onValueChange={props.onStatusFilterChange}

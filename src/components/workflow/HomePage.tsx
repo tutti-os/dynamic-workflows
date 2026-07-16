@@ -1,6 +1,6 @@
 "use client";
 
-import { Separator, TuttiMark } from "@tutti-os/ui-system";
+import { DashboardIcon, TuttiMark } from "@tutti-os/ui-system";
 import { CreateWorkflowPanel } from "@/components/workflow/CreateWorkflowPanel";
 import { ImportWorkflowDialog } from "@/components/workflow/ImportWorkflowPanel";
 import { useWorkflowHomeController } from "@/components/workflow/useWorkflowHomeController";
@@ -60,53 +60,58 @@ export function HomePage() {
   return (
     <main className="home-shell">
       <header className="home-topbar">
-        <div className="app-brand">
-          <span className="app-brand-mark">
-            <TuttiMark size={28} />
-          </span>
-          <span className="app-brand-title">Dynamic Workflows</span>
+        <div className="home-topbar-inner">
+          <div className="app-brand">
+            <span className="app-brand-mark">
+              <TuttiMark size={28} />
+            </span>
+            <span className="app-brand-title">Dynamic Workflows</span>
+          </div>
+          <nav className="home-nav" aria-label="Primary navigation">
+            <a className="home-nav-link" href="#recent-workflows">
+              <DashboardIcon size={16} />
+              <span>Workflows</span>
+            </a>
+          </nav>
         </div>
       </header>
 
       <section className="home-hero">
-        <div className="hero-copy">
-          <h1>Create a workflow from a prompt</h1>
-          <p>
-            Describe what you want to automate. We'll generate a workflow script
-            and you can run it locally with your agents.
-          </p>
-        </div>
+        <div className="home-hero-inner">
+          <div className="hero-copy">
+            <span className="hero-kicker">Local workflow builder</span>
+            <h1>
+              Turn an idea into a <span>working flow.</span>
+            </h1>
+            <p>Describe the outcome. Your agents will handle the steps.</p>
+          </div>
 
-        <CreateWorkflowPanel
-          prompt={prompt}
-          agents={agents}
-          agent={effectiveAgent}
-          model={model}
-          modelOptions={modelOptions}
-          cwd={cwd}
-          agentsLoading={agentsLoading}
-          agentsError={agentsError}
-          agentsWarning={agentsWarning}
-          isCreating={isCreating}
-          createError={createError}
-          createDiagnostics={createDiagnostics}
-          onPromptChange={setPrompt}
-          onAgentChange={setAgent}
-          onModelChange={setModel}
-          onCwdChange={setCwd}
-          onRetryAgents={retryAgents}
-          onCreate={createWorkflow}
-        />
+          <CreateWorkflowPanel
+            prompt={prompt}
+            agents={agents}
+            agent={effectiveAgent}
+            model={model}
+            modelOptions={modelOptions}
+            cwd={cwd}
+            agentsLoading={agentsLoading}
+            agentsError={agentsError}
+            agentsWarning={agentsWarning}
+            isCreating={isCreating}
+            createError={createError}
+            createDiagnostics={createDiagnostics}
+            onPromptChange={setPrompt}
+            onAgentChange={setAgent}
+            onModelChange={setModel}
+            onCwdChange={setCwd}
+            onRetryAgents={retryAgents}
+            onCreate={createWorkflow}
+          />
+        </div>
       </section>
 
       <WorkflowBlueprintLibrary />
 
-      <section className="workflow-index">
-        <div className="ornament-divider" aria-hidden="true">
-          <Separator />
-          <TuttiMark size={18} />
-          <Separator />
-        </div>
+      <section className="workflow-index" id="recent-workflows">
         <div className="section-heading">
           <div className="section-heading-main">
             <h2>Recent workflows</h2>
@@ -115,7 +120,13 @@ export function HomePage() {
               {runCount} runs
             </p>
           </div>
-          <div className="section-heading-actions">
+          <div className="workflow-heading-tools">
+            <WorkflowIndexToolbar
+              query={query}
+              statusFilter={statusFilter}
+              onQueryChange={setQuery}
+              onStatusFilterChange={setStatusFilter}
+            />
             <ImportWorkflowDialog
               file={importFile}
               isImporting={isImporting}
@@ -126,12 +137,6 @@ export function HomePage() {
             />
           </div>
         </div>
-        <WorkflowIndexToolbar
-          query={query}
-          statusFilter={statusFilter}
-          onQueryChange={setQuery}
-          onStatusFilterChange={setStatusFilter}
-        />
         {actionError ? <div className="diagnostic error">{actionError}</div> : null}
         <WorkflowGrid
           workflows={filteredWorkflows}

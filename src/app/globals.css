@@ -198,8 +198,17 @@ a {
 
 .workflow-card-skeleton {
   display: grid;
+  min-height: 92px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 14px;
-  padding: 14px;
+  padding: 14px 58px 14px 14px;
+}
+
+.workflow-card-skeleton-state {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
 }
 
 .run-detail-skeleton {
@@ -303,19 +312,42 @@ a {
 }
 
 .home-shell {
+  position: relative;
   min-height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(
+      circle at 10% 19%,
+      color-mix(in srgb, var(--state-success) 8%, transparent) 0,
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at 88% 12%,
+      color-mix(in srgb, var(--state-success) 5%, transparent) 0,
+      transparent 24%
+    ),
+    var(--background);
   color: var(--text-primary);
 }
 
 .home-topbar {
-  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: var(--z-workbench-chrome);
   height: 72px;
+  border-bottom: 1px solid var(--border-1);
+  background: color-mix(in srgb, var(--background-fronted) 86%, transparent);
+  backdrop-filter: blur(18px);
+}
+
+.home-topbar-inner {
+  display: flex;
+  width: min(1380px, 100%);
+  height: 100%;
+  margin: 0 auto;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border-1);
-  background: color-mix(in srgb, var(--background-fronted) 88%, transparent);
-  padding: 0 30px;
-  backdrop-filter: blur(18px);
+  padding: 0 32px;
 }
 
 .app-brand {
@@ -342,55 +374,134 @@ a {
   letter-spacing: 0;
 }
 
+.home-nav {
+  display: flex;
+  align-items: center;
+}
+
+.home-nav-link {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 76%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--background-fronted) 90%, transparent);
+  padding: 0 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+
+.home-nav-link:hover,
+.home-nav-link:focus-visible {
+  border-color: color-mix(in srgb, var(--state-success) 30%, var(--border-1));
+  background: var(--background-fronted);
+  color: var(--foreground);
+}
+
 .home-hero {
+  position: relative;
+  isolation: isolate;
+  padding: 54px 32px 42px;
+}
+
+.home-hero::before {
+  position: absolute;
+  z-index: -1;
+  width: 440px;
+  height: 440px;
+  top: 72px;
+  left: -270px;
+  border: 1px solid color-mix(in srgb, var(--state-success) 12%, transparent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 70px color-mix(in srgb, var(--state-success) 2.5%, transparent),
+    0 0 0 140px color-mix(in srgb, var(--state-success) 1.5%, transparent);
+  content: "";
+  pointer-events: none;
+}
+
+.home-hero-inner {
   display: grid;
-  justify-items: center;
-  gap: 26px;
-  padding: 46px 24px 30px;
+  width: min(1380px, 100%);
+  margin: 0 auto;
+  grid-template-columns: minmax(300px, 0.72fr) minmax(620px, 1.48fr);
+  align-items: center;
+  gap: clamp(48px, 7vw, 112px);
 }
 
 .hero-copy {
   display: grid;
-  max-width: 660px;
-  gap: 12px;
-  text-align: center;
+  max-width: 460px;
+  gap: 16px;
+  text-align: left;
+}
+
+.hero-kicker {
+  color: var(--state-success);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .hero-copy h1 {
   margin: 0;
   color: var(--foreground);
-  font-size: 32px;
-  font-weight: 600;
-  line-height: 1.12;
-  letter-spacing: 0;
+  font-size: clamp(42px, 4vw, 58px);
+  font-weight: 650;
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+}
+
+.hero-copy h1 span {
+  color: var(--state-success);
 }
 
 .hero-copy p {
-  margin: 0 auto;
-  max-width: 560px;
+  margin: 0;
+  max-width: 390px;
   color: var(--text-secondary);
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 17px;
+  line-height: 1.6;
 }
 
 .create-panel {
   display: grid;
-  width: min(920px, 100%);
-  gap: 18px;
+  width: 100%;
+  min-width: 0;
+  gap: 14px;
 }
 
 .prompt-composer {
   position: relative;
-  min-height: 238px;
-  border: 1px solid color-mix(in srgb, var(--border-1) 70%, var(--foreground) 12%);
-  border-radius: 8px;
+  min-height: 248px;
+  border: 1px solid color-mix(in srgb, var(--state-success) 44%, var(--border-1));
+  border-radius: 14px;
   background:
     linear-gradient(
       180deg,
-      color-mix(in srgb, var(--background-fronted) 94%, transparent),
-      color-mix(in srgb, var(--background-fronted) 86%, var(--background-soft))
+      color-mix(in srgb, var(--background-fronted) 98%, transparent),
+      color-mix(in srgb, var(--background-fronted) 94%, var(--background-soft))
     );
-  box-shadow: 0 18px 44px rgb(0 0 0 / 8%);
+  box-shadow:
+    0 22px 54px rgb(0 0 0 / 8%),
+    0 0 0 4px color-mix(in srgb, var(--state-success) 4%, transparent);
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.prompt-composer:focus-within {
+  border-color: color-mix(in srgb, var(--state-success) 72%, var(--border-1));
+  box-shadow:
+    0 24px 58px rgb(0 0 0 / 9%),
+    0 0 0 4px color-mix(in srgb, var(--state-success) 9%, transparent);
 }
 
 .prompt-composer-icon {
@@ -402,11 +513,11 @@ a {
 }
 
 .prompt-textarea {
-  min-height: 236px;
+  min-height: 246px;
   resize: vertical;
   border: 0;
   background: transparent;
-  padding: 36px 36px 62px 84px;
+  padding: 34px 34px 64px 64px;
   color: var(--text-primary);
   font-size: 15px;
   line-height: 1.6;
@@ -429,7 +540,7 @@ a {
   width: 32px;
   height: 32px;
   border: 1px solid var(--border-1);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--background-fronted);
   color: var(--text-secondary);
 }
@@ -444,8 +555,8 @@ a {
 
 .create-controls {
   display: grid;
-  grid-template-columns: minmax(180px, 1.12fr) minmax(150px, 0.98fr) minmax(190px, 1.08fr) auto;
-  gap: 16px;
+  grid-template-columns: minmax(150px, 1.1fr) minmax(140px, 0.95fr) minmax(170px, 1.08fr) auto;
+  gap: 12px;
   align-items: end;
 }
 
@@ -576,33 +687,25 @@ a {
   background: color-mix(in srgb, var(--state-danger) 8%, transparent);
 }
 
-.ornament-divider {
-  display: grid;
-  grid-template-columns: minmax(80px, 1fr) auto minmax(80px, 1fr);
-  width: min(1260px, 100%);
-  align-items: center;
-  gap: 18px;
-  color: var(--text-placeholder);
-}
-
 .workflow-index {
   display: grid;
   justify-items: center;
-  gap: 28px;
-  padding: 4px 24px 34px;
+  gap: 18px;
+  scroll-margin-top: 88px;
+  padding: 34px 32px 44px;
 }
 
 .blueprint-library {
   display: grid;
   justify-items: center;
-  gap: 18px;
-  padding: 8px 24px 36px;
+  gap: 16px;
+  padding: 24px 32px 28px;
 }
 
 .blueprint-search {
   position: relative;
   display: flex;
-  width: min(320px, 100%);
+  width: min(280px, 100%);
   align-items: center;
 }
 
@@ -617,37 +720,85 @@ a {
   width: 100%;
   border: 1px solid var(--border-1);
   background: var(--background-fronted);
+  height: 38px;
   padding-left: 34px;
 }
 
 .blueprint-grid {
   display: grid;
-  width: min(1260px, 100%);
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
+  width: min(1380px, 100%);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .blueprint-card {
-  min-height: 266px;
+  position: relative;
+  min-height: 152px;
+  overflow: visible;
   border-color: var(--border-1);
-  background: color-mix(in srgb, var(--background-fronted) 92%, transparent);
+  background: color-mix(in srgb, var(--background-fronted) 96%, transparent);
+  padding: 0;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
 
-.blueprint-card-header {
-  gap: 8px;
+.blueprint-card:hover,
+.blueprint-card:focus-within {
+  border-color: color-mix(in srgb, var(--state-success) 34%, var(--border-1));
+  box-shadow: 0 16px 34px rgb(0 0 0 / 7%);
+  transform: translateY(-2px);
+}
+
+.blueprint-card-main {
+  display: grid;
+  width: 100%;
+  min-height: 150px;
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  padding: 18px 54px 18px 18px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.blueprint-card-main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--state-success) 65%, transparent);
+  outline-offset: 3px;
+}
+
+.blueprint-card-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--state-success) 18%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--state-success) 10%, var(--background-fronted));
+  color: var(--state-success);
+}
+
+.blueprint-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
 }
 
 .blueprint-card-title-row {
-  display: flex;
+  display: block;
   min-width: 0;
-  align-items: start;
-  justify-content: space-between;
-  gap: 10px;
 }
 
-.blueprint-card-title-row [data-slot="card-title"] {
-  min-width: 0;
+.blueprint-card-title {
+  display: block;
   overflow: hidden;
+  margin: 0;
   color: var(--foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -655,57 +806,36 @@ a {
   font-weight: 600;
 }
 
-.blueprint-card-header p,
-.blueprint-card-body p {
-  margin: 0;
+.blueprint-card-description {
+  display: -webkit-box;
+  min-height: 36px;
+  overflow: hidden;
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
-}
-
-.blueprint-card-header p {
-  display: -webkit-box;
-  overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
-.blueprint-card-body {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  align-content: start;
-  gap: 12px;
-  padding: 0 12px;
-}
-
-.blueprint-card-body p {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
-.blueprint-tags {
+.blueprint-card-meta {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.blueprint-card-footer {
-  justify-content: space-between;
-  gap: 12px;
-  border-top: 0;
-  background: transparent;
+.blueprint-card-menu {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 150ms ease;
 }
 
-.blueprint-card-actions {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
+.blueprint-card:hover .blueprint-card-menu,
+.blueprint-card:focus-within .blueprint-card-menu {
+  opacity: 1;
 }
 
 .blueprint-empty {
@@ -944,7 +1074,7 @@ a {
 
 .section-heading {
   display: flex;
-  width: min(1260px, 100%);
+  width: min(1380px, 100%);
   align-items: end;
   justify-content: space-between;
   gap: 16px;
@@ -956,18 +1086,11 @@ a {
   gap: 6px;
 }
 
-.section-heading-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-}
-
 .section-heading h2 {
   margin: 0;
   color: var(--foreground);
-  font-size: 18px;
-  font-weight: 500;
+  font-size: 20px;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -978,11 +1101,34 @@ a {
   font-size: 13px;
 }
 
+.workflow-heading-tools {
+  display: flex;
+  min-width: 0;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .workflow-tools {
   display: grid;
-  width: min(1260px, 100%);
-  grid-template-columns: minmax(240px, 1fr) 190px;
-  gap: 12px;
+  width: auto;
+  grid-template-columns: minmax(210px, 260px) 150px;
+  gap: 10px;
+}
+
+.workflow-search-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.workflow-search-wrap > svg {
+  position: absolute;
+  left: 11px;
+  z-index: 1;
+  color: var(--text-tertiary);
+  pointer-events: none;
 }
 
 .import-dialog {
@@ -1038,17 +1184,22 @@ a {
 
 .workflow-search,
 .workflow-status-filter {
+  height: 38px;
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-1);
   background: var(--background-fronted);
 }
 
+.workflow-search {
+  padding-left: 34px;
+}
+
 .workflow-grid {
   display: grid;
-  width: min(1260px, 100%);
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 28px;
+  width: min(1380px, 100%);
+  grid-template-columns: 1fr;
+  gap: 10px;
 }
 
 .workflow-grid > .empty-state {
@@ -1058,18 +1209,21 @@ a {
 }
 
 .workflow-card-shell,
-.workflow-card-body {
+.workflow-card-main {
   min-width: 0;
 }
 
-.workflow-card-body {
-  display: block;
+.workflow-card-shell {
+  border-radius: 10px;
 }
 
 .workflow-card {
-  min-height: 132px;
+  position: relative;
+  min-height: 92px;
+  overflow: visible;
   border-color: var(--border-1);
-  background: color-mix(in srgb, var(--background-fronted) 92%, transparent);
+  background: color-mix(in srgb, var(--background-fronted) 96%, transparent);
+  padding: 0;
   transition:
     background-color 180ms ease,
     border-color 180ms ease,
@@ -1081,20 +1235,30 @@ a {
   border-color: color-mix(in srgb, var(--state-success) 38%, var(--border-1));
   background: color-mix(in srgb, var(--background-fronted) 98%, var(--state-success) 2%);
   box-shadow:
-    0 18px 42px rgb(0 0 0 / 9%),
+    0 14px 32px rgb(0 0 0 / 7%),
     0 0 0 1px color-mix(in srgb, var(--state-success) 7%, transparent);
-  transform: translateY(-2px);
+  transform: translateY(-1px);
 }
 
-.workflow-card-header {
-  grid-template-columns: 52px minmax(0, 1fr);
+.workflow-card-main {
+  display: grid;
+  min-height: 90px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
+  gap: 14px;
+  border-radius: inherit;
+  padding: 14px 58px 14px 14px;
+}
+
+.workflow-card-main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--state-success) 65%, transparent);
+  outline-offset: 3px;
 }
 
 .workflow-card-icon {
   display: grid;
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--state-success) 20%, transparent);
   border-radius: 8px;
@@ -1102,17 +1266,31 @@ a {
   color: var(--state-success);
 }
 
-.workflow-card h3,
-.workflow-card [data-slot="card-title"] {
+.workflow-card-summary {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+}
+
+.workflow-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.workflow-card-title {
+  display: block;
   overflow: hidden;
-  margin: 0 0 5px;
+  margin: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 15px;
   font-weight: 600;
 }
 
-.workflow-card p {
+.workflow-card-description {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;
@@ -1120,7 +1298,7 @@ a {
   font-size: 12px;
   line-height: 1.45;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
 }
 
 .workflow-card-submeta {
@@ -1128,7 +1306,8 @@ a {
   min-width: 0;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  justify-content: flex-end;
+  margin-top: 0;
   color: var(--text-tertiary);
   font-size: 11px;
 }
@@ -1139,28 +1318,68 @@ a {
   content: "·";
 }
 
-.workflow-card-footer {
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  border-top: 0;
-  background: transparent;
+.workflow-card-state {
+  display: grid;
+  min-width: 118px;
+  justify-items: end;
+  gap: 8px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
+}
+
+.workflow-card-state time {
+  color: var(--text-tertiary);
 }
 
 .workflow-card-actions {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  z-index: 2;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 150ms ease;
+}
+
+.workflow-card:hover .workflow-card-actions,
+.workflow-card:focus-within .workflow-card-actions {
+  opacity: 1;
+}
+
+.card-overflow-trigger {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-fronted) 94%, transparent);
+  color: var(--text-secondary);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 6%);
+}
+
+.card-overflow-trigger[data-state="open"] {
+  border-color: color-mix(in srgb, var(--state-success) 35%, var(--border-1));
+  background: var(--background-fronted);
+  color: var(--foreground);
+}
+
+.copy-notice {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: var(--z-toast);
   display: flex;
-  flex-wrap: wrap;
+  max-width: min(360px, calc(100vw - 36px));
+  align-items: center;
   gap: 8px;
-  margin-left: auto;
-}
-
-.workflow-card-dot {
-  color: var(--text-placeholder);
-}
-
-.workflow-card-arrow {
-  margin-left: auto;
+  border: 1px solid var(--toast-neutral-border);
+  border-radius: 9px;
+  background: var(--toast-neutral-bg);
+  box-shadow: 0 12px 32px var(--toast-shadow-color);
+  padding: 10px 13px;
+  color: var(--toast-neutral-fg);
+  font-size: 12px;
+  font-weight: 500;
+  animation: panel-fade-in 160ms ease-out;
 }
 
 .detail-topbar {
@@ -2449,7 +2668,36 @@ a {
   }
 }
 
+@media (hover: none) {
+  .blueprint-card-menu,
+  .workflow-card-actions {
+    opacity: 1;
+  }
+}
+
 @media (max-width: 980px) {
+  .home-hero-inner {
+    grid-template-columns: 1fr;
+    gap: 34px;
+  }
+
+  .hero-copy {
+    max-width: 680px;
+  }
+
+  .hero-copy h1 {
+    max-width: 720px;
+  }
+
+  .blueprint-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workflow-heading-tools {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
   .detail-topbar {
     grid-template-columns: 1fr;
   }
@@ -2484,6 +2732,10 @@ a {
 
 @media (max-width: 760px) {
   .home-topbar {
+    height: 64px;
+  }
+
+  .home-topbar-inner {
     padding: 0 18px;
   }
 
@@ -2492,14 +2744,31 @@ a {
   }
 
   .home-hero {
-    padding: 34px 16px 24px;
+    padding: 38px 18px 24px;
+  }
+
+  .home-hero::before {
+    display: none;
+  }
+
+  .home-hero-inner {
+    gap: 28px;
   }
 
   .hero-copy h1 {
-    font-size: 26px;
+    font-size: clamp(34px, 10vw, 44px);
+  }
+
+  .hero-copy p {
+    font-size: 15px;
+  }
+
+  .prompt-composer {
+    min-height: 226px;
   }
 
   .prompt-textarea {
+    min-height: 224px;
     padding: 58px 18px 64px;
   }
 
@@ -2509,30 +2778,42 @@ a {
   }
 
   .create-controls {
-    grid-template-columns: 1fr;
-  }
-
-  .workflow-tools {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .create-button {
+    grid-column: 1 / -1;
     width: 100%;
+  }
+
+  .blueprint-library,
+  .workflow-index {
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .workflow-heading-tools,
+  .workflow-tools,
+  .blueprint-search {
+    width: 100%;
+  }
+
+  .workflow-tools {
+    grid-template-columns: minmax(0, 1fr) 145px;
   }
 
   .workflow-grid {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 10px;
   }
 
   .blueprint-grid {
     grid-template-columns: 1fr;
   }
 
-  .blueprint-search,
-  .blueprint-card-actions,
-  .blueprint-card-actions > button {
-    width: 100%;
+  .blueprint-card-menu,
+  .workflow-card-actions {
+    opacity: 1;
   }
 
   .section-heading {
@@ -2540,9 +2821,59 @@ a {
     flex-direction: column;
   }
 
-  .section-heading-actions,
   .import-dialog-trigger {
     width: 100%;
+  }
+
+  .workflow-heading-tools .import-dialog-trigger {
+    width: auto;
+  }
+
+  .workflow-card-main {
+    grid-template-columns: 40px minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 14px 54px 14px 14px;
+  }
+
+  .workflow-card-skeleton {
+    grid-template-columns: 40px minmax(0, 1fr);
+    padding: 14px;
+  }
+
+  .workflow-card-skeleton-state {
+    grid-column: 2;
+    grid-template-columns: auto auto;
+    justify-content: start;
+    justify-items: start;
+  }
+
+  .workflow-card-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .workflow-card-summary {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .workflow-card-submeta {
+    justify-content: flex-start;
+  }
+
+  .workflow-card-state {
+    grid-column: 2;
+    min-width: 0;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    justify-items: start;
+    gap: 10px;
+  }
+
+  .workflow-card-actions {
+    top: 12px;
+    transform: none;
   }
 
   .import-file-picker {
@@ -2626,5 +2957,51 @@ a {
   .blueprint-script-preview {
     min-height: 340px;
     max-height: 340px;
+  }
+}
+
+@media (max-width: 520px) {
+  .home-nav-link {
+    width: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .home-nav-link span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .create-controls,
+  .workflow-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .create-button {
+    grid-column: 1;
+  }
+
+  .workflow-heading-tools {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-heading-tools .import-dialog-trigger {
+    width: 100%;
+  }
+
+  .workflow-card-state time {
+    display: none;
+  }
+
+  .copy-notice {
+    right: 18px;
+    bottom: 18px;
+    left: 18px;
+    max-width: none;
   }
 }
