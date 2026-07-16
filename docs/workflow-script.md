@@ -94,4 +94,12 @@ Human responses are structured as `{ action, values }` and support dotted templa
 until: { source: "review.action", equals: "pass" }
 ```
 
+An agent step can supply the same structured decision by declaring `output: "json"`: its final message is parsed and stored as a JSON value, so the same dotted-source matcher applies to an agent verdict without pinning a token to the final line.
+
+```js
+agent({ id: "review", output: "json", prompt: "Judge {{worker}}. End with only { \"verdict\": \"pass\" | \"revise\" }." }),
+// ...
+until: { source: "review.verdict", equals: "pass" }
+```
+
 The v1 form controls are text, textarea, and select. Context can be displayed as text, Markdown, or JSON. Submitted responses are immutable and remain attached to the run history.

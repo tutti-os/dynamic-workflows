@@ -11,6 +11,7 @@ An agent's final message IS the node's output: downstream prompts receive it ver
 - Prompt for the deliverable itself (the list, the diff summary, the verdict), not a report about producing it.
 - When a loop matches a verdict, pin the contract: one exact token alone on the final non-empty line, stated in the prompt with the same spelling `until.finalStatus` expects.
 - When a human node supplies the decision, prefer the structured matcher (`{ source: "gate.action", equals: "pass" }`) over parsing text.
+- When an agent supplies a verdict or a machine-readable list, prefer `output: "json"` plus a structured matcher (`{ source: "review.verdict", equals: "pass" }`) over `until.finalStatus` token-matching: the agent ends its message with only the JSON block, the executor stores the parsed value, and downstream reads fields by dotted path.
 
 ## Node prompt anatomy
 

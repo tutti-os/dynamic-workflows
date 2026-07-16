@@ -38,6 +38,8 @@ export type WorkflowSessionSpec =
       scope?: "loop" | "step";
     };
 
+export type WorkflowAgentOutputFormat = "json";
+
 export type WorkflowAgentLoopStep = {
   id: string;
   kind: "agent";
@@ -47,6 +49,7 @@ export type WorkflowAgentLoopStep = {
   agent?: string;
   model?: string;
   cwd?: string;
+  output?: WorkflowAgentOutputFormat;
   session?: WorkflowSessionSpec;
   templateRefs: string[];
   sourceRange?: EditableRange;
@@ -101,6 +104,7 @@ export type WorkflowHumanLoopStep = {
   agent?: undefined;
   model?: undefined;
   cwd?: undefined;
+  output?: undefined;
   session?: undefined;
   templateRefs: string[];
   sourceRange?: EditableRange;
@@ -145,6 +149,7 @@ export type WorkflowNode = {
   agent?: string;
   model?: string;
   cwd?: string;
+  output?: WorkflowAgentOutputFormat;
   session?: WorkflowSessionSpec;
   human?: WorkflowHumanSpec;
   loop?: WorkflowLoopSpec;

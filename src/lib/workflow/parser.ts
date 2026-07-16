@@ -270,6 +270,7 @@ function addAgentNode(
   const inputs = readInputs(options, state);
   const templateRefs = extractTemplateRefs(prompt);
   const session = readSessionSpec(options, state, "agent");
+  const output = readAgentOutputFormat(options, state, `node "${id}"`);
   const node: WorkflowNode = {
     id,
     kind: "agent",
@@ -280,6 +281,7 @@ function addAgentNode(
     agent: readObjectString(options, "agent"),
     model: readObjectString(options, "model"),
     cwd: readObjectString(options, "cwd"),
+    ...(output ? { output } : {}),
     ...(session ? { session } : {}),
     inputs,
     templateRefs,
@@ -848,6 +850,7 @@ function readLoopAgentStep(
     state,
   );
   const session = readSessionSpec(options, state, "loopStep");
+  const output = readAgentOutputFormat(options, state, `loop step "${id}"`);
 
   return {
     id,
@@ -858,6 +861,7 @@ function readLoopAgentStep(
     agent: readObjectString(options, "agent"),
     model: readObjectString(options, "model"),
     cwd: readObjectString(options, "cwd"),
+    ...(output ? { output } : {}),
     ...(session ? { session } : {}),
     templateRefs: [
       ...new Set([
@@ -870,6 +874,26 @@ function readLoopAgentStep(
     appendPromptRange: readObjectPropertyValueRange(options, "appendPrompt"),
     labelRange: readObjectPropertyValueRange(options, "label"),
   };
+}
+
+function readAgentOutputFormat(
+  options: AnyNode | undefined,
+  state: ParserState,
+  ownerLabel: string,
+): "json" | undefined {
+  const value = readObjectPropertyValue(options, "output");
+  if (value === undefined) {
+    return undefined;
+  }
+  if (readObjectString(options, "output") === "json") {
+    return "json";
+  }
+  state.diagnostics.push({
+    severity: "error",
+    message: `${ownerLabel} output must be "json" when set.`,
+    range: readObjectPropertyValueRange(options, "output") ?? toRange(value),
+  });
+  return undefined;
 }
 
 function readLoopUntil(

@@ -79,6 +79,53 @@ const looped = await loop({
     expect(loop?.until).toEqual({ source: "review.action", equals: "pass" });
   });
 
+  it('accepts output: "json" on agent nodes and loop steps', () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List items as JSON." })
+const graded = await loop({
+  id: "graded",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "worker", prompt: "Do the work." }),
+    agent({ id: "review", output: "json", prompt: "Judge {{worker}} and return JSON." }),
+  ],
+  until: { source: "review.verdict", equals: "pass" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes.find((node) => node.id === "discover")).toEqual(
+      expect.objectContaining({ output: "json" }),
+    );
+    const loop = parsed.nodes.find((node) => node.id === "graded")?.loop;
+    expect(loop?.steps.find((step) => step.id === "review")).toEqual(
+      expect.objectContaining({ output: "json" }),
+    );
+    expect(loop?.steps.find((step) => step.id === "worker")?.output).toBeUndefined();
+    expect(loop?.until).toEqual({ source: "review.verdict", equals: "pass" });
+  });
+
+  it("rejects an unsupported output format on agent nodes and loop steps", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "yaml", prompt: "List items." })
+const graded = await loop({
+  id: "graded",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "review", output: "xml", prompt: "Judge and return." }),
+  ],
+  until: { source: "review", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        'node "discover" output must be "json" when set.',
+        'loop step "review" output must be "json" when set.',
+      ]),
+    );
+  });
+
   it("validates human task actions and fields", () => {
     const parsed = parseWorkflowScript(`
 const invalid = human({

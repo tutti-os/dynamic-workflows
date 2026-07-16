@@ -3,6 +3,7 @@ import { runAgent } from "@/lib/agents/runtime";
 import { resolveWorkflowCwd, resolveWorkflowCwdFrom } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
 import { normalizeWorkflowInputsForSchema } from "./input-schema";
+import { extractAgentJsonOutput } from "./json-output";
 import { formatLoopUntil, matchesLoopUntil } from "./loop-until";
 import { resolveLoopStepRunContext } from "./loop-runtime";
 import { assertWorkflowScriptValid } from "./parser";
@@ -411,11 +412,14 @@ async function* runAgentNode(input: {
 
     throwIfAborted(input.request.signal);
 
+    const nodeOutput =
+      input.node.output === "json" ? extractAgentJsonOutput(output) : output;
+
     yield {
       type: "node_completed",
       runId: input.runId,
       nodeId: input.node.id,
-      output,
+      output: nodeOutput,
     };
   } catch (error) {
     yield {
@@ -915,7 +919,7 @@ async function* runLoopAgentStep(input: {
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
-}): AsyncGenerator<WorkflowRunEvent, string> {
+}): AsyncGenerator<WorkflowRunEvent, WorkflowValue> {
   const agent =
     resolveRuntimeOption(input.step.agent, input.defaultAgent, input.workflowInputs) ??
     input.defaultAgent;
@@ -1021,13 +1025,17 @@ async function* runLoopAgentStep(input: {
     }
   }
 
+  // Extract before signaling completion so a parse failure fails the step.
+  const stepOutput =
+    input.step.output === "json" ? extractAgentJsonOutput(output) : output;
+
   yield loopStatusEvent({
     runId: input.runId,
     nodeId: input.nodeId,
     message: `Loop step ${input.syntheticId} completed.`,
   });
 
-  return output;
+  return stepOutput;
 }
 
 class WorkflowRunCanceledError extends Error {

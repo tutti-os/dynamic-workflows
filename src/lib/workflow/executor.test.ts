@@ -1406,6 +1406,113 @@ const delivery = await loop({
       ]),
     );
   });
+
+  it('parses an output: "json" agent message and renders a dotted path downstream', async () => {
+    const calls: AgentRunInput[] = [];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      const text = input.prompt.startsWith("Discover")
+        ? 'Here is the plan.\n```json\n{ "verdict": "pass", "items": ["a", "b"] }\n```'
+        : "done";
+      yield { type: "text_delta", text };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const discover = await agent({ id: "discover", output: "json", prompt: "Discover work items." })
+const report = await agent({ id: "report", prompt: "Verdict is {{discover.verdict}} covering {{discover.items}}." })
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    const discovered = events.find(
+      (event) => event.type === "node_completed" && event.nodeId === "discover",
+    );
+    expect(discovered).toEqual(
+      expect.objectContaining({
+        output: { verdict: "pass", items: ["a", "b"] },
+      }),
+    );
+    expect(calls[1].prompt).toBe('Verdict is pass covering ["a","b"].');
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "completed" }),
+    );
+  });
+
+  it('fails an output: "json" agent node when nothing parses', async () => {
+    runAgentMock.mockImplementation(async function* (): AsyncGenerator<AgentRuntimeEvent> {
+      yield { type: "text_delta", text: "I could not produce a result." };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const discover = await agent({ id: "discover", output: "json", prompt: "Discover work items." })
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(readNodeFailures(events)).toEqual([
+      expect.stringContaining("I could not produce a result."),
+    ]);
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "failed" }),
+    );
+  });
+
+  it('matches a structured until on a parsed output: "json" loop step', async () => {
+    const verdicts = ['{ "verdict": "revise" }', '{ "verdict": "pass" }'];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      const text = input.prompt.startsWith("Review")
+        ? verdicts.shift() ?? '{ "verdict": "pass" }'
+        : "work";
+      yield { type: "text_delta", text };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: 3,
+  steps: [
+    agent({ id: "worker", prompt: "Do work {{iteration}}." }),
+    agent({ id: "review", output: "json", prompt: "Review {{worker}} and return JSON." }),
+  ],
+  until: { source: "review.verdict", equals: "pass" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(runAgentMock).toHaveBeenCalledTimes(4);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Loop "delivery" iteration 1 until check: not matched (review.verdict equals "pass").',
+        'Loop "delivery" iteration 2 until check: matched (review.verdict equals "pass").',
+      ]),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "completed" }),
+    );
+  });
 });
 
 function loopMockText(prompt: string): string {
