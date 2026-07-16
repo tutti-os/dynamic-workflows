@@ -12,6 +12,8 @@ A workflow script is a single JavaScript module using only the workflow primitiv
 
 Scheduling is dataflow-driven: a node runs once every node referenced in its `inputs` (and any session predecessor) has completed, and independent ready nodes run concurrently. Declaration order does not serialize execution — only `inputs`, session continuity, and loop membership create ordering. Wire dependencies deliberately: an unused input both serializes branches that could run in parallel and leaks context across role boundaries (see `patterns.md`).
 
+On an `agent` or `human` node, an input the prompt never references is flagged as an unused binding — remove it or reference it. On a `loop` or `map` node, an input that no step prompt references is a legitimate ordering-only dependency: it makes the block wait for that upstream node without injecting its output into a prompt, so those are not flagged.
+
 ## meta
 
 ```js

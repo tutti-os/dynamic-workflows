@@ -1032,3 +1032,243 @@ const migrated = await map({
     );
   });
 });
+
+const warningCodes = (script: string): string[] =>
+  parseWorkflowScript(script)
+    .diagnostics.filter((diagnostic) => diagnostic.severity === "warning")
+    .map((diagnostic) => diagnostic.code ?? "");
+
+const errorCount = (script: string): number =>
+  parseWorkflowScript(script).diagnostics.filter(
+    (diagnostic) => diagnostic.severity === "error",
+  ).length;
+
+describe("parseWorkflowScript quality warnings", () => {
+  it("never escalates a quality rule to an error", () => {
+    // Every quality-rule script below stays parseable: warnings are advisory.
+    const firing = `
+const a = await agent({ id: "a", prompt: "Work in {{workflow.cwd}}" })
+`;
+    expect(errorCount(firing)).toBe(0);
+  });
+
+  it("warns when {{workflow.cwd}} is used without meta.requiresCwd", () => {
+    const codes = warningCodes(`
+const a = await agent({ id: "a", prompt: "Work in {{workflow.cwd}}" })
+`);
+    expect(codes).toContain("workflow.cwd.requiresCwdMissing");
+  });
+
+  it("does not warn about {{workflow.cwd}} when meta.requiresCwd is set", () => {
+    const codes = warningCodes(`
+export const meta = { name: "x", description: "y", requiresCwd: true }
+const a = await agent({ id: "a", prompt: "Work in {{workflow.cwd}}" })
+`);
+    expect(codes).not.toContain("workflow.cwd.requiresCwdMissing");
+  });
+
+  it("warns when an until.finalStatus token is absent from the source prompt", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Do work" }),
+    agent({ id: "r", prompt: "Review the work" }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).toContain("workflow.until.finalStatusTokenMissing");
+  });
+
+  it("accepts an until.finalStatus token stated only in appendPrompt", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Do work" }),
+    agent({ id: "r", prompt: "Review the work", appendPrompt: "End with PASS or FAIL." }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).not.toContain("workflow.until.finalStatusTokenMissing");
+  });
+
+  it("warns when an inherited loop step has no appendPrompt", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "c", session: { mode: "inherit", key: "room" }, prompt: "Implement" }),
+    agent({ id: "r", prompt: "Review. End with PASS." }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).toContain("workflow.session.inheritAppendPromptMissing");
+  });
+
+  it("does not warn about inherited steps with appendPrompt or independent steps", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "c", session: { mode: "inherit", key: "room" }, prompt: "Implement", appendPrompt: "Round {{iteration}}" }),
+    agent({ id: "r", session: { mode: "independent" }, prompt: "Review. End with PASS." }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).not.toContain("workflow.session.inheritAppendPromptMissing");
+  });
+
+  it("warns when an agent node binds an input it never references", () => {
+    const codes = warningCodes(`
+const src = await agent({ id: "src", prompt: "Produce" })
+const use = await agent({ id: "use", inputs: { src }, prompt: "No reference here" })
+`);
+    expect(codes).toContain("workflow.input.unusedBinding");
+  });
+
+  it("exempts ordering-only bindings on loop nodes", () => {
+    const codes = warningCodes(`
+const first = await agent({ id: "first", prompt: "First step done" })
+const l = await loop({
+  id: "l",
+  inputs: { first },
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Work" }),
+    agent({ id: "r", prompt: "Review. End with PASS." }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).not.toContain("workflow.input.unusedBinding");
+  });
+
+  it("warns when a dotted until.source reads a non-json agent step", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Work" }),
+    agent({ id: "r", prompt: "Review" }),
+  ],
+  until: { source: "r.verdict", equals: "pass" },
+})
+`);
+    expect(codes).toContain("workflow.until.dottedSourceNotJson");
+  });
+
+  it("exempts dotted until.source that reads a human step", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Work" }),
+    human({ id: "rev", actions: [{ id: "pass", label: "Pass" }] }),
+  ],
+  until: { source: "rev.action", equals: "pass" },
+})
+`);
+    expect(codes).not.toContain("workflow.until.dottedSourceNotJson");
+  });
+
+  it("warns when until.finalStatus matches a json step", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Work" }),
+    agent({ id: "r", output: "json", prompt: "Return a JSON verdict" }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).toContain("workflow.until.finalStatusOnJson");
+  });
+
+  it("does not warn about finalStatus on a plain-text step", () => {
+    const codes = warningCodes(`
+loop({
+  id: "l",
+  maxIterations: 2,
+  steps: [
+    agent({ id: "w", prompt: "Work" }),
+    agent({ id: "r", prompt: "Review. End with PASS." }),
+  ],
+  until: { source: "r", finalStatus: "PASS" },
+})
+`);
+    expect(codes).not.toContain("workflow.until.finalStatusOnJson");
+  });
+
+  it("warns when a json agent prompt never mentions JSON", () => {
+    const codes = warningCodes(`
+const a = await agent({ id: "a", output: "json", prompt: "Return the verdict" })
+`);
+    expect(codes).toContain("workflow.output.jsonContractMissing");
+  });
+
+  it("does not warn when a json agent prompt states the contract", () => {
+    const codes = warningCodes(`
+const a = await agent({ id: "a", output: "json", prompt: "Return a JSON object" })
+`);
+    expect(codes).not.toContain("workflow.output.jsonContractMissing");
+  });
+
+  it("warns when a map source agent lacks output json", () => {
+    const codes = warningCodes(`
+const discover = await agent({ id: "discover", prompt: "List items" })
+const m = await map({
+  id: "m",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+})
+`);
+    expect(codes).toContain("workflow.map.sourceNotJson");
+  });
+
+  it("does not warn when a map source agent emits json", () => {
+    const codes = warningCodes(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List items as a JSON array" })
+const m = await map({
+  id: "m",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+})
+`);
+    expect(codes).not.toContain("workflow.map.sourceNotJson");
+  });
+
+  it("keeps every builtin blueprint free of quality warnings", () => {
+    const blueprintsDir = path.join(__dirname, "blueprints");
+    const files = fs
+      .readdirSync(blueprintsDir)
+      .filter((file) => file.endsWith(".workflow.js"));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const script = fs.readFileSync(
+        path.join(blueprintsDir, file),
+        "utf8",
+      );
+      const warnings = parseWorkflowScript(script).diagnostics.filter(
+        (diagnostic) => diagnostic.severity === "warning",
+      );
+      expect(
+        warnings.map((warning) => `${file}: ${warning.code} ${warning.message}`),
+      ).toEqual([]);
+    }
+  });
+});

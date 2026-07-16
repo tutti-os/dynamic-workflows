@@ -144,6 +144,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   addRuntimeOptionDiagnostics(state);
   connectTemplateRefs(state);
   addInputSchemaReferenceDiagnostics(state, inputSchema);
+  addWorkflowQualityDiagnostics(state, meta);
   state.diagnostics.push(...validateWorkflowExecutionGraph(state));
 
   return {
@@ -1385,6 +1386,288 @@ function addInputSchemaReferenceDiagnostics(
       message: `Workflow input "${name}" is declared but not used by any template or runtime option.`,
       path: workflowInputPath(name),
       hint: `Use "{{${name}}}" in a prompt or runtime option, or remove this input from export const inputs.`,
+    }));
+  }
+}
+
+type AgentPromptUnit = { text: string; range?: EditableRange };
+
+// Advisory quality warnings that encode the authoring skill's mechanically
+// checkable rules. Every diagnostic here is severity "warning": scripts that
+// parsed before keep parsing, and these only surface as review prompts in the
+// validate -> fix loop.
+function addWorkflowQualityDiagnostics(
+  state: ParserState,
+  meta: WorkflowMeta,
+): void {
+  addCwdRequiresCwdDiagnostic(state, meta);
+  for (const node of state.nodes) {
+    addJsonContractDiagnostics(node, state);
+    addUnusedNodeInputDiagnostics(node, state);
+    addMapSourceJsonDiagnostics(node, state);
+    if (node.loop) {
+      addLoopSessionAppendPromptDiagnostics(node, state);
+      addLoopUntilQualityDiagnostics(node, state);
+    }
+  }
+}
+
+// The agent-authored prompt/appendPrompt strings a node contributes. Loop and
+// map template refs are stripped of reserved refs during parsing, so quality
+// rules read the raw prompt text here instead of node.templateRefs.
+function collectAgentPromptUnits(node: WorkflowNode): AgentPromptUnit[] {
+  const units: AgentPromptUnit[] = [];
+  if (node.kind === "agent" && node.prompt !== undefined) {
+    units.push({ text: node.prompt, range: node.promptRange });
+  }
+  if (node.loop) {
+    for (const step of node.loop.steps) {
+      if (step.kind !== "agent") {
+        continue;
+      }
+      units.push({ text: step.prompt, range: step.promptRange });
+      if (step.appendPrompt !== undefined) {
+        units.push({ text: step.appendPrompt, range: step.appendPromptRange });
+      }
+    }
+  }
+  if (node.map) {
+    units.push({
+      text: node.map.step.prompt,
+      range: node.map.step.promptRange,
+    });
+  }
+  return units;
+}
+
+// Rule 1: a prompt references {{workflow.cwd}} but meta.requiresCwd is not set,
+// so the reference renders as an empty string on runs without a cwd.
+function addCwdRequiresCwdDiagnostic(
+  state: ParserState,
+  meta: WorkflowMeta,
+): void {
+  if (meta.requiresCwd) {
+    return;
+  }
+  for (const node of state.nodes) {
+    for (const unit of collectAgentPromptUnits(node)) {
+      if (!extractTemplateRefs(unit.text).includes("workflow.cwd")) {
+        continue;
+      }
+      state.diagnostics.push(workflowDiagnostic({
+        severity: "warning",
+        code: "workflow.cwd.requiresCwdMissing",
+        message:
+          "A prompt references {{workflow.cwd}} but meta.requiresCwd is not set.",
+        path: "meta.requiresCwd",
+        range: unit.range ?? node.sourceRange,
+        hint: "Set meta.requiresCwd: true so {{workflow.cwd}} resolves to the run cwd, or remove the reference — without it the placeholder renders as an empty string.",
+      }));
+      return;
+    }
+  }
+}
+
+// Rule 7: an agent node/step declares output: "json" but its prompt never
+// mentions JSON, so the output contract is never stated to the agent.
+function addJsonContractDiagnostics(
+  node: WorkflowNode,
+  state: ParserState,
+): void {
+  if (node.kind === "agent" && node.output === "json" && node.prompt) {
+    addJsonContractDiagnostic(
+      node.prompt,
+      `node "${node.id}"`,
+      node.promptRange ?? node.sourceRange,
+      state,
+    );
+  }
+  if (node.loop) {
+    for (const step of node.loop.steps) {
+      if (step.kind === "agent" && step.output === "json") {
+        addJsonContractDiagnostic(
+          step.prompt,
+          `loop step "${node.id}.${step.id}"`,
+          step.promptRange ?? step.sourceRange,
+          state,
+        );
+      }
+    }
+  }
+  if (node.map && node.map.step.output === "json") {
+    addJsonContractDiagnostic(
+      node.map.step.prompt,
+      `map step "${node.id}.${node.map.step.id}"`,
+      node.map.step.promptRange ?? node.sourceRange,
+      state,
+    );
+  }
+}
+
+function addJsonContractDiagnostic(
+  prompt: string,
+  ownerLabel: string,
+  range: EditableRange | undefined,
+  state: ParserState,
+): void {
+  if (prompt.toLowerCase().includes("json")) {
+    return;
+  }
+  state.diagnostics.push(workflowDiagnostic({
+    severity: "warning",
+    code: "workflow.output.jsonContractMissing",
+    message: `${ownerLabel} sets output: "json" but its prompt never mentions JSON.`,
+    range,
+    hint: "State the exact JSON shape in the prompt and end the message with only that JSON block, so the agent knows the output contract.",
+  }));
+}
+
+// Rule 4: an agent/human node lists an input binding its prompt never
+// references. Loop and map nodes are deliberately exempt — an unused binding
+// there is the established ordering-only dependency pattern.
+function addUnusedNodeInputDiagnostics(
+  node: WorkflowNode,
+  state: ParserState,
+): void {
+  if (node.kind !== "agent" && node.kind !== "human") {
+    return;
+  }
+  for (const input of node.inputs) {
+    const referenced = node.templateRefs.some(
+      (ref) => ref === input.name || templateRefRoot(ref) === input.name,
+    );
+    if (referenced) {
+      continue;
+    }
+    state.diagnostics.push(workflowDiagnostic({
+      severity: "warning",
+      code: "workflow.input.unusedBinding",
+      message: `Node "${node.id}" binds input "${input.name}" but never references it in its prompt.`,
+      path: `${node.id}.inputs.${input.name}`,
+      range: node.sourceRange,
+      hint: `Use "{{${input.name}}}" in this node's prompt, remove it, or move it to a loop/map node input if you only need ordering.`,
+    }));
+  }
+}
+
+// Rule 8: a map's source node is an agent without output: "json", so map falls
+// back to brittle string parsing of the source's plain-text output.
+function addMapSourceJsonDiagnostics(
+  node: WorkflowNode,
+  state: ParserState,
+): void {
+  if (!node.map?.sourceNodeId) {
+    return;
+  }
+  const source = state.nodes.find((item) => item.id === node.map?.sourceNodeId);
+  if (!source || source.kind !== "agent" || source.output === "json") {
+    return;
+  }
+  state.diagnostics.push(workflowDiagnostic({
+    severity: "warning",
+    code: "workflow.map.sourceNotJson",
+    message: `map source "${node.map.source}" is an agent without output: "json", so its plain-text output is parsed as an array by string matching.`,
+    range: node.sourceRange,
+    hint: `Set output: "json" on "${source.id}" and have it end with a JSON array, so map receives a structured list instead of parsed text.`,
+  }));
+}
+
+// Rule 3: a loop agent step whose effective session mode is inherit (declared
+// on the step, or inherited from the loop-level session spec) has no
+// appendPrompt, so later iterations resend the full prompt into a continuing
+// conversation.
+function addLoopSessionAppendPromptDiagnostics(
+  node: WorkflowNode,
+  state: ParserState,
+): void {
+  const loop = node.loop;
+  if (!loop) {
+    return;
+  }
+  const loopInherits = loop.session?.mode === "inherit";
+  for (const step of loop.steps) {
+    if (step.kind !== "agent") {
+      continue;
+    }
+    const mode = step.session?.mode;
+    const effectiveInherit =
+      mode === "inherit" || (mode === undefined && loopInherits);
+    if (!effectiveInherit || step.appendPrompt !== undefined) {
+      continue;
+    }
+    state.diagnostics.push(workflowDiagnostic({
+      severity: "warning",
+      code: "workflow.session.inheritAppendPromptMissing",
+      message: `Loop step "${node.id}.${step.id}" runs in an inherited session but has no appendPrompt, so later iterations resend the full prompt into a continuing conversation.`,
+      range: step.sourceRange,
+      hint: 'Add an appendPrompt carrying only the per-iteration delta, or set session: { mode: "independent" } if the step should re-run from scratch each iteration.',
+    }));
+  }
+}
+
+// Rules 2, 5, 6: quality checks on a loop's until matcher against the source
+// step it resolves.
+function addLoopUntilQualityDiagnostics(
+  node: WorkflowNode,
+  state: ParserState,
+): void {
+  const loop = node.loop;
+  if (!loop) {
+    return;
+  }
+  const until = loop.until;
+  const sourceStep = loop.steps.find(
+    (step) => step.id === templateRefRoot(until.source),
+  );
+  const range = sourceStep?.promptRange ?? sourceStep?.sourceRange ?? node.sourceRange;
+  const isAgentSource = sourceStep?.kind === "agent";
+
+  // Rule 5: a dotted until.source over an agent step without output: "json".
+  // Path resolution over a plain-text output never matches. Human steps use
+  // dotted sources (review.action) as their normal form, so they are exempt.
+  if (
+    until.source.includes(".") &&
+    isAgentSource &&
+    sourceStep.output !== "json"
+  ) {
+    state.diagnostics.push(workflowDiagnostic({
+      severity: "warning",
+      code: "workflow.until.dottedSourceNotJson",
+      message: `loop until.source "${until.source}" reads a path from agent step "${sourceStep.id}", which has no output: "json", so path resolution over its plain text never matches.`,
+      range,
+      hint: 'Set output: "json" on the source step and match a field with equals, or point until.source at the whole step output.',
+    }));
+  }
+
+  if (until.finalStatus === undefined || !isAgentSource) {
+    return;
+  }
+
+  // Rule 6: finalStatus against a json step. The stringified JSON's last line
+  // is not a bare token; use the structured equals matcher instead.
+  if (sourceStep.output === "json") {
+    state.diagnostics.push(workflowDiagnostic({
+      severity: "warning",
+      code: "workflow.until.finalStatusOnJson",
+      message: `loop until.finalStatus matches a token against json step "${sourceStep.id}", but a stringified JSON's last line is not a bare token.`,
+      range,
+      hint: "Use the structured matcher until: { source, equals: <value> } to compare a field of the parsed JSON output.",
+    }));
+    return;
+  }
+
+  // Rule 2: the finalStatus token never appears in the source step's prompt or
+  // appendPrompt, so the agent was never told the output contract.
+  const token = until.finalStatus;
+  const inPrompt = sourceStep.prompt.includes(token);
+  const inAppend = sourceStep.appendPrompt?.includes(token) ?? false;
+  if (!inPrompt && !inAppend) {
+    state.diagnostics.push(workflowDiagnostic({
+      severity: "warning",
+      code: "workflow.until.finalStatusTokenMissing",
+      message: `loop until.finalStatus "${token}" never appears in the prompt of source step "${sourceStep.id}", so the agent was never told the output contract.`,
+      range,
+      hint: `Spell out the exact token "${token}" in the step's prompt (for example "Put ${token} alone on the final non-empty line"), or match a different agreed token.`,
     }));
   }
 }

@@ -35,7 +35,7 @@ All commands support `--json` for machine-readable output.
 4. Design the graph before writing prompts: phases, roles, which branches are independent (they run concurrently), loop entry and later-iteration order, acceptance contract, and human gates. Choose structures from `patterns.md` and scale them to the request — a quick check gets the simplest linear graph, a thorough audit gets diverse review fan-out with adversarial gating.
 5. Search the blueprint library with one focused query. If a close pattern exists, fetch its script and adapt it. Try at most one refined query before drafting directly from `dsl-reference.md`.
 6. Write one complete, coherent script to the target file. Do not deliver a plan, partial snippet, or chat-only script.
-7. Validate the file. Read every diagnostic, fix the underlying issue, and validate again until no error diagnostics remain.
+7. Validate the file. Read every diagnostic, fix the underlying issue, and validate again until no error diagnostics remain. Warnings are review prompts — fix them unless the flagged pattern is deliberate, and never suppress a warning by weakening the workflow.
 8. Submit using the exact job id and target file. If `accepted: false`, repair the returned diagnostics and resubmit until `accepted: true`.
 9. On follow-up requests, revise the last accepted script and repeat validation and submission with the same job id.
 
