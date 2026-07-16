@@ -70,6 +70,29 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       ),
     ),
   },
+  {
+    id: "parallel-review-synthesis-v1",
+    title: "Parallel Review Synthesis",
+    description:
+      "Independent single-lens reviewers (architecture, security, correctness) run in parallel over one repository inventory, then a synthesizer merges their findings into one deduplicated, severity-ordered report.",
+    category: "review",
+    tags: ["review", "fan-out", "parallel", "synthesis", "independent-review", "cwd"],
+    difficulty: "starter",
+    requiresCwd: true,
+    patternSummary:
+      "A shared inventory step fans out to three lens reviewers with no edges between them, so they run concurrently and never see each other's narrative. A final synthesizer receives all three outputs, dedupes overlapping findings while preserving evidence, orders by severity, and reports the combined unexamined areas instead of silently truncating coverage. An optional shared review_model input overrides the model for every lens and falls back to the run-level model when left empty.",
+    useCases: [
+      "Review a change or module from several independent perspectives at once.",
+      "Keep lens reviewers blind to each other so overlapping findings corroborate instead of echo.",
+      "Demonstrate fan-out/fan-in dataflow, no-silent-caps coverage reporting, and optional runtime model overrides.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL(
+        "./blueprints/parallel-review-synthesis-v1.workflow.js",
+        import.meta.url,
+      ),
+    ),
+  },
 ];
 
 function readBuiltinBlueprintScript(fileUrl: URL): string {

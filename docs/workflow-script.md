@@ -36,7 +36,9 @@ At run time:
 }
 ```
 
-If `coder_model` is omitted, the workflow uses the default `gpt-5`. Inputs with defaults are optional and are shown as optional in the run dialog so they can still be overridden. If no default is provided, as in `model: "{{coder_model}}"`, `coder_model` is a required workflow input.
+If `coder_model` is omitted, the workflow uses the default `gpt-5`. Inputs with defaults are optional and are shown as optional in the run dialog so they can still be overridden.
+
+Every runtime option input must be declared in `export const inputs`; whether it is required at run time follows that declaration (`required: true` with no `default`). A declared optional input left empty makes the field fall back to the run-level `agent`/`model` value — declare `reviewer_model: { type: "string", required: false }` and set `model: "{{reviewer_model}}"` to offer a per-role override without forcing a value or baking in a provider-specific default.
 
 ## Constraints
 

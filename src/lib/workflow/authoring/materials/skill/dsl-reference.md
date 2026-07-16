@@ -1,6 +1,6 @@
 # Workflow Script DSL Reference
 
-A workflow script is a single JavaScript module using only the workflow primitives: `meta`, `inputs`, `phase`, `agent`, `human`, and `loop`. Anything outside this contract either produces a validation diagnostic or is ignored — always run validate and treat any error diagnostic as a broken script.
+A workflow script is a single JavaScript module using only the workflow primitives: `meta`, `inputs`, `phase`, `agent`, `human`, `loop`, and `log`. Anything outside this contract either produces a validation diagnostic or is ignored — always run validate and treat any error diagnostic as a broken script.
 
 ## Hard constraints
 
@@ -57,6 +57,10 @@ phase("Deliver", () => {
 ```
 
 Use a few descriptive phases; both forms parse to the same structure.
+
+## log
+
+`log("Milestone message")` adds a display-only annotation node: it appears in the workflow graph with the message as its label, but it never executes and produces no output. Never bind a log node as an input to another node — an executable node depending on a log node is a validation error. Use it sparingly to mark milestones in the graph.
 
 ## agent nodes
 
@@ -165,7 +169,8 @@ loop({
 agent({ id: "coder", agent: "{{coder_agent:local:codex}}", model: "{{coder_model:gpt-5}}", prompt: "..." })
 ```
 
-- Allowed forms: `"{{input_name}}"` (required input) or `"{{input_name:default_value}}"` (optional input).
+- Allowed forms: `"{{input_name}}"` or `"{{input_name:default_value}}"`. The referenced input must be declared in `export const inputs`; whether it is required at run time follows that declaration (`required: true` with no `default` means required).
+- A declared optional input left empty at run time makes the field fall back to the run-level `agent`/`model` value. Declaring `reviewer_model: { type: "string", required: false, ... }` and setting `model: "{{reviewer_model}}"` is therefore the way to offer a per-role override without forcing a value or baking in a provider-specific default.
 - Partial or multiple templates are invalid: never `model: "gpt-{{m}}"` or `model: "{{a}}{{b}}"`.
 - Templates resolve run inputs only, never upstream node or loop step outputs.
 - Runtime option input names must not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names. Multiple roles may intentionally share one input, such as `{{review_model:gpt-5}}`.

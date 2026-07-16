@@ -13,6 +13,18 @@ export const inputs = {
     placeholder: "背景与目标：\n\n改动范围：\n\n验收标准：\n1. \n2. \n\n明确不做：\n",
     widget: "textarea",
   },
+  reviewer_agent: {
+    type: "string",
+    required: false,
+    label: "Reviewer agent",
+    description: "可选：验收 Reviewer 使用的 agent target id（来自 tutti --json agent list）。留空则使用 run 级 agent。",
+  },
+  reviewer_model: {
+    type: "string",
+    required: false,
+    label: "Reviewer model",
+    description: "可选：验收 Reviewer 使用的模型，需与所选 agent 兼容。留空则使用 run 级 model。验收是质量门禁，值得配置更强的模型。",
+  },
 };
 
 phase("RD 与 Human 对齐");
@@ -127,6 +139,8 @@ Reviewer 验收反馈：
     agent({
       id: "reviewer",
       label: "验收 Reviewer",
+      agent: "{{reviewer_agent}}",
+      model: "{{reviewer_model}}",
       session: { mode: "inherit", key: "reviewer_room" },
       prompt: `
 你是独立验收 Reviewer，不修改代码，也不读取或依赖 RD 的交付叙述。Human 通过只表示允许进入验收，不构成需求已经满足的证据。只依据原始需求和仓库当前实际状态验收。

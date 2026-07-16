@@ -13,6 +13,18 @@ export const inputs = {
     placeholder: "背景与目标：\n\n改动范围：\n\n验收标准：\n1. \n2. \n\n明确不做：\n",
     widget: "textarea",
   },
+  reviewer_agent: {
+    type: "string",
+    required: false,
+    label: "Reviewer agent",
+    description: "可选：验收 Reviewer 使用的 agent target id（来自 tutti --json agent list）。留空则使用 run 级 agent。",
+  },
+  reviewer_model: {
+    type: "string",
+    required: false,
+    label: "Reviewer model",
+    description: "可选：验收 Reviewer 使用的模型，需与所选 agent 兼容。留空则使用 run 级 model。验收是质量门禁，值得配置更强的模型。",
+  },
 };
 
 phase("RD 交付与验收");
@@ -65,6 +77,8 @@ const delivery_loop = loop({
     agent({
       id: "acceptance",
       label: "验收 Reviewer",
+      agent: "{{reviewer_agent}}",
+      model: "{{reviewer_model}}",
       session: { mode: "independent" },
       prompt: `
 你是独立验收 Reviewer，不需要也不允许修改代码。每一轮你都在全新会话中工作：不会收到 RD 的交付摘要、改动范围或技术解释，不要猜测 RD 的意图，也不要依赖其自述。请只依据原始需求和仓库当前实际状态，独立判断当前实现与技术方案是否满足要求。
