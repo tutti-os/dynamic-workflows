@@ -29,6 +29,10 @@ import type {
   WorkflowLoopRecoveryState,
   WorkflowLoopStepExecutionRef,
   WorkflowLoopStep,
+  WorkflowMapItemCompletion,
+  WorkflowMapItemExecutionRef,
+  WorkflowMapRecoveryState,
+  WorkflowMapSpec,
   WorkflowNode,
   WorkflowNodeStatus,
   WorkflowRunRecoveryState,
@@ -144,6 +148,7 @@ export async function* runWorkflow(
       sessionCwdsByKey,
       attachSessionIdsByNodeId: recovery.attachSessionIdsByNodeId,
       loopStatesByNodeId: recovery.loopStates,
+      mapStatesByNodeId: recovery.mapStates,
     })) {
       yield event;
 
@@ -221,6 +226,7 @@ async function* streamNodeBatch(input: {
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
   loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
+  mapStatesByNodeId: Record<string, WorkflowMapRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   type QueueItem =
     | {
@@ -259,6 +265,7 @@ async function* streamNodeBatch(input: {
           sessionCwdsByKey: input.sessionCwdsByKey,
           attachSessionIdsByNodeId: input.attachSessionIdsByNodeId,
           loopStatesByNodeId: input.loopStatesByNodeId,
+          mapStatesByNodeId: input.mapStatesByNodeId,
         })) {
           push({ event });
         }
@@ -297,9 +304,14 @@ async function* runNode(input: {
   sessionCwdsByKey: Record<string, string>;
   attachSessionIdsByNodeId: Record<string, string>;
   loopStatesByNodeId: Record<string, WorkflowLoopRecoveryState>;
+  mapStatesByNodeId: Record<string, WorkflowMapRecoveryState>;
 }): AsyncGenerator<WorkflowRunEvent> {
   if (input.node.kind === "loop") {
     yield* runLoopNode(input);
+    return;
+  }
+  if (input.node.kind === "map") {
+    yield* runMapNode(input);
     return;
   }
   if (input.node.kind === "human") {
@@ -1038,6 +1050,543 @@ async function* runLoopAgentStep(input: {
   return stepOutput;
 }
 
+async function* runMapNode(input: {
+  runId: string;
+  node: WorkflowNode;
+  request: WorkflowRunRequest;
+  outputs: Record<string, WorkflowValue>;
+  mapStatesByNodeId: Record<string, WorkflowMapRecoveryState>;
+}): AsyncGenerator<WorkflowRunEvent> {
+  const map = input.node.map;
+  const agent =
+    resolveRuntimeOption(
+      input.node.agent,
+      input.request.agent,
+      input.request.inputs,
+    ) ?? "mock";
+  const model = resolveRuntimeOption(
+    input.node.model,
+    input.request.model,
+    input.request.inputs,
+  );
+  const mapCwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
+
+  yield {
+    type: "node_started",
+    runId: input.runId,
+    nodeId: input.node.id,
+    node: input.node,
+    agent,
+    model,
+  };
+
+  if (!map) {
+    yield {
+      type: "node_failed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      error: "Map node is missing map configuration.",
+    };
+    return;
+  }
+
+  const stepCwd = resolveEffectiveNodeCwd(mapCwd, map.step.cwd);
+  const recovered = input.mapStatesByNodeId[input.node.id];
+
+  try {
+    throwIfAborted(input.request.signal);
+
+    let items: WorkflowValue[];
+    if (recovered) {
+      items = recovered.items;
+      yield loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.node.id,
+        message: `Map "${input.node.id}" restored ${items.length} item(s) from checkpoint.`,
+      });
+    } else {
+      const sourceValue = map.sourceNodeId
+        ? input.outputs[map.sourceNodeId]
+        : undefined;
+      items = resolveMapItems(sourceValue, input.node.id, map);
+      if (items.length > map.maxItems) {
+        throw new Error(
+          `Map "${input.node.id}" resolved ${items.length} items, exceeding maxItems ${map.maxItems}.`,
+        );
+      }
+      yield loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.node.id,
+        message: `Map "${input.node.id}" expanded to ${items.length} item(s).`,
+      });
+      await saveMapCheckpoint(input.request, {
+        runId: input.runId,
+        nodeId: input.node.id,
+        items,
+        completions: [],
+      });
+    }
+
+    const indexed = items.map((item, position) => ({
+      index: position + 1,
+      item,
+    }));
+    const completions = new Map<number, WorkflowMapItemCompletion>();
+    for (const completion of recovered?.completions ?? []) {
+      completions.set(completion.index, completion);
+    }
+
+    // Restored per-item states so the run log reflects already-finished items.
+    for (const { index, item } of indexed) {
+      const completion = completions.get(index);
+      if (!completion) {
+        continue;
+      }
+      yield mapItemStateEvent({
+        runId: input.runId,
+        mapItem: createMapItemExecutionRef(input.node.id, index, map.step.id),
+        label: renderMapItemText(map.step.label, {
+          map,
+          index,
+          item,
+          node: input.node,
+          workflowOutputs: input.outputs,
+          workflowInputs: input.request.inputs,
+          cwd: stepCwd,
+        }),
+        status: completion.status,
+        restored: true,
+        ...(completion.output !== undefined ? { output: completion.output } : {}),
+        ...(completion.error ? { error: completion.error } : {}),
+      });
+    }
+
+    const pending = indexed.filter(({ index }) => !completions.has(index));
+    let firstFailure: WorkflowMapItemCompletion | undefined = [
+      ...completions.values(),
+    ].find(
+      (completion) =>
+        completion.status === "failed" && map.onItemFailure === "fail",
+    );
+
+    if (pending.length > 0 && !(map.onItemFailure === "fail" && firstFailure)) {
+      // Internal concurrency pool of up to 4, mirroring streamNodeBatch's merge.
+      type QueueItem = { event: WorkflowRunEvent } | { error: unknown };
+      const queue: QueueItem[] = [];
+      let notify: (() => void) | undefined;
+      const wake = () => {
+        notify?.();
+        notify = undefined;
+      };
+      const wait = () =>
+        new Promise<void>((resolve) => {
+          notify = resolve;
+        });
+      const push = (item: QueueItem) => {
+        queue.push(item);
+        wake();
+      };
+
+      let cursor = 0;
+      let stopScheduling = false;
+      const concurrency = Math.min(4, pending.length);
+      let activeWorkers = concurrency;
+
+      const recordCompletion = async (
+        completion: WorkflowMapItemCompletion,
+      ): Promise<void> => {
+        completions.set(completion.index, completion);
+        if (completion.status === "failed" && map.onItemFailure === "fail") {
+          // In-flight children finish; no new items are scheduled.
+          stopScheduling = true;
+          firstFailure ??= completion;
+        }
+        await saveMapCheckpoint(input.request, {
+          runId: input.runId,
+          nodeId: input.node.id,
+          items,
+          completions: [...completions.values()],
+        });
+      };
+
+      for (let worker = 0; worker < concurrency; worker += 1) {
+        void (async () => {
+          try {
+            while (!stopScheduling) {
+              const position = cursor;
+              cursor += 1;
+              if (position >= pending.length) {
+                break;
+              }
+              const { index, item } = pending[position];
+              const generator = runMapItemStep({
+                runId: input.runId,
+                node: input.node,
+                map,
+                index,
+                item,
+                defaultAgent: agent,
+                defaultModel: model,
+                stepCwd,
+                workflowOutputs: input.outputs,
+                request: input.request,
+              });
+              let next = await generator.next();
+              while (!next.done) {
+                push({ event: next.value });
+                next = await generator.next();
+              }
+              await recordCompletion(next.value);
+            }
+          } catch (error) {
+            push({ error });
+          } finally {
+            activeWorkers -= 1;
+            wake();
+          }
+        })();
+      }
+
+      while (activeWorkers > 0 || queue.length > 0) {
+        if (queue.length === 0) {
+          await wait();
+          continue;
+        }
+        const item = queue.shift();
+        if (!item) {
+          continue;
+        }
+        if ("error" in item) {
+          throw item.error;
+        }
+        yield item.event;
+      }
+    }
+
+    if (map.onItemFailure === "fail" && firstFailure) {
+      yield {
+        type: "node_failed",
+        runId: input.runId,
+        nodeId: input.node.id,
+        error: `Map "${input.node.id}" item ${firstFailure.index} failed: ${firstFailure.error ?? "unknown error"}`,
+      };
+      return;
+    }
+
+    yield {
+      type: "node_completed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      output: buildMapOutput(indexed, completions),
+    };
+  } catch (error) {
+    yield {
+      type: "node_failed",
+      runId: input.runId,
+      nodeId: input.node.id,
+      error: toRunErrorMessage(error),
+    };
+  }
+}
+
+async function* runMapItemStep(input: {
+  runId: string;
+  node: WorkflowNode;
+  map: WorkflowMapSpec;
+  index: number;
+  item: WorkflowValue;
+  defaultAgent: string;
+  defaultModel?: string;
+  stepCwd: string;
+  workflowOutputs: Record<string, WorkflowValue>;
+  request: WorkflowRunRequest;
+}): AsyncGenerator<WorkflowRunEvent, WorkflowMapItemCompletion> {
+  const step = input.map.step;
+  const mapItem = createMapItemExecutionRef(input.node.id, input.index, step.id);
+  const syntheticId = createMapItemId(input.node.id, input.index, step.id);
+  const context = {
+    map: input.map,
+    index: input.index,
+    item: input.item,
+    node: input.node,
+    workflowOutputs: input.workflowOutputs,
+    workflowInputs: input.request.inputs,
+    cwd: input.stepCwd,
+  };
+  const label = renderMapItemText(step.label, context);
+  const agent =
+    resolveRuntimeOption(step.agent, input.defaultAgent, input.request.inputs) ??
+    input.defaultAgent;
+  const model = resolveRuntimeOption(
+    step.model,
+    input.defaultModel,
+    input.request.inputs,
+  );
+  const prompt = renderMapItemText(step.prompt, context);
+  let output = "";
+
+  yield mapItemStateEvent({
+    runId: input.runId,
+    mapItem,
+    label,
+    status: "running",
+    agent,
+    model,
+    promptMode: "full",
+    input: prompt,
+  });
+  yield loopStatusEvent({
+    runId: input.runId,
+    nodeId: input.node.id,
+    message: `Map item ${syntheticId} started.`,
+  });
+
+  try {
+    for await (const event of runAgent({
+      runId: `${input.runId}:${syntheticId}`,
+      agent,
+      cwd: input.stepCwd,
+      prompt,
+      title: label,
+      model,
+      signal: input.request.signal,
+    })) {
+      throwIfAborted(input.request.signal);
+
+      if (event.type === "text_delta") {
+        output += event.text;
+      }
+      if (event.type === "error") {
+        throw new Error(event.message);
+      }
+      if (event.type === "done" && event.status === "canceled") {
+        throw new WorkflowRunCanceledError();
+      }
+      if (event.type === "done" && event.status === "failed") {
+        throw new Error(event.reason ?? "Agent run failed");
+      }
+      yield {
+        type: "node_event",
+        runId: input.runId,
+        nodeId: input.node.id,
+        mapItem,
+        event,
+      };
+    }
+
+    // Extract before signaling completion so a parse failure fails the item.
+    const itemOutput =
+      step.output === "json" ? extractAgentJsonOutput(output) : output;
+
+    yield mapItemStateEvent({
+      runId: input.runId,
+      mapItem,
+      label,
+      status: "completed",
+      output: itemOutput,
+    });
+    yield loopStatusEvent({
+      runId: input.runId,
+      nodeId: input.node.id,
+      message: `Map item ${syntheticId} completed.`,
+    });
+    return { index: input.index, status: "completed", output: itemOutput };
+  } catch (error) {
+    if (isCancellationError(error)) {
+      // Cancellation aborts the whole map node, not a single skippable item.
+      throw error;
+    }
+    const message = toRunErrorMessage(error);
+    yield mapItemStateEvent({
+      runId: input.runId,
+      mapItem,
+      label,
+      status: "failed",
+      error: message,
+    });
+    yield loopStatusEvent({
+      runId: input.runId,
+      nodeId: input.node.id,
+      message: `Map item ${syntheticId} failed: ${message}`,
+    });
+    return { index: input.index, status: "failed", error: message };
+  }
+}
+
+type MapItemContext = {
+  map: WorkflowMapSpec;
+  index: number;
+  item: WorkflowValue;
+  node: WorkflowNode;
+  workflowOutputs: Record<string, WorkflowValue>;
+  workflowInputs: Record<string, WorkflowInputValue> | undefined;
+  cwd: string;
+};
+
+function renderMapItemText(template: string, context: MapItemContext): string {
+  return renderTemplate(template, (name) =>
+    resolveMapItemTemplateValue({ ...context, name }),
+  );
+}
+
+function resolveMapItemTemplateValue(
+  input: MapItemContext & { name: string },
+): WorkflowValue | undefined {
+  if (input.name === "item") {
+    return input.item;
+  }
+  if (input.name === "item_index") {
+    return input.index;
+  }
+  if (input.name === "workflow.cwd") {
+    return input.cwd;
+  }
+  const [root, ...path] = input.name.split(".");
+  if (root === "item") {
+    return resolveWorkflowValuePath(input.item, path);
+  }
+  const binding = input.node.inputs.find(
+    (item) => item.name === input.name || item.name === root,
+  );
+  if (binding?.sourceNodeId) {
+    return resolveWorkflowValuePath(
+      input.workflowOutputs[binding.sourceNodeId],
+      path,
+    );
+  }
+  return input.workflowInputs?.[input.name] ?? input.workflowInputs?.[root];
+}
+
+function resolveMapItems(
+  sourceValue: WorkflowValue | undefined,
+  nodeId: string,
+  map: WorkflowMapSpec,
+): WorkflowValue[] {
+  if (Array.isArray(sourceValue)) {
+    return sourceValue;
+  }
+  if (typeof sourceValue === "string") {
+    const parsed = coerceMapJsonArray(sourceValue);
+    if (parsed) {
+      return parsed;
+    }
+  }
+  throw new Error(
+    `Map "${nodeId}" source "${map.source}" must resolve to an array; received ${describeMapSource(sourceValue)}.`,
+  );
+}
+
+function coerceMapJsonArray(raw: string): WorkflowValue[] | undefined {
+  try {
+    const parsed = extractAgentJsonOutput(raw);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function describeMapSource(value: WorkflowValue | undefined): string {
+  if (value === undefined) {
+    return "no output";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "object") {
+    return "an object";
+  }
+  return `a ${typeof value} value`;
+}
+
+function buildMapOutput(
+  indexed: Array<{ index: number; item: WorkflowValue }>,
+  completions: Map<number, WorkflowMapItemCompletion>,
+): WorkflowValue {
+  const items: WorkflowValue[] = [];
+  const failed: WorkflowValue[] = [];
+  for (const { index, item } of indexed) {
+    const completion = completions.get(index);
+    if (completion?.status === "completed") {
+      items.push({
+        index,
+        item,
+        status: "completed",
+        output: completion.output ?? "",
+      });
+    } else if (completion?.status === "failed") {
+      failed.push({ index, item, error: completion.error ?? "unknown error" });
+    }
+  }
+  return { items, failed, total: indexed.length };
+}
+
+function createMapItemId(mapId: string, index: number, stepId: string): string {
+  return `${mapId}[${index}].${stepId}`;
+}
+
+function createMapItemExecutionRef(
+  mapId: string,
+  index: number,
+  stepId: string,
+): WorkflowMapItemExecutionRef {
+  return {
+    executionKey: `map:${mapId}:${index}:${stepId}`,
+    parentNodeId: mapId,
+    stepId,
+    index,
+  };
+}
+
+function mapItemStateEvent(input: {
+  runId: string;
+  mapItem: WorkflowMapItemExecutionRef;
+  label: string;
+  status: WorkflowNodeStatus;
+  agent?: string;
+  model?: string;
+  promptMode?: "full" | "append";
+  input?: string;
+  restored?: boolean;
+  output?: WorkflowValue;
+  error?: string;
+}): WorkflowRunEvent {
+  return {
+    type: "map_item_state",
+    runId: input.runId,
+    mapItem: input.mapItem,
+    kind: "agent",
+    label: input.label,
+    status: input.status,
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.promptMode ? { promptMode: input.promptMode } : {}),
+    ...(input.input !== undefined ? { input: input.input } : {}),
+    ...(input.restored !== undefined ? { restored: input.restored } : {}),
+    ...(input.output !== undefined ? { output: input.output } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  };
+}
+
+async function saveMapCheckpoint(
+  request: WorkflowRunRequest,
+  checkpoint: {
+    runId: string;
+    nodeId: string;
+    items: WorkflowValue[];
+    completions: WorkflowMapItemCompletion[];
+  },
+): Promise<void> {
+  await request.onCheckpoint?.({
+    runId: checkpoint.runId,
+    nodeId: checkpoint.nodeId,
+    kind: "map",
+    state: {
+      items: checkpoint.items,
+      completions: checkpoint.completions,
+    },
+  });
+}
+
 class WorkflowRunCanceledError extends Error {
   constructor() {
     super("Run canceled.");
@@ -1106,7 +1655,63 @@ function normalizeRecoveryState(
       recovery?.attachSessionIdsByNodeId,
     ),
     loopStates: sanitizeLoopRecoveryStates(recovery?.loopStates),
+    mapStates: sanitizeMapRecoveryStates(recovery?.mapStates),
   };
+}
+
+function sanitizeMapRecoveryStates(
+  value: Record<string, WorkflowMapRecoveryState> | undefined,
+): Record<string, WorkflowMapRecoveryState> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([nodeId, state]) => {
+      if (
+        !nodeId.trim() ||
+        !state ||
+        typeof state !== "object" ||
+        !Array.isArray(state.items)
+      ) {
+        return [];
+      }
+      return [
+        [
+          nodeId,
+          {
+            items: state.items.filter(isWorkflowValue),
+            completions: Array.isArray(state.completions)
+              ? state.completions.flatMap(sanitizeMapItemCompletion)
+              : [],
+          },
+        ],
+      ];
+    }),
+  );
+}
+
+function sanitizeMapItemCompletion(
+  value: WorkflowMapItemCompletion,
+): WorkflowMapItemCompletion[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  if (
+    !Number.isInteger(value.index) ||
+    (value.status !== "completed" && value.status !== "failed")
+  ) {
+    return [];
+  }
+  return [
+    {
+      index: value.index,
+      status: value.status,
+      ...(value.output !== undefined && isWorkflowValue(value.output)
+        ? { output: value.output }
+        : {}),
+      ...(typeof value.error === "string" ? { error: value.error } : {}),
+    },
+  ];
 }
 
 function sanitizeStringRecord(

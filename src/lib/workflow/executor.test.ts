@@ -152,7 +152,9 @@ const delivery = await loop({
         cwd: process.cwd(),
         recovery: checkpoint ? { loopStates: { delivery: checkpoint } } : undefined,
         onCheckpoint: (saved) => {
-          checkpoint = saved.state;
+          if (saved.kind === "loop") {
+            checkpoint = saved.state;
+          }
         },
         onHumanTask: (request) => {
           const response = responses.get(request.executionKey);

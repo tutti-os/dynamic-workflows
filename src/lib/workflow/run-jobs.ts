@@ -691,6 +691,10 @@ function mergePersistedRunResult(
       ...summary.loopStepRuns,
       ...persisted.loopStepRuns,
     },
+    mapItemRuns: {
+      ...(summary.mapItemRuns ?? {}),
+      ...(persisted.mapItemRuns ?? {}),
+    },
     error: options.clearError ? undefined : summary.error,
     errorCode: options.clearError ? undefined : summary.errorCode,
   };

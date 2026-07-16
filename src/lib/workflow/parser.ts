@@ -14,6 +14,8 @@ import type {
   WorkflowLoopUntil,
   WorkflowLoopSpec,
   WorkflowLoopStep,
+  WorkflowAgentLoopStep,
+  WorkflowMapSpec,
   WorkflowMeta,
   WorkflowNode,
   WorkflowPhase,
@@ -235,6 +237,11 @@ function visitTopLevelStatement(statement: AnyNode, state: ParserState): void {
     return;
   }
 
+  if (isCallExpression(expression, "map")) {
+    addMapNode(expression, variableName, state);
+    return;
+  }
+
   if (isCallExpression(expression, "parallel")) {
     addParallelNodes(expression, variableName, state);
     return;
@@ -424,6 +431,173 @@ function readLoopFirstIteration(
   }
 
   return { startAt };
+}
+
+function addMapNode(
+  callExpression: AnyNode,
+  variableName: string | undefined,
+  state: ParserState,
+): void {
+  const options = firstArg(callExpression);
+  const id =
+    readObjectString(options, "id") ??
+    variableName ??
+    `map_${state.anonymousIndex++}`;
+  const label = readObjectString(options, "label") ?? humanize(id);
+  const maxItems = readObjectNumber(options, "maxItems");
+  const onItemFailure = readMapOnItemFailure(options, state);
+  const step = readMapStep(options, callExpression, state);
+  const inputs = readInputs(options, state);
+  const { source, sourceNodeId } = readMapSource(options, callExpression, state);
+
+  if (source && !inputs.some((input) => input.name === source)) {
+    // Bind the source node so the map waits for it and the DAG edge exists.
+    inputs.push({ name: source, sourceVariable: source, sourceNodeId });
+  }
+
+  if (!Number.isInteger(maxItems) || maxItems < 1 || maxItems > 50) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "map(...) requires maxItems as an integer from 1 to 50.",
+      range:
+        readObjectPropertyValueRange(options, "maxItems") ??
+        toRange(callExpression),
+    });
+  }
+
+  // Item refs (`item`, `item.<path>`, `item_index`) resolve per child and must
+  // not be treated as workflow inputs or upstream bindings.
+  const templateRefs = step
+    ? [
+        ...new Set(
+          step.templateRefs.filter(
+            (ref) => !isMapItemTemplateRef(ref) && !isReservedTemplateRef(ref),
+          ),
+        ),
+      ]
+    : [];
+
+  const map: WorkflowMapSpec | undefined = step
+    ? {
+        source,
+        ...(sourceNodeId ? { sourceNodeId } : {}),
+        maxItems: Number.isInteger(maxItems) ? maxItems : 1,
+        onItemFailure,
+        step,
+      }
+    : undefined;
+
+  const node: WorkflowNode = {
+    id,
+    kind: "map",
+    label,
+    phase: state.currentPhase,
+    variableName,
+    agent: readObjectString(options, "agent"),
+    model: readObjectString(options, "model"),
+    cwd: readObjectString(options, "cwd"),
+    ...(map ? { map } : {}),
+    inputs,
+    templateRefs,
+    sourceRange: toRange(callExpression),
+    labelRange: readObjectPropertyValueRange(options, "label"),
+  };
+
+  state.nodes.push(node);
+  addNodeToCurrentPhase(node.id, state);
+  if (variableName) {
+    state.variableToNodeId[variableName] = node.id;
+  }
+  addInputEdges(node, state);
+}
+
+function readMapSource(
+  options: AnyNode | undefined,
+  callExpression: AnyNode,
+  state: ParserState,
+): { source: string; sourceNodeId?: string } {
+  const value = readObjectPropertyValue(options, "source");
+  const sourceVariable = readIdentifierName(value);
+  if (!sourceVariable) {
+    state.diagnostics.push({
+      severity: "error",
+      message:
+        "map(...) requires source to reference an upstream node variable, for example source: discover.",
+      range: toRange(value) ?? toRange(callExpression),
+    });
+    return { source: "" };
+  }
+  const sourceNodeId = state.variableToNodeId[sourceVariable];
+  if (!sourceNodeId) {
+    state.diagnostics.push({
+      severity: "error",
+      message: `map source "${sourceVariable}" must reference an earlier workflow node.`,
+      range: toRange(value) ?? toRange(callExpression),
+    });
+  }
+  return { source: sourceVariable, ...(sourceNodeId ? { sourceNodeId } : {}) };
+}
+
+function readMapStep(
+  options: AnyNode | undefined,
+  callExpression: AnyNode,
+  state: ParserState,
+): WorkflowAgentLoopStep | undefined {
+  const value = readObjectPropertyValue(options, "step");
+  if (!value) {
+    state.diagnostics.push({
+      severity: "error",
+      message: "map(...) requires step: agent({...}).",
+      range: toRange(callExpression),
+    });
+    return undefined;
+  }
+  const expression = unwrapExpression(unwrapFunctionBody(value));
+  if (!isCallExpression(expression, "agent")) {
+    state.diagnostics.push({
+      severity: "error",
+      message:
+        "map step must be a single agent({...}); human, loop, map, and array steps are not supported in v1.",
+      range: toRange(value),
+    });
+    return undefined;
+  }
+
+  const step = readLoopAgentStep(expression, 0, state) as WorkflowAgentLoopStep;
+  if (step.session?.mode === "inherit") {
+    state.diagnostics.push({
+      severity: "error",
+      message:
+        'map step session cannot be { mode: "inherit" }; map children always run independent sessions.',
+      range: readObjectPropertyValueRange(firstArg(expression), "session") ??
+        step.sourceRange,
+    });
+    return { ...step, session: undefined };
+  }
+  return step;
+}
+
+function readMapOnItemFailure(
+  options: AnyNode | undefined,
+  state: ParserState,
+): WorkflowMapSpec["onItemFailure"] {
+  const value = readObjectString(options, "onItemFailure")?.trim();
+  if (!value) {
+    return "skip";
+  }
+  if (value === "skip" || value === "fail") {
+    return value;
+  }
+  state.diagnostics.push({
+    severity: "error",
+    message: 'map onItemFailure must be "skip" or "fail".',
+    range: readObjectPropertyValueRange(options, "onItemFailure"),
+  });
+  return "skip";
+}
+
+function isMapItemTemplateRef(ref: string): boolean {
+  return ref === "item" || ref === "item_index" || ref.startsWith("item.");
 }
 
 function addHumanNode(
@@ -1073,6 +1247,29 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
       state,
     });
 
+    if (node.map) {
+      const disallowedInputNames = new Set([
+        ...workflowNames,
+        node.map.step.id,
+      ]);
+      validateRuntimeOptionField({
+        value: node.map.step.agent,
+        fieldName: "agent",
+        ownerLabel: `map step "${node.id}.${node.map.step.id}"`,
+        range: node.map.step.sourceRange,
+        disallowedInputNames,
+        state,
+      });
+      validateRuntimeOptionField({
+        value: node.map.step.model,
+        fieldName: "model",
+        ownerLabel: `map step "${node.id}.${node.map.step.id}"`,
+        range: node.map.step.sourceRange,
+        disallowedInputNames,
+        state,
+      });
+    }
+
     if (!node.loop) {
       continue;
     }
@@ -1203,6 +1400,12 @@ function collectRuntimeOptionRefs(node: WorkflowNode): {
       ...collectRuntimeOptionFieldRefs(step.agent),
       ...collectRuntimeOptionFieldRefs(step.model),
     ]) ?? []),
+    ...(node.map
+      ? [
+          ...collectRuntimeOptionFieldRefs(node.map.step.agent),
+          ...collectRuntimeOptionFieldRefs(node.map.step.model),
+        ]
+      : []),
   ];
   return {
     required: [

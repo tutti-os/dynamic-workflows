@@ -853,4 +853,182 @@ const broken = await loop({
       sourceNodeId: "human_alignment",
     }));
   });
+
+  it("parses a map node with item refs and binds its source", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List work as JSON." })
+const migrated = await map({
+  id: "migrated",
+  label: "Migrate each site",
+  source: discover,
+  maxItems: 20,
+  onItemFailure: "skip",
+  step: agent({
+    id: "migrate_one",
+    label: "Migrate {{item.file}}",
+    prompt: "Migrate {{item.file}}:{{item.line}} (item {{item_index}}) with {{item}}",
+  }),
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual(
+      [],
+    );
+    const map = parsed.nodes.find((node) => node.id === "migrated");
+    expect(map).toEqual(
+      expect.objectContaining({ kind: "map" }),
+    );
+    expect(map?.map).toEqual(
+      expect.objectContaining({
+        source: "discover",
+        sourceNodeId: "discover",
+        maxItems: 20,
+        onItemFailure: "skip",
+      }),
+    );
+    expect(map?.map?.step).toEqual(
+      expect.objectContaining({ id: "migrate_one", kind: "agent" }),
+    );
+    // The source is a DAG dependency.
+    expect(parsed.edges).toContainEqual(
+      expect.objectContaining({ source: "discover", target: "migrated" }),
+    );
+    // Item refs never appear as workflow inputs or bindings.
+    expect(map?.templateRefs).not.toContain("item");
+    expect(map?.templateRefs).not.toContain("item.file");
+    expect(map?.templateRefs).not.toContain("item_index");
+  });
+
+  it("does not require declaring map item refs as inputs", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List work as JSON." })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item.name}} #{{item_index}}: {{item}}" }),
+})
+`);
+
+    expect(
+      parsed.diagnostics.filter((item) => item.severity === "error"),
+    ).toEqual([]);
+    expect(
+      parsed.diagnostics.some((item) =>
+        item.message.includes('"item"') || item.message.includes('"item_index"'),
+      ),
+    ).toBe(false);
+  });
+
+  it("reports a missing or unknown map source", () => {
+    const missing = parseWorkflowScript(`
+const migrated = await map({
+  id: "migrated",
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+})
+`);
+    expect(missing.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("map(...) requires source to reference"),
+      ]),
+    );
+
+    const unknown = parseWorkflowScript(`
+const migrated = await map({
+  id: "migrated",
+  source: ghost,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+})
+`);
+    expect(unknown.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        'map source "ghost" must reference an earlier workflow node.',
+      ]),
+    );
+  });
+
+  it("rejects an out-of-range map maxItems", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List." })
+const a = await map({ id: "a", source: discover, maxItems: 0, step: agent({ id: "one", prompt: "Do {{item}}" }) })
+const b = await map({ id: "b", source: discover, maxItems: 51, step: agent({ id: "two", prompt: "Do {{item}}" }) })
+`);
+    const maxItemsErrors = parsed.diagnostics.filter((item) =>
+      item.message.includes("maxItems as an integer from 1 to 50"),
+    );
+    expect(maxItemsErrors).toHaveLength(2);
+  });
+
+  it("rejects a non-agent map step", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List." })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  step: human({ id: "one", actions: [{ id: "ok", label: "OK" }] }),
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("map step must be a single agent({...})"),
+      ]),
+    );
+  });
+
+  it("rejects an inherit session on a map step", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List." })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}", session: { mode: "inherit", key: "shared" } }),
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("map step session cannot be"),
+      ]),
+    );
+    const map = parsed.nodes.find((node) => node.id === "migrated");
+    expect(map?.map?.step.session).toBeUndefined();
+  });
+
+  it("allows a redundant independent session on a map step", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List." })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  step: agent({ id: "one", prompt: "Do {{item}}", session: { mode: "independent" } }),
+})
+`);
+    expect(
+      parsed.diagnostics.filter((item) => item.severity === "error"),
+    ).toEqual([]);
+    const map = parsed.nodes.find((node) => node.id === "migrated");
+    expect(map?.map?.step.session).toEqual({ mode: "independent" });
+  });
+
+  it("rejects an unknown map onItemFailure", () => {
+    const parsed = parseWorkflowScript(`
+const discover = await agent({ id: "discover", output: "json", prompt: "List." })
+const migrated = await map({
+  id: "migrated",
+  source: discover,
+  maxItems: 5,
+  onItemFailure: "retry",
+  step: agent({ id: "one", prompt: "Do {{item}}" }),
+})
+`);
+    expect(parsed.diagnostics.map((item) => item.message)).toEqual(
+      expect.arrayContaining([
+        'map onItemFailure must be "skip" or "fail".',
+      ]),
+    );
+  });
 });

@@ -6,7 +6,8 @@ export type WorkflowNodeKind =
   | "log"
   | "pipeline"
   | "dynamic"
-  | "loop";
+  | "loop"
+  | "map";
 
 export type WorkflowNodeStatus =
   | "idle"
@@ -138,6 +139,17 @@ export type WorkflowLoopSpec = {
   until: WorkflowLoopUntil;
 };
 
+export type WorkflowMapSpec = {
+  /** Variable name of the upstream node whose output supplies the item array. */
+  source: string;
+  /** Resolved node id for `source`, undefined when the binding is unresolved. */
+  sourceNodeId?: string;
+  maxItems: number;
+  onItemFailure: "skip" | "fail";
+  /** Exactly one agent step in v1; children always run independent sessions. */
+  step: WorkflowAgentLoopStep;
+};
+
 export type WorkflowNode = {
   id: string;
   kind: WorkflowNodeKind;
@@ -153,6 +165,7 @@ export type WorkflowNode = {
   session?: WorkflowSessionSpec;
   human?: WorkflowHumanSpec;
   loop?: WorkflowLoopSpec;
+  map?: WorkflowMapSpec;
   inputs: WorkflowInputBinding[];
   templateRefs: string[];
   sourceRange?: EditableRange;
@@ -323,6 +336,21 @@ export type WorkflowRunRecoveryState = {
   sessionCwdsByKey?: Record<string, string>;
   attachSessionIdsByNodeId?: Record<string, string>;
   loopStates?: Record<string, WorkflowLoopRecoveryState>;
+  mapStates?: Record<string, WorkflowMapRecoveryState>;
+};
+
+export type WorkflowMapItemCompletion = {
+  index: number;
+  status: "completed" | "failed";
+  output?: WorkflowValue;
+  error?: string;
+};
+
+export type WorkflowMapRecoveryState = {
+  /** The resolved source array, persisted at expansion time. */
+  items: WorkflowValue[];
+  /** Per-item outcomes so a resumed run only re-runs unfinished items. */
+  completions: WorkflowMapItemCompletion[];
 };
 
 export type WorkflowLoopRecoveryState = {
@@ -338,12 +366,19 @@ export type WorkflowLoopRecoveryState = {
   }>;
 };
 
-export type WorkflowRunCheckpoint = {
-  runId: string;
-  nodeId: string;
-  kind: "loop";
-  state: WorkflowLoopRecoveryState;
-};
+export type WorkflowRunCheckpoint =
+  | {
+      runId: string;
+      nodeId: string;
+      kind: "loop";
+      state: WorkflowLoopRecoveryState;
+    }
+  | {
+      runId: string;
+      nodeId: string;
+      kind: "map";
+      state: WorkflowMapRecoveryState;
+    };
 
 export type WorkflowNodeSessionStatus =
   | "running"
@@ -385,6 +420,28 @@ export type WorkflowLoopStepRun = WorkflowLoopStepExecutionRef & {
   session?: WorkflowNodeSessionRef;
 };
 
+export type WorkflowMapItemExecutionRef = {
+  executionKey: string;
+  parentNodeId: string;
+  stepId: string;
+  /** 1-based item position within the resolved source array. */
+  index: number;
+};
+
+export type WorkflowMapItemRun = WorkflowMapItemExecutionRef & {
+  kind: "agent";
+  label: string;
+  status: WorkflowNodeStatus;
+  agent?: string;
+  model?: string;
+  promptMode?: "full" | "append";
+  input?: string;
+  restored?: boolean;
+  output?: WorkflowValue;
+  error?: string;
+  session?: WorkflowNodeSessionRef;
+};
+
 export type WorkflowRunEvent =
   | {
       type: "run_started";
@@ -405,6 +462,7 @@ export type WorkflowRunEvent =
       runId: string;
       nodeId: string;
       loopStep?: WorkflowLoopStepExecutionRef;
+      mapItem?: WorkflowMapItemExecutionRef;
       event: unknown;
     }
   | {
@@ -417,6 +475,21 @@ export type WorkflowRunEvent =
       agent?: string;
       model?: string;
       sessionKey?: string;
+      promptMode?: "full" | "append";
+      input?: string;
+      restored?: boolean;
+      output?: WorkflowValue;
+      error?: string;
+    }
+  | {
+      type: "map_item_state";
+      runId: string;
+      mapItem: WorkflowMapItemExecutionRef;
+      kind: "agent";
+      label: string;
+      status: WorkflowNodeStatus;
+      agent?: string;
+      model?: string;
       promptMode?: "full" | "append";
       input?: string;
       restored?: boolean;

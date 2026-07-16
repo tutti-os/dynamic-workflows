@@ -79,6 +79,7 @@ describe("workflow run state", () => {
       nodeStatuses: { scan: "completed" },
       nodeSessions: {},
       loopStepRuns: {},
+      mapItemRuns: {},
     });
   });
 

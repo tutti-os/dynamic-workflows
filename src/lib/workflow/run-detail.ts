@@ -155,6 +155,7 @@ function readRunResultFromEvents(events: WorkflowRunEvent[]) {
         nodeStatuses: {},
         nodeSessions: {},
         loopStepRuns: {},
+        mapItemRuns: {},
       },
       logPath: null,
       startedAt: new Date(0).toISOString(),
@@ -178,6 +179,9 @@ function formatRunNodeEvent(event: WorkflowRunEvent): string {
   }
   if (event.type === "loop_step_state") {
     return `${event.loopStep.executionKey}: ${event.status}${event.promptMode ? ` via ${event.promptMode}` : ""}`;
+  }
+  if (event.type === "map_item_state") {
+    return `${event.mapItem.executionKey}: ${event.status}`;
   }
   if (event.type === "node_completed") {
     return "completed";

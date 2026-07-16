@@ -162,6 +162,39 @@ loop({
 - Inside loop step prompts, reference other step ids with `{{step_id}}` (most recent output) and use `{{iteration}}` for the current 1-based iteration number. A step may also reference its own id, which resolves to its previous-iteration output and renders as an empty string on the step's first run — this lets an independent-session step receive its own history through dataflow instead of session memory.
 - A first-iteration step should not require output from a skipped prefix step. For an initial reviewer entry, instruct the reviewer to inspect the current repository; on later iterations, `{{reviewer}}` resolves to the previous review and can drive the preceding repair step.
 
+## map
+
+Dynamic-width fan-out: one authoring-time node expands into N child agent runs at run time, one per item in an upstream array.
+
+```js
+const discover = agent({
+  id: "discover",
+  label: "Discover call sites",
+  output: "json",
+  prompt: "List the call sites to migrate. End with a JSON array: [{\"file\": \"...\", \"line\": 1}, ...].",
+});
+map({
+  id: "migrate_all",
+  label: "Migrate each call site",
+  source: discover,          // upstream node whose output is a JSON array
+  maxItems: 20,              // required integer 1..50; more items than this fails the run
+  onItemFailure: "skip",     // "skip" (default) or "fail"
+  step: agent({
+    id: "migrate_one",
+    label: "Migrate {{item.file}}",
+    prompt: "Migrate {{item.file}} at line {{item.line}}.\n\nItem:\n{{item}}",
+  }),
+});
+```
+
+- `source` binds an upstream executable node (same mechanics as `inputs`); a missing or unknown source is an error. At run time the source output must be an array (a node with `output: "json"` returning a JSON array, or a string that parses as a JSON array). A non-array source fails the node.
+- `maxItems` is required, an integer from 1 to 50. If the resolved array has more items than `maxItems`, the node fails — items are never silently truncated.
+- `onItemFailure`: `"skip"` (default) records the failure and continues the other items; `"fail"` fails the whole map node on the first item failure (in-flight items finish; no new items start).
+- `step` is exactly one `agent({...})` in v1 — no `human`, `loop`, `map`, or array steps. It may set `agent`, `model` (including runtime option templates), `cwd`, and `output: "json"`. Children always run independent sessions; `session: { mode: "inherit" }` is an error, `{ mode: "independent" }` is allowed and redundant.
+- Inside the step prompt, item refs need no declaration: `{{item}}` (the whole item, stringified), `{{item.<path>}}` (a dotted path into the item), and `{{item_index}}` (1-based). The prompt may also reference declared workflow inputs, `{{workflow.cwd}}`, and — like a loop step — upstream node outputs, which auto-bind as map inputs.
+- Children run with an internal concurrency pool (up to 4 at a time).
+- The map output is a record you reference downstream like any node output: `{ items: [{ index, item, status: "completed", output }...], failed: [{ index, item, error }...], total }`. Failures stay visible in `failed`; a synthesizer reading `{{migrate_all}}` sees the full record.
+
 ## Runtime option templates for agent / model
 
 `agent` and `model` may be run-configurable, but only as the entire field value:

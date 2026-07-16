@@ -11,6 +11,7 @@ import type {
   WorkflowNodeSessionRef,
   WorkflowNodeSessionStatus,
   WorkflowLoopStepRun,
+  WorkflowMapItemRun,
   WorkflowNodeStatus,
   WorkflowRunEvent,
   WorkflowHumanTask,
@@ -24,6 +25,9 @@ export type WorkflowRunResult = {
   nodeStatuses: Record<string, WorkflowNodeStatus>;
   nodeSessions: Record<string, WorkflowNodeSessionRef>;
   loopStepRuns: Record<string, WorkflowLoopStepRun>;
+  // Optional so existing WorkflowRunResult literals keep compiling; always
+  // populated by the run-state reducers below (mirrors loopStepRuns).
+  mapItemRuns?: Record<string, WorkflowMapItemRun>;
   error?: string;
   errorCode?: ApiErrorCode;
 };
@@ -61,6 +65,7 @@ export function createInitialRunSummary(
     nodeStatuses,
     nodeSessions: {},
     loopStepRuns: {},
+    mapItemRuns: {},
   };
 }
 
@@ -74,6 +79,7 @@ export function applyWorkflowRunEvent(
     nodeStatuses: { ...summary.nodeStatuses },
     nodeSessions: { ...summary.nodeSessions },
     loopStepRuns: { ...summary.loopStepRuns },
+    mapItemRuns: { ...(summary.mapItemRuns ?? {}) },
     error: summary.error,
     errorCode: summary.errorCode,
   };
@@ -125,6 +131,27 @@ export function applyWorkflowRunEvent(
     if (session) {
       next.nodeSessions[session.nodeId] = session;
     }
+    return next;
+  }
+
+  if (event.type === "map_item_state") {
+    const mapItemRuns = next.mapItemRuns ?? {};
+    const current = mapItemRuns[event.mapItem.executionKey];
+    mapItemRuns[event.mapItem.executionKey] = {
+      ...event.mapItem,
+      ...(current ?? {}),
+      kind: event.kind,
+      label: event.label,
+      status: event.status,
+      ...(event.agent ? { agent: event.agent } : {}),
+      ...(event.model ? { model: event.model } : {}),
+      ...(event.promptMode ? { promptMode: event.promptMode } : {}),
+      ...(event.input !== undefined ? { input: event.input } : {}),
+      ...(event.restored !== undefined ? { restored: event.restored } : {}),
+      ...(event.output !== undefined ? { output: event.output } : {}),
+      ...(event.error ? { error: event.error } : {}),
+    };
+    next.mapItemRuns = mapItemRuns;
     return next;
   }
 
@@ -204,6 +231,28 @@ export function applyWorkflowRunEvent(
           ? { error: agentEvent.message, status: "failed" }
           : {}),
       };
+    }
+    if (event.mapItem) {
+      const mapItemRuns = next.mapItemRuns ?? {};
+      const executionKey = event.mapItem.executionKey;
+      const current = mapItemRuns[executionKey];
+      const output =
+        agentEvent.type === "text_delta" && agentEvent.text
+          ? `${typeof current?.output === "string" ? current.output : ""}${agentEvent.text}`
+          : current?.output;
+      mapItemRuns[executionKey] = {
+        ...event.mapItem,
+        ...(current ?? {}),
+        kind: "agent",
+        label: current?.label ?? event.mapItem.stepId,
+        status:
+          agentEvent.type === "error" ? "failed" : (current?.status ?? "running"),
+        ...(output !== undefined ? { output } : {}),
+        ...(agentEvent.type === "error" && agentEvent.message
+          ? { error: agentEvent.message, status: "failed" }
+          : {}),
+      };
+      next.mapItemRuns = mapItemRuns;
     }
     return next;
   }
@@ -289,6 +338,20 @@ export function applyWorkflowRunEvent(
           : run,
       ]),
     );
+    next.mapItemRuns = Object.fromEntries(
+      Object.entries(next.mapItemRuns ?? {}).map(([executionKey, run]) => [
+        executionKey,
+        run.status === "running" || run.status === "waiting"
+          ? {
+              ...run,
+              status: "skipped" as const,
+              session: run.session
+                ? { ...run.session, status: "canceled" as const }
+                : undefined,
+            }
+          : run,
+      ]),
+    );
   }
   if (event.error !== undefined || event.status === "completed") {
     next.error = event.error;
@@ -307,6 +370,7 @@ export function toWorkflowRunResult(
     nodeStatuses: summary.nodeStatuses,
     nodeSessions: summary.nodeSessions,
     loopStepRuns: summary.loopStepRuns,
+    mapItemRuns: summary.mapItemRuns ?? {},
     ...(summary.error === undefined ? {} : { error: summary.error }),
     ...(summary.errorCode === undefined ? {} : { errorCode: summary.errorCode }),
   };
@@ -314,7 +378,13 @@ export function toWorkflowRunResult(
 
 export function readRunResult(result: unknown): WorkflowRunResult {
   if (!result || typeof result !== "object") {
-    return { outputs: {}, nodeStatuses: {}, nodeSessions: {}, loopStepRuns: {} };
+    return {
+      outputs: {},
+      nodeStatuses: {},
+      nodeSessions: {},
+      loopStepRuns: {},
+      mapItemRuns: {},
+    };
   }
 
   const raw = result as {
@@ -322,6 +392,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
     nodeStatuses?: unknown;
     nodeSessions?: unknown;
     loopStepRuns?: unknown;
+    mapItemRuns?: unknown;
     error?: unknown;
     errorCode?: unknown;
   };
@@ -333,6 +404,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
       : {},
     nodeSessions: readNodeSessionRecord(raw.nodeSessions),
     loopStepRuns: readLoopStepRunRecord(raw.loopStepRuns),
+    mapItemRuns: readMapItemRunRecord(raw.mapItemRuns),
     error: typeof raw.error === "string" ? raw.error : undefined,
     errorCode:
       typeof raw.errorCode === "string"
@@ -602,6 +674,50 @@ function readLoopStepRunRecord(
   return Object.fromEntries(entries) as Record<string, WorkflowLoopStepRun>;
 }
 
+function readMapItemRunRecord(
+  value: unknown,
+): Record<string, WorkflowMapItemRun> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value);
+  if (
+    !entries.every(
+      ([executionKey, run]) =>
+        typeof executionKey === "string" && isWorkflowMapItemRun(run),
+    )
+  ) {
+    return {};
+  }
+  return Object.fromEntries(entries) as Record<string, WorkflowMapItemRun>;
+}
+
+function isWorkflowMapItemRun(value: unknown): value is WorkflowMapItemRun {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.executionKey === "string" &&
+    typeof raw.parentNodeId === "string" &&
+    typeof raw.stepId === "string" &&
+    Number.isInteger(raw.index) &&
+    raw.kind === "agent" &&
+    typeof raw.label === "string" &&
+    isWorkflowNodeStatus(raw.status) &&
+    optionalString(raw.agent) &&
+    optionalString(raw.model) &&
+    optionalString(raw.input) &&
+    (raw.promptMode === undefined ||
+      raw.promptMode === "full" ||
+      raw.promptMode === "append") &&
+    (raw.restored === undefined || typeof raw.restored === "boolean") &&
+    (raw.output === undefined || isWorkflowValue(raw.output)) &&
+    optionalString(raw.error) &&
+    (raw.session === undefined || isWorkflowNodeSessionRef(raw.session))
+  );
+}
+
 function isWorkflowLoopStepRun(value: unknown): value is WorkflowLoopStepRun {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -735,6 +851,7 @@ function isWorkflowRunEvent(value: unknown): value is WorkflowRunEvent {
     type === "node_started" ||
     type === "node_event" ||
     type === "loop_step_state" ||
+    type === "map_item_state" ||
     type === "node_completed" ||
     type === "human_task_requested" ||
     type === "human_task_resolved" ||

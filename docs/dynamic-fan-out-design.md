@@ -31,6 +31,8 @@ Scope: parser field + validation, executor extraction, template/`until` resoluti
 
 ## Phase 1 — `map` MVP
 
+Status: runtime implemented (2026-07-17). Parser, executor, run-event consumers, and executor-level recovery ship; the UI and DB-backed checkpoint persistence are deliberately deferred (see "Deviations from this proposal" below). The rest of this section is the original proposal; deviations are recorded at the end.
+
 ### Syntax
 
 ```js
@@ -89,6 +91,14 @@ const migrated = map({
 ### UI
 
 Reuse the loop step executions presentation: child executions grouped under the map node, labeled by the rendered step label (`Migrate src/foo.ts`), with per-item status badges and the failed-item list on the node detail.
+
+### Deviations from this proposal (as implemented)
+
+- **Concurrency lives inside the node, not the global ready batch.** The proposal had map children "compete fairly in the global `ready.slice(0, 4)` loop." The global `executableNodes` set is fixed for the run and expanding it mid-run to inject dynamic children would be invasive. Instead, `runMapNode` runs its children through an internal concurrency pool of up to 4 (mirroring `streamNodeBatch`'s merge mechanics). Map children therefore contend for the pool among themselves, not with sibling nodes; the map node still occupies one slot of the outer batch while it runs.
+- **`onItemFailure: "fail"` lets in-flight children finish.** On the first item failure the pool stops scheduling new items and, once the already-running children settle, the map node fails with the first failure's message. Running children are not aborted mid-flight.
+- **Output shape.** `items` holds only the completed entries (`{ index, item, status: "completed", output }`); failures live in `failed` (`{ index, item, error }`); `total` is the resolved item count. `failed` is always populated for failures, satisfying "failures always visible."
+- **Step prompts may reference upstream node outputs.** The proposal restricted v1 step prompts to item refs plus workflow inputs. Because loop steps already auto-bind cross-node refs cheaply (via `connectTemplateRefs` → node `inputs` → edges), map reuses that exact machinery: a step prompt referencing another node's variable auto-binds it as a map input. Item refs (`item`, `item.<path>`, `item_index`) and `workflow.cwd` never require declaration.
+- **Events and recovery are wired at the executor layer.** A `map_item_state` event mirrors `loop_step_state` (child ref `map:<nodeId>:<index>:<stepId>`), and `node_event` carries an optional `mapItem` ref alongside `loopStep`. Recovery mirrors `recovery.loopStates` via `recovery.mapStates` (the resolved item array plus per-item completions), and the executor emits `onCheckpoint({ kind: "map", ... })` at expansion time and after each item. Persisting those map checkpoints through the DB checkpoint store (currently typed to `WorkflowLoopRecoveryState`, and the job runner only forwards `kind: "loop"` checkpoints) is left as a follow-up; the executor honors `recovery.mapStates` today, which is what the recovery test exercises.
 
 ## Phase 2 — polish
 

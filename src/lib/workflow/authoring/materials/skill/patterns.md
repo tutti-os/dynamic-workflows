@@ -44,6 +44,7 @@ agent({
 
 - Do not pass a node an output its prompt never uses: a false dependency serializes branches that could run concurrently and leaks one role's narrative into another that should judge independently.
 - Fan-in is the only place cross-branch context belongs.
+- The examples above are static fan-out: the branches are known at authoring time. When the width is only known at run time (process each of N discovered items), use `map` — an upstream node emits a JSON array, and `map({ source, maxItems, step: agent({...}) })` runs the step per item, fanning the `{ items, failed, total }` record into a downstream synthesizer.
 
 ## Adversarial verify
 
