@@ -429,6 +429,57 @@ export function claimWorkflowRunForResume(input: {
   })();
 }
 
+export function claimWorkflowRunForRetry(input: {
+  workflowId: string;
+  runId: string;
+  result?: unknown;
+}): WorkflowRunResumeClaim | null {
+  const database = getDb();
+  const token = randomUUID();
+  const now = new Date().toISOString();
+
+  return database.transaction(() => {
+    const result = database
+      .prepare(
+        `
+        UPDATE workflow_runs
+        SET status = 'running',
+          result_json = COALESCE(?, result_json),
+          finished_at = NULL,
+          resume_token = ?,
+          resume_claimed_at = ?
+        WHERE id = ?
+          AND workflow_id = ?
+          AND status IN ('completed', 'failed', 'canceled')
+          AND resume_token IS NULL
+      `,
+      )
+      .run(
+        input.result === undefined
+          ? null
+          : stringifyJsonObjectColumn(input.result, {
+              table: "workflow_runs",
+              column: "result_json",
+              id: input.runId,
+            }),
+        token,
+        now,
+        input.runId,
+        input.workflowId,
+      );
+
+    if (result.changes === 0) {
+      return null;
+    }
+
+    const run = getWorkflowRun(input.runId);
+    if (!run) {
+      throw new Error("Workflow run not found after retry claim");
+    }
+    return { run, token };
+  })();
+}
+
 export function releaseWorkflowRunResumeClaim(input: {
   runId: string;
   token: string;

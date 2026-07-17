@@ -42,6 +42,14 @@ export function workflowRunNotFoundError(): AppError {
   return new AppError("RUN_NOT_FOUND", "Run not found");
 }
 
+export function workflowMapNodeInvalidError(message: string): AppError {
+  return new AppError("WORKFLOW_MAP_NODE_INVALID", message);
+}
+
+export function workflowMapRetryInvalidError(message: string): AppError {
+  return new AppError("WORKFLOW_MAP_RETRY_INVALID", message);
+}
+
 export function workflowInputsInvalidError(error: unknown): AppError {
   return new AppError(
     "WORKFLOW_INPUTS_INVALID",

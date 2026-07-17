@@ -45,6 +45,7 @@ export function RunDetailPanel(props: {
   retryingRunId?: string;
   copiedRunField?: string;
   onRetryRun: (runId: string) => void;
+  onRetryMapItems: (runId: string, mapNodeId: string) => void;
   onResumeRun: (runId: string) => void;
   onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
@@ -102,8 +103,11 @@ export function RunDetailPanel(props: {
       {props.selectedNodeRun ? (
         <RunNodeDetailSection
           runId={run.id}
+          run={run}
           nodeRun={props.selectedNodeRun}
+          retryPending={props.isRunning || props.retryingRunId === run.id}
           copiedRunField={props.copiedRunField}
+          onRetryMapItems={props.onRetryMapItems}
           onCopyRunText={props.onCopyRunText}
           onOpenAgentSession={props.onOpenAgentSession}
         />
@@ -430,8 +434,11 @@ function InterruptedRunNotice() {
 
 function RunNodeDetailSection(props: {
   runId: string;
+  run: WorkflowRunRecord;
   nodeRun: RunNodeDetail;
+  retryPending: boolean;
   copiedRunField?: string;
+  onRetryMapItems: (runId: string, mapNodeId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
@@ -451,8 +458,11 @@ function RunNodeDetailSection(props: {
     return (
       <RunMapItemDetailSection
         runId={props.runId}
+        run={props.run}
         nodeRun={nodeRun}
+        retryPending={props.retryPending}
         copiedRunField={props.copiedRunField}
+        onRetryMapItems={props.onRetryMapItems}
         onCopyRunText={props.onCopyRunText}
         onOpenAgentSession={props.onOpenAgentSession}
       />
@@ -572,8 +582,11 @@ function RunLoopStepDetailSection(props: {
 
 function RunMapItemDetailSection(props: {
   runId: string;
+  run: WorkflowRunRecord;
   nodeRun: RunNodeDetail;
+  retryPending: boolean;
   copiedRunField?: string;
+  onRetryMapItems: (runId: string, mapNodeId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
@@ -581,6 +594,19 @@ function RunMapItemDetailSection(props: {
   if (!mapItem) {
     return null;
   }
+  const failedItemCount = new Set(
+    mapItem.items
+      .filter((attempt) => attempt.status === "failed")
+      .map((attempt) => attempt.index),
+  ).size;
+  // Map-item retry rides run recovery, so it needs a terminal run (matching the
+  // server precondition) — not the resumable "interrupted" state canRetryRun
+  // also allows for a full re-run.
+  const runIsTerminal =
+    props.run.status === "completed" ||
+    props.run.status === "failed" ||
+    props.run.status === "canceled";
+  const canRetryFailedItems = runIsTerminal && failedItemCount > 0;
   return (
     <section className="run-node-detail loop-step-run-detail map-item-run-detail">
       <div className="field-heading">
@@ -590,6 +616,29 @@ function RunMapItemDetailSection(props: {
           {mapItem.steps.length > 1 ? ` · ${mapItem.items.length} executions` : ""}
         </Badge>
       </div>
+      {canRetryFailedItems ? (
+        <div className="agent-session-actions">
+          <Badge variant="warning">
+            {failedItemCount} failed item{failedItemCount === 1 ? "" : "s"}
+          </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            type="button"
+            disabled={props.retryPending}
+            onClick={() =>
+              props.onRetryMapItems(props.run.id, props.nodeRun.node.id)
+            }
+          >
+            {props.retryPending ? (
+              <Spinner data-icon="inline-start" size={14} />
+            ) : (
+              <RefreshIcon data-icon="inline-start" />
+            )}
+            Retry failed items
+          </Button>
+        </div>
+      ) : null}
       <div className="run-facts run-node-facts">
         <RunFact label="Map" value={props.nodeRun.node.id} />
         <RunFact

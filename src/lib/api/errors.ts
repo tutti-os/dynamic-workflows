@@ -16,6 +16,8 @@ export type ApiErrorCode =
   | "WORKFLOW_SCRIPT_INVALID"
   | "WORKFLOW_INPUTS_INVALID"
   | "WORKFLOW_CWD_INVALID"
+  | "WORKFLOW_MAP_NODE_INVALID"
+  | "WORKFLOW_MAP_RETRY_INVALID"
   | "WORKFLOW_GENERATION_FAILED"
   | "WORKFLOW_EDIT_FAILED"
   | "WORKFLOW_REPAIR_FAILED"
@@ -59,6 +61,9 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   WORKFLOW_INPUTS_INVALID: "Workflow inputs are invalid.",
   WORKFLOW_CWD_INVALID:
     "The working directory is invalid or outside the allowed workspace.",
+  WORKFLOW_MAP_NODE_INVALID: "The map node is unknown or not a map node.",
+  WORKFLOW_MAP_RETRY_INVALID:
+    "This run cannot retry failed map items in its current state.",
   WORKFLOW_GENERATION_FAILED: "Workflow generation failed.",
   WORKFLOW_EDIT_FAILED: "Workflow edit failed.",
   WORKFLOW_REPAIR_FAILED: "The agent could not repair this workflow script.",

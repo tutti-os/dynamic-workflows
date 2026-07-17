@@ -57,6 +57,7 @@ type WorkflowInspectorPaneProps = {
   onSelectLoopStep: (stepId: string | undefined) => void;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
+  onRetryMapItems: (runId: string, mapNodeId: string) => void;
   onResumeRun: (runId: string) => void;
   onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
@@ -153,6 +154,7 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
             copiedRunField={props.copiedRunField}
             onSelectRun={props.onSelectRun}
             onRetryRun={props.onRetryRun}
+            onRetryMapItems={props.onRetryMapItems}
             onResumeRun={props.onResumeRun}
             onCancelRun={props.onCancelRun}
             onCopyRunText={props.onCopyRunText}

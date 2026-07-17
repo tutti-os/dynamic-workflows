@@ -70,6 +70,7 @@ export function useWorkflowRunController(input: {
   runCurrentWorkflow: () => Promise<void>;
   submitRunInputDialog: () => void;
   retryRun: (runId: string) => Promise<void>;
+  retryMapItems: (runId: string, mapNodeId: string) => Promise<void>;
   resumeRun: (runId: string) => Promise<void>;
   cancelCurrentRun: () => void;
   cancelRun: (runId: string) => Promise<void>;
@@ -313,6 +314,53 @@ export function useWorkflowRunController(input: {
     });
   }
 
+  async function retryMapItems(runId: string, mapNodeId: string) {
+    if (!input.detail || isRunning) {
+      return;
+    }
+
+    const sourceRun = input.detail.runs.find((run) => run.id === runId);
+    if (!sourceRun) {
+      appendEventLog(`map retry failed: run ${runId} not found`);
+      return;
+    }
+    const sourceVersion = input.detail.versions.find(
+      (version) => version.id === sourceRun.workflowVersionId,
+    );
+
+    if (sourceVersion && sourceVersion.id !== input.selectedVersion?.id) {
+      if (
+        input.isScriptDirty &&
+        !window.confirm("Discard unsaved changes and switch to this run version?")
+      ) {
+        return;
+      }
+      input.applyVersion(sourceVersion);
+    }
+
+    await executeRunJob({
+      endpoint: `/api/workflows/${input.workflowId}/runs/${runId}/retry`,
+      body: { mapNodeId },
+      initialLog: `retry map ${mapNodeId}: ${runId}`,
+      activeTab: "runs",
+      runContext: {
+        workflowVersionId: sourceRun.workflowVersionId,
+        executorKind: sourceRun.executorKind,
+        agent: sourceRun.agent ?? undefined,
+        model: sourceRun.model ?? undefined,
+        cwd: sourceRun.cwd ?? undefined,
+        input: compactWorkflowRunInput({
+          retryOfRunId: runId,
+          agent: sourceRun.agent ?? undefined,
+          model: sourceRun.model ?? undefined,
+          cwd: sourceRun.cwd ?? undefined,
+        }),
+      },
+      retryRunId: runId,
+      failureLogPrefix: "map retry failed",
+    });
+  }
+
   async function resumeRun(runId: string) {
     if (!input.detail || isRunning) {
       return;
@@ -511,6 +559,7 @@ export function useWorkflowRunController(input: {
     runCurrentWorkflow,
     submitRunInputDialog,
     retryRun,
+    retryMapItems,
     resumeRun,
     cancelCurrentRun,
     cancelRun,

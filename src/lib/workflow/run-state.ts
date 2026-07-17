@@ -137,7 +137,7 @@ export function applyWorkflowRunEvent(
   if (event.type === "map_item_state") {
     const mapItemRuns = next.mapItemRuns ?? {};
     const current = mapItemRuns[event.mapItem.executionKey];
-    mapItemRuns[event.mapItem.executionKey] = {
+    const merged = {
       ...event.mapItem,
       ...(current ?? {}),
       kind: event.kind,
@@ -151,6 +151,12 @@ export function applyWorkflowRunEvent(
       ...(event.output !== undefined ? { output: event.output } : {}),
       ...(event.error ? { error: event.error } : {}),
     };
+    // A retried item that recovers must not keep showing its old failure:
+    // any non-failed state without a fresh error clears the stale one.
+    if (event.status !== "failed" && !event.error) {
+      delete merged.error;
+    }
+    mapItemRuns[event.mapItem.executionKey] = merged;
     next.mapItemRuns = mapItemRuns;
     return next;
   }

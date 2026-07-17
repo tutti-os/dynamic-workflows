@@ -185,6 +185,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     resetVersionRunState,
     submitRunInputDialog,
     retryRun,
+    retryMapItems,
     resumeRun,
     cancelCurrentRun,
     cancelRun,
@@ -443,6 +444,9 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         onSelectLoopStep={setSelectedLoopStepId}
         onSelectRun={selectRun}
         onRetryRun={(runId) => void retryRun(runId)}
+        onRetryMapItems={(runId, mapNodeId) =>
+          void retryMapItems(runId, mapNodeId)
+        }
         onResumeRun={(runId) => void resumeRun(runId)}
         onCancelRun={(runId) => void cancelRun(runId)}
         onCopyRunText={(key, text) => void copyRunText(key, text)}

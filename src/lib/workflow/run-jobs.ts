@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   cancelWorkflowRunAndHumanTasks,
   claimWorkflowRunForResume,
+  claimWorkflowRunForRetry,
   createWorkflowRun,
   finalizeWorkflowRunExecution,
   getWorkflowRun,
@@ -27,6 +28,8 @@ import type {
   WorkflowVersionRecord,
 } from "@/lib/db/workflows/types";
 import {
+  workflowMapNodeInvalidError,
+  workflowMapRetryInvalidError,
   workflowRunNotFoundError,
   workflowVersionNotFoundError,
 } from "@/lib/api/app-error";
@@ -236,6 +239,218 @@ async function resumeWorkflowRunJobInternal(input: {
     });
     throw error;
   }
+}
+
+/**
+ * Retry the failed items of a map node by riding the existing recovery
+ * machinery: rewrite the stored map checkpoint with the failed completions
+ * removed, mark the map node and every node downstream of it as not-completed
+ * (so recovery re-runs the cleared items and downstream re-runs on the
+ * corrected map output), and relaunch the same run's execution. Upstream
+ * completed nodes keep their outputs.
+ *
+ * Precondition: the run is in a terminal state and its map checkpoint has at
+ * least one failed item.
+ */
+export async function retryFailedMapItems(input: {
+  workflowId: string;
+  runId: string;
+  mapNodeId: string;
+}): Promise<WorkflowRunRecord> {
+  const run = getWorkflowRun(input.runId);
+  if (!run || run.workflowId !== input.workflowId) {
+    throw workflowRunNotFoundError();
+  }
+  if (jobs.has(run.id)) {
+    throw workflowMapRetryInvalidError(
+      "This run is still executing and cannot retry map items yet.",
+    );
+  }
+  if (
+    run.status !== "completed" &&
+    run.status !== "failed" &&
+    run.status !== "canceled"
+  ) {
+    throw workflowMapRetryInvalidError(
+      "Only a terminal workflow run can retry failed map items.",
+    );
+  }
+
+  const version = getWorkflowVersion(run.workflowVersionId);
+  if (!version || version.workflowId !== input.workflowId) {
+    throw workflowVersionNotFoundError();
+  }
+
+  const parsed = assertWorkflowScriptValid(version.script);
+  const { executableNodes } = createWorkflowExecutionPlan(parsed);
+  const mapNode = executableNodes.find((node) => node.id === input.mapNodeId);
+  if (!mapNode || mapNode.kind !== "map" || !mapNode.map) {
+    throw workflowMapNodeInvalidError(
+      `"${input.mapNodeId}" is not a map node in this run.`,
+    );
+  }
+
+  const checkpoints = listWorkflowRunCheckpoints(run.id);
+  const mapCheckpoint = checkpoints.find(
+    (checkpoint) =>
+      checkpoint.nodeId === input.mapNodeId &&
+      checkpoint.checkpoint.kind === "map",
+  );
+  const mapState =
+    mapCheckpoint?.checkpoint.kind === "map"
+      ? mapCheckpoint.checkpoint.state
+      : undefined;
+  const keptCompletions =
+    mapState?.completions.filter(
+      (completion) => completion.status !== "failed",
+    ) ?? [];
+  const hasFailedItems =
+    (mapState?.completions.length ?? 0) > keptCompletions.length;
+  if (!mapState || !hasFailedItems) {
+    throw workflowMapRetryInvalidError(
+      `Map "${input.mapNodeId}" has no failed items to retry.`,
+    );
+  }
+
+  // Mark the map node and every node downstream of it as not-completed while
+  // upstream stays completed. Downstream stale outputs are dropped so they
+  // cannot leak into re-run prompts; each node re-runs and refreshes its own.
+  const resetNodeIds = computeMapRetryResetNodeIds(
+    executableNodes,
+    input.mapNodeId,
+  );
+  const log = await readRunLog(run.logPath);
+  const baseSummary = createRunRecoveryState({
+    run,
+    version,
+    log,
+    checkpoints,
+  }).summary;
+  const resetSummary = resetSummaryForMapRetry(baseSummary, resetNodeIds);
+
+  const claim = claimWorkflowRunForRetry({
+    workflowId: input.workflowId,
+    runId: run.id,
+    result: toWorkflowRunResult(resetSummary),
+  });
+  if (!claim) {
+    return getWorkflowRun(run.id) ?? run;
+  }
+
+  const job: ActiveRunJob = {
+    abortController: new AbortController(),
+    executionToken: claim.token,
+    subscribers: new Set(),
+    wakeRequested: false,
+    ownershipLost: false,
+  };
+  jobs.set(run.id, job);
+
+  try {
+    // Rewrite the map checkpoint with the failed completions removed so
+    // recovery treats the cleared items as pending and re-runs only those.
+    upsertWorkflowRunCheckpoint({
+      runId: run.id,
+      nodeId: input.mapNodeId,
+      checkpoint: {
+        kind: "map",
+        state: { items: mapState.items, completions: keptCompletions },
+      },
+    });
+
+    const snapshot = createRecoveryStateFromSummary({
+      run: claim.run,
+      version,
+      summary: resetSummary,
+      checkpoints: listWorkflowRunCheckpoints(run.id),
+    });
+
+    ensureRunLogDirectory(run.logPath);
+    void executeWorkflowRunJob(
+      claim.run,
+      {
+        workflowId: run.workflowId,
+        version,
+        agent: run.agent ?? undefined,
+        model: run.model ?? undefined,
+        cwd: run.cwd ?? process.cwd(),
+        executorKind: run.executorKind,
+        inputs: readRunInputs(run.input),
+        input: run.input,
+        recovery: snapshot.recovery,
+        initialSummary: { ...resetSummary, status: "running" },
+      },
+      job,
+    );
+    return claim.run;
+  } catch (error) {
+    releaseWorkflowRunResumeClaim({ runId: run.id, token: claim.token });
+    if (jobs.get(run.id) === job) {
+      jobs.delete(run.id);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The map node plus the transitive set of nodes that consume its output
+ * (directly or through intermediate nodes), following dataflow input edges.
+ */
+function computeMapRetryResetNodeIds(
+  nodes: WorkflowNode[],
+  mapNodeId: string,
+): Set<string> {
+  const dependentsBySource = new Map<string, string[]>();
+  for (const node of nodes) {
+    for (const nodeInput of node.inputs) {
+      if (!nodeInput.sourceNodeId) {
+        continue;
+      }
+      const dependents = dependentsBySource.get(nodeInput.sourceNodeId) ?? [];
+      dependents.push(node.id);
+      dependentsBySource.set(nodeInput.sourceNodeId, dependents);
+    }
+  }
+
+  const reset = new Set<string>([mapNodeId]);
+  const queue = [mapNodeId];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const dependent of dependentsBySource.get(current) ?? []) {
+      if (!reset.has(dependent)) {
+        reset.add(dependent);
+        queue.push(dependent);
+      }
+    }
+  }
+  return reset;
+}
+
+function resetSummaryForMapRetry(
+  summary: WorkflowRunSummary,
+  resetNodeIds: Set<string>,
+): WorkflowRunSummary {
+  const nodeStatuses = { ...summary.nodeStatuses };
+  const outputs = { ...summary.outputs };
+  const nodeSessions = { ...summary.nodeSessions };
+  for (const nodeId of resetNodeIds) {
+    nodeStatuses[nodeId] = "queued";
+    delete outputs[nodeId];
+    // Drop the node's session record too: a queued node with a lingering
+    // session would be treated as crash recovery and ATTACH to the old agent
+    // session, harvesting its stale output instead of re-running with the
+    // corrected prompt.
+    delete nodeSessions[nodeId];
+  }
+  return {
+    ...summary,
+    status: "running",
+    error: undefined,
+    errorCode: undefined,
+    nodeStatuses,
+    outputs,
+    nodeSessions,
+  };
 }
 
 export async function markWorkflowRunInterruptedIfStale(
