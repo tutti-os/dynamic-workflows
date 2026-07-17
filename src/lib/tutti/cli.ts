@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { NextResponse } from "next/server";
 import { listAgentTargets } from "@/lib/agents/runtime";
 import type { AgentTargetOption } from "@/lib/agents/types";
@@ -642,7 +643,16 @@ async function runsWaitCommand(input: CliInput) {
       return { reason, timedOut: false, ...buildRunDetail(run) };
     }
     if (Date.now() >= deadline) {
-      return { reason: "timeout" as const, timedOut: true, ...buildRunDetail(run) };
+      // Timeout is NOT a stop point: return a compact progress fingerprint,
+      // not the full detail. Between stop points nothing is actionable for an
+      // orchestrator, and feeding it full snapshots on every bounded wait
+      // invites progress-polling that pollutes its context. Full detail
+      // arrives only with a real stop reason.
+      return {
+        reason: "timeout" as const,
+        timedOut: true,
+        ...buildRunProgressFingerprint(run),
+      };
     }
     await delay(
       Math.min(RUNS_WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())),
@@ -833,6 +843,36 @@ function buildRunDetail(run: WorkflowRunRecord) {
     humanTasks: listWorkflowHumanTasks(run.id, "pending"),
     notes: listWorkflowRunNotes(run.id),
     report: buildRunReport(run, result.outputs),
+  };
+}
+
+/**
+ * Compact payload for non-stop-point wait returns (timeout): just enough for a
+ * caller to detect stuckness across waits without any run content. `logBytes`
+ * grows with every run event, so an unchanged fingerprint across several waits
+ * means the run has made no progress at all.
+ */
+function buildRunProgressFingerprint(run: WorkflowRunRecord) {
+  let logBytes = 0;
+  if (run.logPath) {
+    try {
+      logBytes = fs.statSync(run.logPath).size;
+    } catch {
+      logBytes = 0;
+    }
+  }
+  return {
+    run: {
+      id: run.id,
+      workflowId: run.workflowId,
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+    },
+    progress: {
+      logBytes,
+      pendingHumanTasks: listWorkflowHumanTasks(run.id, "pending").length,
+    },
   };
 }
 

@@ -276,6 +276,13 @@ describe("dynamic workflows CLI runs wait", () => {
     expect(body.value.reason).toBe("timeout");
     expect(body.value.timedOut).toBe(true);
     expect(body.value.run.status).toBe("running");
+    // Timeout is not a stop point: the payload is a compact fingerprint, not
+    // the full detail — no result/report/humanTasks content to poll on.
+    expect(body.value.result).toBeUndefined();
+    expect(body.value.report).toBeUndefined();
+    expect(body.value.humanTasks).toBeUndefined();
+    expect(typeof body.value.progress.logBytes).toBe("number");
+    expect(body.value.progress.pendingHumanTasks).toBe(0);
 
     releaseRun?.();
     await waitUntil(() => !isWorkflowRunJobActive(run.id));

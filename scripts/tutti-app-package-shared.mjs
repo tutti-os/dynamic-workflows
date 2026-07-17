@@ -194,7 +194,7 @@ export function cliManifest(options = {}) {
         path: ["runs", "wait"],
         summary: "Block until a run reaches a stop point",
         description:
-          "Server-side bounded wait that returns when a run reaches a stop point: a terminal status (completed/failed/canceled/interrupted) or waiting on human input. Returns a reason, a timedOut flag, and the same detail shape as runs get; loop on bounded waits until a non-timeout reason.",
+          "Server-side bounded wait that returns when a run reaches a stop point: a terminal status (completed/failed/canceled/interrupted) or waiting on human input. A real stop point returns the full runs-get detail; a timeout returns only a compact progress fingerprint (run status, logBytes, pending task count) — loop on bounded waits until a non-timeout reason.",
         inputSchema: objectSchema(
           {
             "run-id": {
@@ -601,9 +601,11 @@ function agentJourneyGuide(scope) {
     `tutti --json ${scope} runs wait --run-id <run-id> --timeout-ms 10000`,
     "```",
     "",
-    "Short bounded waits in a loop are the contract: `--timeout-ms` defaults to and is capped at 10000 (10s), safely under the daemon CLI proxy's ~16s budget — a longer hold would die with a proxy error instead of a clean `timedOut`. `runs wait` blocks server-side until the run reaches a stop point, then returns `reason` plus the same detail shape as `runs get`. Handle each `reason`:",
+    "Short bounded waits in a loop are the contract: `--timeout-ms` defaults to and is capped at 10000 (10s), safely under the daemon CLI proxy's ~16s budget — a longer hold would die with a proxy error instead of a clean `timedOut`. `runs wait` blocks server-side until the run reaches a stop point; a real stop point returns `reason` plus the full `runs get` detail, while a timeout returns only a compact progress fingerprint (`run` status plus `progress.logBytes` and `progress.pendingHumanTasks`). Handle each `reason`:",
     "",
-    "- `timeout` (with `timedOut: true`): nothing decided yet — re-issue the same `runs wait`. For long runs, sleep locally between bounded waits (runs take minutes to hours; second-level polling is unnecessary) — e.g. wait 10s → if `timedOut`, sleep 20–30s → wait again. This is the normal heartbeat, not an error.",
+    "- `timeout` (with `timedOut: true`): nothing decided yet — re-issue the same `runs wait`. For long runs, sleep locally between bounded waits (runs take minutes to hours; second-level polling is unnecessary) — e.g. wait 10s → if `timedOut`, sleep 20–30s → wait again. This is the normal heartbeat, not an error. If `progress.logBytes` is unchanged across many consecutive waits, the run may be stuck — surface that to your user instead of continuing silently.",
+    "",
+    "**Orchestrator discipline.** Between stop points there is NOTHING for you to act on — the workflow's own gates do the supervising. Trust them: do not call `runs get` for progress, do not read partial outputs, and do not broadcast status updates between waits. Progress snapshots are pure context noise (high volume, zero decision value, stale on arrival) and they crowd out what you will need at the real stop point; your user can watch live progress in the run UI. Act at stop points, steer with operator notes when asked, and otherwise wait.",
     "- `waiting_human`: a human gate is open — go to step 5.",
     "- `completed`: consume the report — go to step 6.",
     "- `failed` / `interrupted` / `canceled`: go to step 7.",
@@ -637,6 +639,8 @@ function agentJourneyGuide(scope) {
     "```",
     "",
     "then go back to `runs wait`. A terminal `failed` run cannot be resumed; it can be retried from the run detail UI (a retry route exists for terminal runs). `canceled` means a human stopped it — do not restart it without your user's say-so.",
+    "",
+    "**Taking over a `not_accepted` delivery.** When a delivery blueprint completes with `report` showing `result: \"not_accepted\"` (the acceptance loop ran out of rounds), the work is not lost: the working tree holds the work in progress, and the final reviewer verdict in `result.outputs` is a machine-readable handover packet — `criteria` (items marked 通过 are DONE; do not redo or break them), `blockers` (location/issue/evidence/expectation — the remaining work), and `unverified` (must stay reported at delivery). Two levers, cheapest first: (1) re-run the same workflow on the same cwd with a larger `max_rounds` — the workspace persists, so the loop continues from the current state under the same independent gate; (2) take over free-form: fix the blockers yourself in the cwd within the requirement's stated scope (a blocker needing a new product decision goes to your user, never guessed), verify against the criteria, then either deliver per the requirement or re-run the workflow so the independent reviewer gives the final PASS.",
     "",
     "### Steering a run",
     "",
