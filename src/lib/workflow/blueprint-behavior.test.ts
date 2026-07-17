@@ -507,4 +507,271 @@ describe("builtin blueprint behavior", () => {
       );
     });
   });
+
+  describe("repo-migration-sweep-v1", () => {
+    const SCRIPT = loadBlueprint("repo-migration-sweep-v1.workflow.js");
+
+    const SITES = [
+      { file: "src/a.ts", line: 10, note: "migrate a" },
+      { file: "src/b.ts", line: 20, note: "migrate b" },
+    ];
+
+    it("discovers sites, runs a per-item migrate→verify pipeline, then a whole-change acceptance loop that reaches PASS and submits", async () => {
+      let reviewerRuns = 0;
+      const calls = mockAgentRuntime((input) => {
+        if (input.title === "发现调用点") {
+          return { text: JSON.stringify(SITES) };
+        }
+        if ((input.title ?? "").startsWith("迁移 ")) {
+          return { text: `migrated ${(input.title ?? "").slice("迁移 ".length)}` };
+        }
+        if ((input.title ?? "").startsWith("验收 ")) {
+          return { text: `checked ${(input.title ?? "").slice("验收 ".length)}\nVERIFIED` };
+        }
+        if (input.title === "整体修复") {
+          return { text: "whole-workspace repair done" };
+        }
+        if (input.title === "整体验收 Reviewer") {
+          reviewerRuns += 1;
+          return reviewerRuns === 1
+            ? { text: "阻断：跨文件回归\nFAIL" }
+            : { text: "整体通过\nPASS" };
+        }
+        return { text: "MR opened" };
+      });
+
+      const events = await collectRun({
+        script: SCRIPT,
+        agent: "mock",
+        cwd: process.cwd(),
+        inputs: { migration_brief: "把旧 API 迁移到新 API" },
+      });
+
+      // Each discovered site runs BOTH pipeline steps in order.
+      for (const file of ["src/a.ts", "src/b.ts"]) {
+        expect(callsWithTitle(calls, `迁移 ${file}`)).toHaveLength(1);
+        expect(callsWithTitle(calls, `验收 ${file}`)).toHaveLength(1);
+      }
+      // The per-item verify sees the SAME item's migration deliverable.
+      const verifyA = callsWithTitle(calls, "验收 src/a.ts")[0];
+      expect(verifyA.prompt).toContain("migrated src/a.ts");
+
+      // Acceptance loop enters at the reviewer: fix is SKIPPED on iteration 1.
+      const fixFirst = loopStepStates(events, "loop:acceptance_loop:1:fix");
+      expect(fixFirst).toHaveLength(1);
+      expect(fixFirst[0].status).toBe("skipped");
+
+      // Reviewer runs independent each round (promptMode "full") and sees the map record.
+      expect(
+        loopStepRunning(events, "loop:acceptance_loop:1:reviewer")?.promptMode,
+      ).toBe("full");
+      const reviewerCalls = callsWithTitle(calls, "整体验收 Reviewer");
+      expect(reviewerCalls[0].prompt).toContain('"total":2');
+
+      // Reviewer FAIL → fix runs on iteration 2 (independent session, full prompt)
+      // and receives the reviewer feedback.
+      expect(
+        loopStepRunning(events, "loop:acceptance_loop:2:fix")?.promptMode,
+      ).toBe("full");
+      const fixCalls = callsWithTitle(calls, "整体修复");
+      expect(fixCalls).toHaveLength(1);
+      expect(fixCalls[0].prompt).toContain("阻断：跨文件回归");
+
+      // submit_mr gates on the until_matched stop reason.
+      const submitCalls = callsWithTitle(calls, "提交 MR");
+      expect(submitCalls).toHaveLength(1);
+      expect(submitCalls[0].prompt).toContain("Stop reason: until_matched");
+
+      expect(LAST(events)).toEqual(
+        expect.objectContaining({ type: "run_completed", status: "completed" }),
+      );
+    });
+  });
+
+  describe("research-fanout-report-v1", () => {
+    const SCRIPT = loadBlueprint("research-fanout-report-v1.workflow.js");
+
+    const PLAN = [
+      { id: "q1", question: "What is X?", why: "core" },
+      { id: "q2", question: "What is Y?", why: "context" },
+    ];
+
+    it("fans out a research→fact-check pipeline and synthesizes with confidence propagated", async () => {
+      const calls = mockAgentRuntime((input) => {
+        if (input.title === "Decompose the topic") {
+          return { text: JSON.stringify(PLAN) };
+        }
+        if ((input.title ?? "").startsWith("Research q")) {
+          const id = (input.title ?? "").slice("Research ".length);
+          return { text: `answer for ${id}` };
+        }
+        if ((input.title ?? "").startsWith("Fact-check q")) {
+          const id = (input.title ?? "").slice("Fact-check ".length);
+          return { text: `survivors for ${id}\nConfidence: medium` };
+        }
+        return { text: "FINAL REPORT" };
+      });
+
+      const events = await collectRun({
+        script: SCRIPT,
+        agent: "mock",
+        cwd: process.cwd(),
+        inputs: { research_topic: "Explain X and Y for engineers" },
+      });
+
+      // Each sub-question runs both pipeline steps.
+      for (const id of ["q1", "q2"]) {
+        expect(callsWithTitle(calls, `Research ${id}`)).toHaveLength(1);
+        expect(callsWithTitle(calls, `Fact-check ${id}`)).toHaveLength(1);
+      }
+      // The fact-check step adversarially checks the SAME sub-question's answer.
+      const factCheckQ1 = callsWithTitle(calls, "Fact-check q1")[0];
+      expect(factCheckQ1.prompt).toContain("answer for q1");
+
+      // The report receives the map record with the fact-check verdicts.
+      const report = callsWithTitle(calls, "Synthesize report")[0];
+      expect(report.prompt).toContain('"total":2');
+      expect(report.prompt).toContain("Confidence: medium");
+      expect(report.prompt).toContain("survivors for q1");
+
+      expect(LAST(events)).toEqual(
+        expect.objectContaining({ type: "run_completed", status: "completed" }),
+      );
+    });
+  });
+
+  describe("release-readiness-check-v1", () => {
+    const SCRIPT = loadBlueprint("release-readiness-check-v1.workflow.js");
+
+    it("runs the five static checks, gates on a human no_go decision, and records the reason", async () => {
+      const calls = mockAgentRuntime((input) => {
+        if ((input.title ?? "").startsWith("Check ")) {
+          const check = (input.title ?? "").slice("Check ".length);
+          const verdict = check === "security" ? "blocked" : "ready";
+          return {
+            text: JSON.stringify({
+              check,
+              verdict,
+              evidence: `evidence for ${check}`,
+              notes: "",
+            }),
+          };
+        }
+        if (input.title === "Summarize readiness") {
+          return { text: "NO-GO: security blocked" };
+        }
+        return { text: "AUDIT RECORD" };
+      });
+
+      const events = await collectRun({
+        script: SCRIPT,
+        agent: "mock",
+        cwd: process.cwd(),
+        inputs: { release_scope: "Cut v1.2 from release branch" },
+        onHumanTask: (request) =>
+          humanTask(request, "resolved", {
+            action: "no_go",
+            values: { reason: "security check is blocked" },
+          }),
+      });
+
+      // All five fixed dimensions run exactly once.
+      for (const check of ["changelog", "tests", "migrations", "docs", "security"]) {
+        expect(callsWithTitle(calls, `Check ${check}`)).toHaveLength(1);
+      }
+
+      // Summary receives the map record with the per-check JSON verdicts.
+      const summary = callsWithTitle(calls, "Summarize readiness")[0];
+      expect(summary.prompt).toContain('"total":5');
+      expect(summary.prompt).toContain('"verdict":"blocked"');
+
+      // The human gate resolved to no_go on the go_no_go node.
+      const humanResolved = events.filter(
+        (event) => event.type === "human_task_resolved",
+      );
+      expect(humanResolved).toHaveLength(1);
+      expect(
+        humanResolved[0].type === "human_task_resolved" &&
+          humanResolved[0].nodeId === "go_no_go",
+      ).toBe(true);
+
+      // record restates the decision action and the human's reason via dotted refs.
+      const record = callsWithTitle(calls, "Record decision")[0];
+      expect(record.prompt).toContain('chose "no_go"');
+      expect(record.prompt).toContain("security check is blocked");
+
+      expect(LAST(events)).toEqual(
+        expect.objectContaining({ type: "run_completed", status: "completed" }),
+      );
+    });
+  });
+
+  describe("epic-breakdown-plan-v1", () => {
+    const SCRIPT = loadBlueprint("epic-breakdown-plan-v1.workflow.js");
+
+    const TASKS = [
+      { id: "t1", title: "Set up", goal: "scaffold", dependencies: [] },
+      { id: "t2", title: "Build", goal: "implement", dependencies: ["t1"] },
+    ];
+
+    it("iterates decompose with a revise round, extracts the approved tasks, then details each and assembles the plan", async () => {
+      let decomposeRuns = 0;
+      const calls = mockAgentRuntime((input) => {
+        if (input.title === "Decompose the epic") {
+          decomposeRuns += 1;
+          return { text: JSON.stringify(TASKS), sessionId: "planner-session" };
+        }
+        if (input.title === "Extract approved tasks") {
+          return { text: JSON.stringify(TASKS) };
+        }
+        if ((input.title ?? "").startsWith("Detail ")) {
+          const title = (input.title ?? "").slice("Detail ".length);
+          return { text: `spec for ${title}` };
+        }
+        return { text: "FINAL PLAN" };
+      });
+
+      const events = await collectRun({
+        script: SCRIPT,
+        agent: "mock",
+        cwd: process.cwd(),
+        inputs: { epic_brief: "Ship the onboarding epic" },
+        onHumanTask: (request) =>
+          humanTask(
+            request,
+            "resolved",
+            request.iteration === 1
+              ? { action: "revise", values: { comment: "split task t2" } }
+              : { action: "approve", values: {} },
+          ),
+      });
+
+      // Decompose runs twice: initial + one revise round before approval.
+      const decomposeCalls = callsWithTitle(calls, "Decompose the epic");
+      expect(decomposeCalls).toHaveLength(2);
+      // Round 2 resumes the inherited planner session (append) with the comment.
+      expect(
+        loopStepRunning(events, "loop:breakdown:2:decompose")?.promptMode,
+      ).toBe("append");
+      expect(decomposeCalls[1].prompt).toContain("split task t2");
+
+      // Extract reads the loop record and re-emits the approved array.
+      const extract = callsWithTitle(calls, "Extract approved tasks")[0];
+      expect(extract.prompt).toContain("[decompose]");
+
+      // Map details each approved task exactly once.
+      for (const title of ["Set up", "Build"]) {
+        expect(callsWithTitle(calls, `Detail ${title}`)).toHaveLength(1);
+      }
+
+      // The final plan receives the map record with the per-task specs.
+      const finalPlan = callsWithTitle(calls, "Assemble final plan")[0];
+      expect(finalPlan.prompt).toContain('"total":2');
+      expect(finalPlan.prompt).toContain("spec for Set up");
+
+      expect(LAST(events)).toEqual(
+        expect.objectContaining({ type: "run_completed", status: "completed" }),
+      );
+    });
+  });
 });

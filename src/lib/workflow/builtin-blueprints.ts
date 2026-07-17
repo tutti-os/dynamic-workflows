@@ -116,6 +116,98 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       ),
     ),
   },
+  {
+    id: "repo-migration-sweep-v1",
+    title: "Repo Migration Sweep",
+    description:
+      "Discover call sites as JSON, migrate and verify each with map, run an independent whole-change acceptance loop, then open an MR that lists any skipped or rejected sites honestly.",
+    category: "coding",
+    tags: ["migration", "map", "loop", "acceptance", "independent-review", "mr", "cwd"],
+    difficulty: "advanced",
+    requiresCwd: true,
+    patternSummary:
+      "Combines dynamic fan-out with an acceptance loop for a migration. A discovery step emits a bounded JSON array of call sites; map runs a per-item adversarial migrate→verify pipeline with onItemFailure skip. A bounded acceptance loop then judges the WHOLE change, entering first at the reviewer: fix runs in a fresh independent session driven by git state and reviewer feedback, and an independent reviewer (optional agent/model override) re-judges cross-file regressions via a self-reference and the map record. Submit gates on the loop stop reason and lists rejected/failed sites in the PR.",
+    useCases: [
+      "Sweep a from→to API or pattern migration across a repository call site by call site.",
+      "Catch cross-file regressions the per-item verify cannot see with a whole-change reviewer.",
+      "Open an MR that reports skipped and rejected sites instead of claiming full completion.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL(
+        "./blueprints/repo-migration-sweep-v1.workflow.js",
+        import.meta.url,
+      ),
+    ),
+  },
+  {
+    id: "research-fanout-report-v1",
+    title: "Research Fan-Out Report",
+    description:
+      "Decompose a topic into sub-questions as JSON, research each in parallel with an adversarial fact-check, then synthesize a cited report that keeps per-claim confidence and a coverage section.",
+    category: "research",
+    tags: ["research", "map", "fan-out", "fact-check", "citations", "synthesis"],
+    difficulty: "starter",
+    requiresCwd: false,
+    patternSummary:
+      "A planning step with output json decomposes the topic into 3..6 sub-questions; map fans out a per-item research→fact-check pipeline. The researcher cites sources when the runtime has web access and marks unverifiable claims when it does not; the fact-checker adversarially tries to refute each claim, drops what it cannot confirm, and ends with a Confidence high|medium|low line. The synthesizer orders by sub-question, preserves per-claim confidence and citations, and keeps failed, low-confidence, and unverified items in an explicit Coverage section.",
+    useCases: [
+      "Produce a fact-checked, cited report on a research question with parallel coverage.",
+      "Keep honest confidence and unverified tags instead of laundering weak claims into confident prose.",
+      "Run without a project directory — the runtime's own web access, if any, supplies sources.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL(
+        "./blueprints/research-fanout-report-v1.workflow.js",
+        import.meta.url,
+      ),
+    ),
+  },
+  {
+    id: "release-readiness-check-v1",
+    title: "Release Readiness Check",
+    description:
+      "Run five fixed release checks in parallel with a static map, merge them into a go/no-go summary, gate on a human decision, and record the outcome with any blockers for audit.",
+    category: "ops",
+    tags: ["release", "map", "static-list", "human", "gate", "go-no-go", "json-output", "cwd"],
+    difficulty: "starter",
+    requiresCwd: true,
+    patternSummary:
+      "A static inline list of five checks (changelog, tests, migrations, docs, security) drives a map whose single step verifies exactly one dimension against the actual repository and ends with a JSON verdict of ready or blocked. A summary merges the verdicts into a GO/NO-GO recommendation with blocked and failed checks explicit, a human gate captures go (primary) or no_go (danger, reason required), and a final record agent restates the decision, the reason via dotted refs, and outstanding blockers plainly for audit — with no external side effects.",
+    useCases: [
+      "Gate a release on a fixed checklist verified against the real repository state.",
+      "Demonstrate a static-list map, a JSON per-check verdict, and a human go/no-go gate.",
+      "Produce an auditable record of the decision and accepted blockers without shipping anything.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL(
+        "./blueprints/release-readiness-check-v1.workflow.js",
+        import.meta.url,
+      ),
+    ),
+  },
+  {
+    id: "epic-breakdown-plan-v1",
+    title: "Epic Breakdown Plan",
+    description:
+      "Decompose an epic into a JSON task list and iterate with a human approver, extract the approved tasks, detail each with map, and assemble an ordered plan with a coverage section.",
+    category: "planning",
+    tags: ["planning", "epic", "loop", "human", "map", "json-output", "extract"],
+    difficulty: "advanced",
+    requiresCwd: false,
+    patternSummary:
+      "A loop pairs a decompose step (output json, inherited planner session, appendPrompt revisions) with a human approve/revise gate, running until approved. Because a map cannot source a loop record, a post-loop extract step (output json) re-emits the approved task array verbatim; map then details each task independently (estimate-free scope + acceptance criteria + dependencies), and a final step assembles the tasks in dependency order with a Coverage section for any that failed to detail.",
+    useCases: [
+      "Turn an epic into an approved, dependency-ordered task plan with detailed specs.",
+      "Iterate a decomposition with a human until approved before expanding any task.",
+      "Demonstrate feeding a loop-approved list into a map via an explicit extract step.",
+    ],
+    script: readBuiltinBlueprintScript(
+      new URL(
+        "./blueprints/epic-breakdown-plan-v1.workflow.js",
+        import.meta.url,
+      ),
+    ),
+  },
 ];
 
 function readBuiltinBlueprintScript(fileUrl: URL): string {

@@ -27,6 +27,10 @@ describe("workflow blueprint catalog", () => {
       "rd-human-acceptance-delivery-v1",
       "parallel-review-synthesis-v1",
       "map-fan-out-demo-v1",
+      "repo-migration-sweep-v1",
+      "research-fanout-report-v1",
+      "release-readiness-check-v1",
+      "epic-breakdown-plan-v1",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
     expect(BUILTIN_WORKFLOW_BLUEPRINTS.map((blueprint) => blueprint.id)).toEqual(
@@ -123,6 +127,7 @@ describe("workflow blueprint catalog", () => {
     expect(results.map((result) => result.id)).toEqual([
       "loop-primitive-rd-acceptance-test-v1",
       "rd-human-acceptance-delivery-v1",
+      "repo-migration-sweep-v1",
     ]);
     expect(results[0]).not.toHaveProperty("script");
     expect(
