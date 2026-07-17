@@ -23,7 +23,7 @@ export async function POST(
       { status: 400 },
     );
   }
-  return handleDynamicWorkflowsCliRequest(path, body);
+  return handleDynamicWorkflowsCliRequest(path, body, request);
 }
 
 async function readJsonBody(request: Request): Promise<unknown> {

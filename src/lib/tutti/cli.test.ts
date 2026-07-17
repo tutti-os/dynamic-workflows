@@ -168,6 +168,109 @@ const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
     expect(body.value.run.input).not.toHaveProperty("model");
   });
 
+  it("reports the request-derived baseUrl in status", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const request = new Request("http://127.0.0.1:4123/tutti/cli/status", {
+      method: "POST",
+      headers: { host: "127.0.0.1:4123" },
+    });
+
+    const response = await handleDynamicWorkflowsCliRequest(
+      ["status"],
+      {},
+      request,
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value.app.baseUrl).toBe("http://127.0.0.1:4123");
+    expect(typeof body.value.app.cwdRoot).toBe("string");
+  });
+
+  it("imports a workflow script string as a saved workflow", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const response = await handleDynamicWorkflowsCliRequest(["import"], {
+      input: {
+        script: `
+export const meta = { name: "Imported", description: "Imported workflow" }
+const first = await agent({ id: "first", prompt: "Plan" })
+`,
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(true);
+    expect(body.value.workflow.name).toBe("Imported");
+    expect(body.value.currentVersion.version).toBe(1);
+  });
+
+  it("returns a domain envelope for an invalid import script", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const response = await handleDynamicWorkflowsCliRequest(["import"], {
+      input: { script: "this is not a workflow (((" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("workflow_script_invalid");
+    expect(body.value.error.status).toBe(400);
+  });
+
+  it("instantiates a blueprint into a runnable workflow", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const response = await handleDynamicWorkflowsCliRequest(
+      ["blueprints", "instantiate"],
+      {
+        input: {
+          "blueprint-id": "human-feedback-loop-v1",
+          name: "My feedback loop",
+        },
+      },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(true);
+    expect(body.value.workflow.name).toBe("My feedback loop");
+    expect(body.value.currentVersion.version).toBe(1);
+  });
+
+  it("returns a domain envelope for an unknown blueprint id", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const response = await handleDynamicWorkflowsCliRequest(
+      ["blueprints", "instantiate"],
+      { input: { "blueprint-id": "does-not-exist" } },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("workflow_blueprint_not_found");
+    expect(body.value.error.status).toBe(404);
+  });
+
   it("starts a run without inputs or model", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;

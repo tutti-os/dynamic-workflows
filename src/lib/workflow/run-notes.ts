@@ -111,7 +111,13 @@ async function deliverCurrentNote(
   });
 
   try {
-    await sendAgentMessage({ agentSessionId, message: input.message });
+    // Guidance mode: a running node IS an active turn, so a plain send is
+    // rejected. Deliver the steer into the in-flight turn instead.
+    await sendAgentMessage({
+      agentSessionId,
+      message: input.message,
+      guidance: true,
+    });
     const delivered = markWorkflowRunNoteDelivered({
       noteId: note.id,
       ok: true,

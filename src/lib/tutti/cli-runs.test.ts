@@ -129,8 +129,12 @@ describe("dynamic workflows CLI runs get", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(404);
-    expect(body.error.code).toBe("run_not_found");
+    // Domain errors return HTTP 200 with an envelope so the daemon proxy cannot
+    // flatten the domain code into a generic workspace_operation_failed.
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("run_not_found");
+    expect(body.value.error.status).toBe(404);
   });
 
   it("reports a stale running run as interrupted", async () => {
@@ -492,8 +496,10 @@ describe("dynamic workflows CLI runs respond", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(body.error.code).toBe("human_task_invalid");
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("human_task_invalid");
+    expect(body.value.error.status).toBe(400);
   });
 
   it("rejects an unknown task id", async () => {
@@ -511,8 +517,10 @@ describe("dynamic workflows CLI runs respond", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(404);
-    expect(body.error.code).toBe("human_task_not_found");
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("human_task_not_found");
+    expect(body.value.error.status).toBe(404);
   });
 
   it("rejects a stale revision as a conflict", async () => {
@@ -531,8 +539,10 @@ describe("dynamic workflows CLI runs respond", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(409);
-    expect(body.error.code).toBe("human_task_conflict");
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("human_task_conflict");
+    expect(body.value.error.status).toBe(409);
   });
 
   it("returns run_not_found for an unknown run", async () => {
@@ -548,7 +558,9 @@ describe("dynamic workflows CLI runs respond", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(404);
-    expect(body.error.code).toBe("run_not_found");
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("run_not_found");
+    expect(body.value.error.status).toBe(404);
   });
 });

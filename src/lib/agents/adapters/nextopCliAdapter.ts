@@ -611,7 +611,11 @@ export function createNextopCliAgentAdapter(
       }
       await runner(["--json", "agent", "open", "--session-id", trimmed]);
     },
-    async sendToSession(agentSessionId: string, message: string): Promise<void> {
+    async sendToSession(
+      agentSessionId: string,
+      message: string,
+      options?: { guidance?: boolean },
+    ): Promise<void> {
       const trimmed = agentSessionId.trim();
       if (!trimmed) {
         throw new Error("agentSessionId is required");
@@ -624,6 +628,10 @@ export function createNextopCliAgentAdapter(
         trimmed,
         "--prompt",
         message,
+        // A workflow node execution is itself an active turn, so a plain send
+        // ("start a new turn") is rejected. Guidance mode injects the steer into
+        // the in-flight turn instead.
+        ...(options?.guidance ? ["--guidance"] : []),
       ]);
     },
   };

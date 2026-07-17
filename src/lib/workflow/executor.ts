@@ -2189,17 +2189,47 @@ function resolveNodeTemplateValue(
   return workflowInputs?.[name] ?? workflowInputs?.[root];
 }
 
+// Bound a single gate context value so the whole human-task payload stays under
+// the daemon CLI proxy's response budget. Long upstream outputs (e.g. a full
+// "Current result") would otherwise be silently cut downstream. Head-keeping
+// with an explicit marker so a reader sees exactly what was dropped.
+const HUMAN_CONTEXT_VALUE_MAX_CHARS = 12_000;
+
+function truncateHumanContextValue(value: WorkflowValue): {
+  value: WorkflowValue;
+  truncated: boolean;
+} {
+  if (
+    typeof value !== "string" ||
+    value.length <= HUMAN_CONTEXT_VALUE_MAX_CHARS
+  ) {
+    return { value, truncated: false };
+  }
+  const kept = value.slice(0, HUMAN_CONTEXT_VALUE_MAX_CHARS);
+  const removed = value.length - kept.length;
+  return {
+    value: `${kept}\n…[truncated ${removed} chars]`,
+    truncated: true,
+  };
+}
+
 function renderHumanSpec(
   human: WorkflowHumanSpec,
   resolveValue: (name: string) => WorkflowValue | undefined,
 ): RenderedWorkflowHumanSpec {
   return {
     ...(human.description !== undefined ? { description: human.description } : {}),
-    context: human.context.map((item) => ({
-      label: item.label,
-      display: item.display,
-      value: renderTemplateValue(item.value, resolveValue),
-    })),
+    context: human.context.map((item) => {
+      const { value, truncated } = truncateHumanContextValue(
+        renderTemplateValue(item.value, resolveValue),
+      );
+      return {
+        label: item.label,
+        display: item.display,
+        value,
+        ...(truncated ? { truncated: true } : {}),
+      };
+    }),
     actions: human.actions.map((action) => ({
       ...action,
       fields: action.fields.map((field) => ({

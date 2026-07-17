@@ -97,9 +97,12 @@ describe("recordRunNote current delivery", () => {
       nodeId: "first",
     });
 
+    // Steering a running node must use guidance mode: the node execution is an
+    // active turn, so a plain send would be rejected.
     expect(mocks.sendAgentMessage).toHaveBeenCalledWith({
       agentSessionId: "sess-live",
       message: "stop and rerun the tests",
+      guidance: true,
     });
     expect(result.note.status).toBe("delivered");
     expect(result.delivery).toEqual({ ok: true, agentSessionId: "sess-live" });

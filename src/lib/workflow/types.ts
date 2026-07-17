@@ -224,6 +224,12 @@ export type RenderedWorkflowHumanContextItem = {
   label: string;
   value: WorkflowValue;
   display: WorkflowHumanContextDisplay;
+  /**
+   * Set when the rendered value was truncated to bound the gate payload. The
+   * value carries an inline `…[truncated N chars]` marker as well, so a plain
+   * text reader still sees that content was cut.
+   */
+  truncated?: boolean;
 };
 
 export type RenderedWorkflowHumanSpec = Omit<WorkflowHumanSpec, "context"> & {

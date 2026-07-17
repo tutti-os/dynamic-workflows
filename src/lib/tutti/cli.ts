@@ -35,6 +35,10 @@ import {
   searchWorkflowBlueprints,
 } from "@/lib/workflow/blueprint-catalog";
 import {
+  BlueprintNotFoundError,
+  instantiateWorkflowBlueprint,
+} from "@/lib/workflow/blueprint-instantiate";
+import {
   WORKFLOW_BLUEPRINT_CATEGORIES,
   isWorkflowBlueprintCategory,
 } from "@/lib/workflow/blueprint-contract";
@@ -118,6 +122,7 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "show",
   "validate",
   "create",
+  "import",
   "run",
   "runs/get",
   "runs/wait",
@@ -126,6 +131,7 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "blueprints/list",
   "blueprints/search",
   "blueprints/get",
+  "blueprints/instantiate",
   "authoring/validate",
   "authoring/submit",
   "resume",
@@ -134,6 +140,7 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
 export async function handleDynamicWorkflowsCliRequest(
   path: string[],
   body: unknown,
+  request?: Request,
 ): Promise<NextResponse<CliOutput | CliErrorResponse>> {
   const normalizedPath = path.map((segment) => segment.trim()).filter(Boolean);
   const context = readCliContext(body);
@@ -142,7 +149,7 @@ export async function handleDynamicWorkflowsCliRequest(
   try {
     switch (normalizedPath.join("/")) {
       case "status":
-        return cliJson(await statusCommand());
+        return cliJson(await statusCommand(request));
       case "agents":
         return cliJson({ agents: await listAgentTargets() });
       case "list":
@@ -153,16 +160,18 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(validateCommand(input));
       case "create":
         return cliJson(await createCommand(input));
+      case "import":
+        return envelope(() => importCommand(input));
       case "run":
-        return cliJson(await runCommand(input));
+        return envelope(() => runCommand(input));
       case "runs/get":
-        return cliJson(await runsGetCommand(input));
+        return envelope(() => runsGetCommand(input));
       case "runs/wait":
-        return cliJson(await runsWaitCommand(input));
+        return envelope(() => runsWaitCommand(input));
       case "runs/respond":
-        return cliJson(await runsRespondCommand(input));
+        return envelope(() => runsRespondCommand(input));
       case "runs/note":
-        return cliJson(await runsNoteCommand(input));
+        return envelope(() => runsNoteCommand(input));
       case "resume":
         return cliJson(await resumeCommand(input));
       case "blueprints/list":
@@ -171,6 +180,8 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(blueprintsSearchCommand(input));
       case "blueprints/get":
         return cliJson(blueprintsGetCommand(input));
+      case "blueprints/instantiate":
+        return envelope(() => instantiateCommand(input));
       case "authoring/validate":
         return cliJson(authoringValidateCommand(input));
       case "authoring/submit":
@@ -187,18 +198,72 @@ export async function handleDynamicWorkflowsCliRequest(
   }
 }
 
-async function statusCommand() {
+/**
+ * Run a command whose EXPECTED domain errors must survive the daemon's CLI
+ * proxy. The proxy flattens any non-2xx handler response into a generic
+ * `workspace_operation_failed`, destroying domain codes (run_cwd_conflict,
+ * run_note_no_live_session, human_task_conflict, workflow_script_invalid, ...).
+ * So expected domain errors (a CliHttpError or WorkflowScriptSyntaxError with a
+ * client-side 4xx status) are returned as HTTP 200 carrying a structured error
+ * envelope `{ ok: false, error: { code, status, message, details? } }`, and
+ * success payloads gain `ok: true`. Unexpected failures (5xx, unknown errors)
+ * still bubble to `cliErrorResponse` and stay 5xx.
+ */
+async function envelope(
+  run: () => Record<string, unknown> | Promise<Record<string, unknown>>,
+): Promise<NextResponse<CliOutput>> {
+  let value: Record<string, unknown>;
+  try {
+    value = await run();
+  } catch (error) {
+    const domain = readDomainError(error);
+    if (domain) {
+      return cliJson({ ok: false, error: domain });
+    }
+    throw error;
+  }
+  return cliJson({ ok: true, ...value });
+}
+
+function readDomainError(error: unknown):
+  | { code: string; status: number; message: string; details?: unknown }
+  | undefined {
+  if (error instanceof CliHttpError && error.status < 500) {
+    return {
+      code: error.code,
+      status: error.status,
+      message: error.message,
+      ...(error.details === undefined ? {} : { details: error.details }),
+    };
+  }
+  if (error instanceof WorkflowScriptSyntaxError) {
+    return {
+      code: "workflow_script_invalid",
+      status: 400,
+      message: error.message,
+      details: { diagnostics: error.diagnostics },
+    };
+  }
+  return undefined;
+}
+
+async function statusCommand(request?: Request) {
   const workflows = listWorkflows();
   const agents = await readAgentTargetsForStatus();
   const latestRuns = workflows.flatMap((item) =>
     item.latestRun ? [item.latestRun] : [],
   );
+  const baseUrl = readBaseUrl(request);
 
   return {
     ok: true,
     app: {
       scope: "dynamic-workflows",
       cwdRoot: getWorkflowCwdRoot(),
+      // The app's HTTP origin, derived from the incoming request, so a caller
+      // never has to discover the port from process listening tables. Any HTTP
+      // fallback (if ever needed) targets this.
+      ...(baseUrl ? { baseUrl } : {}),
     },
     workflows: {
       count: workflows.length,
@@ -414,6 +479,59 @@ function blueprintsGetCommand(input: CliInput) {
   };
 }
 
+/**
+ * Instantiate a blueprint as a saved, runnable workflow. Wraps the SAME service
+ * the UI instantiate route uses, so the created workflow is identical. Use this
+ * only when the blueprint matches the requirement as-is; otherwise read its
+ * script (`blueprints get --include-script`), adapt it, and `import`.
+ */
+function instantiateCommand(input: CliInput) {
+  const blueprintId = readRequiredString(input, ["blueprint-id", "blueprintId"]);
+  const name = readOptionalString(input, ["name"]);
+  let detail;
+  try {
+    detail = instantiateWorkflowBlueprint(blueprintId, { name });
+  } catch (error) {
+    if (error instanceof BlueprintNotFoundError) {
+      throw new CliHttpError(
+        "workflow_blueprint_not_found",
+        error.message,
+        404,
+      );
+    }
+    throw error;
+  }
+  return {
+    workflow: detail.workflow,
+    currentVersion: detail.currentVersion,
+  };
+}
+
+/**
+ * Import a workflow script string as a new saved workflow. Wraps the SAME
+ * service the UI import route uses. This is the backbone of the adaptation path
+ * (edit a blueprint's script, then import) and the self-authored path (write the
+ * DSL yourself, `validate`, then import).
+ */
+function importCommand(input: CliInput) {
+  const script = readRequiredString(input, ["script"]);
+  let detail;
+  try {
+    detail = createWorkflowFromScript(script);
+  } catch (error) {
+    if (error instanceof WorkflowScriptSyntaxError) {
+      throw new CliHttpError("workflow_script_invalid", error.message, 400, {
+        diagnostics: error.diagnostics,
+      });
+    }
+    throw error;
+  }
+  return {
+    workflow: detail.workflow,
+    currentVersion: detail.currentVersion,
+  };
+}
+
 function authoringSubmitCommand(input: CliInput) {
   const jobId = readRequiredString(input, ["job-id", "jobId"]);
   const file = readOptionalString(input, ["file"]);
@@ -479,11 +597,13 @@ async function resumeCommand(input: CliInput) {
 }
 
 // A wait caller loops on bounded waits; keep the server-side hold well under
-// any HTTP timeout the daemon CLI proxy might impose. The proxy's own timeout
-// is not observable from this repo, so cap conservatively at 120s and let
-// callers re-issue `runs wait` until they see a terminal or waiting reason.
-const RUNS_WAIT_DEFAULT_TIMEOUT_MS = 120_000;
-const RUNS_WAIT_MAX_TIMEOUT_MS = 120_000;
+// the daemon CLI proxy's own budget. In production the app-CLI handler cuts the
+// request at ~16s (app_cli_handler_timeout), so a longer hold dies with a proxy
+// error instead of returning a clean timedOut. Default AND cap to 10s — safely
+// under that budget — and let callers re-issue `runs wait` until they see a
+// terminal or waiting reason.
+const RUNS_WAIT_DEFAULT_TIMEOUT_MS = 10_000;
+const RUNS_WAIT_MAX_TIMEOUT_MS = 10_000;
 const RUNS_WAIT_POLL_INTERVAL_MS = 500;
 
 async function runsGetCommand(input: CliInput) {
@@ -939,6 +1059,35 @@ function assertRequiredWorkflowCwd(
       400,
     );
   }
+}
+
+/**
+ * Derive the app's HTTP origin from the incoming request so `status` can report
+ * a `baseUrl`. Honors reverse-proxy headers, then falls back to the request's
+ * own host/URL. Returns undefined when no request is available (e.g. direct
+ * unit-test dispatch).
+ */
+function readBaseUrl(request?: Request): string | undefined {
+  if (!request) {
+    return undefined;
+  }
+  let url: URL | undefined;
+  try {
+    url = new URL(request.url);
+  } catch {
+    url = undefined;
+  }
+  const host =
+    request.headers.get("x-forwarded-host") ??
+    request.headers.get("host") ??
+    url?.host;
+  if (!host) {
+    return undefined;
+  }
+  const proto =
+    request.headers.get("x-forwarded-proto") ??
+    (url ? url.protocol.replace(/:$/, "") : "http");
+  return `${proto}://${host}`;
 }
 
 function readCliContext(body: unknown): CliContext {

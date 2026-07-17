@@ -58,6 +58,7 @@ describe("dynamic workflows CLI runs note", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(true);
     expect(body.value.note).toMatchObject({
       runId: run.id,
       message: "Prioritize the failing test",
@@ -79,8 +80,12 @@ describe("dynamic workflows CLI runs note", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(404);
-    expect(body.error.code).toBe("run_not_found");
+    // Domain errors return HTTP 200 with an envelope so the daemon proxy cannot
+    // flatten the code into a generic workspace_operation_failed.
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("run_not_found");
+    expect(body.value.error.status).toBe(404);
   });
 
   it("rejects a current-target note when no live session exists", async () => {
@@ -92,9 +97,11 @@ describe("dynamic workflows CLI runs note", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(409);
-    expect(body.error.code).toBe("run_note_no_live_session");
-    expect(body.error.message).toMatch(/next-step/);
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("run_note_no_live_session");
+    expect(body.value.error.status).toBe(409);
+    expect(body.value.error.message).toMatch(/next-step/);
   });
 
   it("rejects an invalid target", async () => {
@@ -106,7 +113,9 @@ describe("dynamic workflows CLI runs note", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(body.error.code).toBe("invalid_input");
+    expect(response.status).toBe(200);
+    expect(body.value.ok).toBe(false);
+    expect(body.value.error.code).toBe("invalid_input");
+    expect(body.value.error.status).toBe(400);
   });
 });

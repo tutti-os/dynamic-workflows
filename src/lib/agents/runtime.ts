@@ -68,6 +68,12 @@ export async function cancelAgentRun(runId: string) {
 export async function sendAgentMessage(input: {
   agentSessionId: string;
   message: string;
+  /**
+   * Deliver as guidance to the currently active turn instead of starting a new
+   * turn. Steering a running workflow node requires this: the node execution is
+   * an active turn, and a plain send is rejected ("active turn") while it runs.
+   */
+  guidance?: boolean;
 }): Promise<void> {
   const adapter = getAgentRuntimeAdapter();
   if (!adapter.sendToSession) {
@@ -75,5 +81,7 @@ export async function sendAgentMessage(input: {
       "Delivering a message to a live agent session is not supported by this adapter.",
     );
   }
-  await adapter.sendToSession(input.agentSessionId, input.message);
+  await adapter.sendToSession(input.agentSessionId, input.message, {
+    guidance: input.guidance ?? false,
+  });
 }

@@ -101,6 +101,61 @@ const next = await agent({ id: "next", prompt: "action={{decision.action}} comme
     }));
   });
 
+  it("truncates a long human context value with an explicit marker", async () => {
+    const requests: WorkflowHumanTaskRequest[] = [];
+    const long = "x".repeat(13_000);
+    const script = `
+const decision = await human({
+  id: "decision",
+  context: [{ label: "Big", value: ${JSON.stringify(long)}, display: "text" }],
+  actions: [{ id: "pass", label: "Pass", intent: "primary" }],
+})
+`;
+    for await (const _event of runWorkflow({
+      script,
+      cwd: process.cwd(),
+      onHumanTask: (request) => {
+        requests.push(request);
+        return humanTask(request, "pending");
+      },
+    })) {
+      // drain
+    }
+
+    const item = requests[0].spec.context[0];
+    expect(item.truncated).toBe(true);
+    expect(typeof item.value === "string" && item.value).toMatch(
+      /\n…\[truncated \d+ chars\]$/,
+    );
+    // The marked value is shorter than the original: truncated then annotated.
+    expect((item.value as string).length).toBeLessThan(long.length);
+  });
+
+  it("leaves a short human context value untouched", async () => {
+    const requests: WorkflowHumanTaskRequest[] = [];
+    const script = `
+const decision = await human({
+  id: "decision",
+  context: [{ label: "Small", value: "short value", display: "text" }],
+  actions: [{ id: "pass", label: "Pass", intent: "primary" }],
+})
+`;
+    for await (const _event of runWorkflow({
+      script,
+      cwd: process.cwd(),
+      onHumanTask: (request) => {
+        requests.push(request);
+        return humanTask(request, "pending");
+      },
+    })) {
+      // drain
+    }
+
+    const item = requests[0].spec.context[0];
+    expect(item.value).toBe("short value");
+    expect(item.truncated).toBeUndefined();
+  });
+
   it("allows multiple independent human tasks to wait in one run", async () => {
     const events = [];
     for await (const event of runWorkflow({
