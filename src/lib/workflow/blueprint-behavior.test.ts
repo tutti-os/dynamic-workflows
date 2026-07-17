@@ -130,7 +130,17 @@ describe("builtin blueprint behavior", () => {
             ? { text: "阻断：缺少测试\nFAIL" }
             : { text: "验收通过\nPASS" };
         }
-        return { text: "MR opened" };
+        return {
+          text: JSON.stringify({
+            result: "mr_created",
+            prUrl: "https://example.com/mr/1",
+            branch: "feature/x",
+            commit: "abc1234",
+            checks: "focused tests passed",
+            unverified: [],
+            summary: "功能已交付并创建 MR",
+          }),
+        };
       });
 
       const events = await collectRun({
@@ -178,6 +188,22 @@ describe("builtin blueprint behavior", () => {
       // submit_mr sees the until_matched stop reason from the loop output.
       expect(submitCalls[0].prompt).toContain("Stop reason: until_matched");
 
+      // submit_mr enforces its output: "json" contract — the terminal report is
+      // stored as parsed structured data, not raw text.
+      const submitCompleted = events.find(
+        (event) =>
+          event.type === "node_completed" && event.nodeId === "submit_mr",
+      );
+      expect(submitCompleted).toEqual(
+        expect.objectContaining({
+          output: expect.objectContaining({
+            result: "mr_created",
+            prUrl: "https://example.com/mr/1",
+            unverified: [],
+          }),
+        }),
+      );
+
       expect(LAST(events)).toEqual(
         expect.objectContaining({ type: "run_completed", status: "completed" }),
       );
@@ -191,7 +217,17 @@ describe("builtin blueprint behavior", () => {
         if (input.title === "验收 Reviewer") {
           return { text: "阻断：仍未满足\nFAIL" };
         }
-        return { text: "status report" };
+        return {
+          text: JSON.stringify({
+            result: "not_accepted",
+            prUrl: null,
+            branch: null,
+            commit: null,
+            checks: "未创建 MR，未运行提交检查",
+            unverified: ["验收未通过：仍未满足"],
+            summary: "打满轮次仍未通过验收",
+          }),
+        };
       });
 
       const events = await collectRun({
@@ -224,7 +260,17 @@ describe("builtin blueprint behavior", () => {
             ? { text: "阻断：缺少测试\nFAIL" }
             : { text: "验收通过\nPASS" };
         }
-        return { text: "MR opened" };
+        return {
+          text: JSON.stringify({
+            result: "mr_created",
+            prUrl: "https://example.com/mr/2",
+            branch: "feature/y",
+            commit: "def5678",
+            checks: "focused tests passed",
+            unverified: [],
+            summary: "已创建 MR",
+          }),
+        };
       });
 
       const events = await collectRun({
@@ -263,7 +309,17 @@ describe("builtin blueprint behavior", () => {
             ? { text: "阻断：缺少边界测试\nFAIL", sessionId: "reviewer-session" }
             : { text: "验收通过\nPASS", sessionId: "reviewer-session" };
         }
-        return { text: "MR opened" };
+        return {
+          text: JSON.stringify({
+            result: "mr_created",
+            prUrl: "https://example.com/mr/3",
+            branch: "feature/z",
+            commit: "aaa1111",
+            checks: "focused tests passed",
+            unverified: [],
+            summary: "已创建 MR",
+          }),
+        };
       });
 
       const events = await collectRun({
@@ -324,6 +380,17 @@ describe("builtin blueprint behavior", () => {
       // submit_mr runs after reviewer PASS with the until_matched stop reason.
       const submitCalls = callsWithTitle(calls, "提交 MR");
       expect(submitCalls[0].prompt).toContain("Stop reason: until_matched");
+
+      // submit_mr's output: "json" contract stores the terminal report parsed.
+      const submitCompleted = events.find(
+        (event) =>
+          event.type === "node_completed" && event.nodeId === "submit_mr",
+      );
+      expect(submitCompleted).toEqual(
+        expect.objectContaining({
+          output: expect.objectContaining({ result: "mr_created", unverified: [] }),
+        }),
+      );
 
       // Invariant: no human gate runs during the acceptance loop — every human
       // task resolution belongs to the alignment loop (nodeId "human_alignment").
@@ -537,7 +604,18 @@ describe("builtin blueprint behavior", () => {
             ? { text: "阻断：跨文件回归\nFAIL" }
             : { text: "整体通过\nPASS" };
         }
-        return { text: "MR opened" };
+        return {
+          text: JSON.stringify({
+            result: "mr_created",
+            prUrl: "https://example.com/mr/4",
+            branch: "feature/migrate",
+            commit: "bbb2222",
+            checks: "focused checks passed",
+            unverified: [],
+            rejectedSites: [],
+            summary: "迁移已交付并创建 MR",
+          }),
+        };
       });
 
       const events = await collectRun({
@@ -581,6 +659,21 @@ describe("builtin blueprint behavior", () => {
       const submitCalls = callsWithTitle(calls, "提交 MR");
       expect(submitCalls).toHaveLength(1);
       expect(submitCalls[0].prompt).toContain("Stop reason: until_matched");
+
+      // submit_mr's output: "json" contract stores the terminal report parsed,
+      // including the migration-specific rejectedSites field.
+      const submitCompleted = events.find(
+        (event) =>
+          event.type === "node_completed" && event.nodeId === "submit_mr",
+      );
+      expect(submitCompleted).toEqual(
+        expect.objectContaining({
+          output: expect.objectContaining({
+            result: "mr_created",
+            rejectedSites: [],
+          }),
+        }),
+      );
 
       expect(LAST(events)).toEqual(
         expect.objectContaining({ type: "run_completed", status: "completed" }),

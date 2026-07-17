@@ -32,7 +32,7 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     difficulty: "advanced",
     requiresCwd: true,
     patternSummary:
-      "In a bounded two-role loop, an RD agent implements the requirement while an independent acceptance reviewer judges only the original requirement and current repository state, never the RD delivery narrative. The RD keeps an inherited session with appendPrompt deltas; the reviewer runs each round in a fresh independent session, receiving only its own previous review through dataflow, and fails only on blocking issues with PASS or FAIL on the final line. A final step uses the acceptance result only as a gate, then creates an MR/PR from current changes or reports remaining blockers.",
+      "In a bounded two-role loop, an RD agent implements the requirement while an independent reviewer judges only the original requirement and current repository state, never the RD delivery narrative. The RD keeps an inherited session with appendPrompt deltas; the reviewer runs each round fresh and independent, seeing only its own previous review, and returns PASS or FAIL on the final line. A final step gates on the acceptance result, then emits a structured JSON delivery report (output json): an MR/PR, or an honest blocked/not-accepted status carrying the review's unverified items.",
     useCases: [
       "Implement a requirement in a local repository with adversarial acceptance review.",
       "Keep reviewer judgment independent from the implementer's delivery narrative and claimed change scope.",
@@ -61,7 +61,7 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "Align implementation direction with a person before formal acceptance.",
       "Send acceptance failures directly back to the original RD context.",
       "Avoid making a person approve every reviewer-driven repair cycle.",
-      "Create an MR/PR only after independent acceptance passes.",
+      "Create an MR/PR only after independent acceptance passes, with a structured JSON delivery report as the terminal output.",
     ],
     script: readBuiltinBlueprintScript(
       new URL(
@@ -126,7 +126,7 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     difficulty: "advanced",
     requiresCwd: true,
     patternSummary:
-      "Combines dynamic fan-out with an acceptance loop for a migration. A discovery step emits a bounded JSON array of call sites; map runs a per-item adversarial migrate→verify pipeline with onItemFailure skip. A bounded acceptance loop then judges the WHOLE change, entering first at the reviewer: fix runs in a fresh independent session driven by git state and reviewer feedback, and an independent reviewer (optional agent/model override) re-judges cross-file regressions via a self-reference and the map record. Submit gates on the loop stop reason and lists rejected/failed sites in the PR.",
+      "Combines dynamic fan-out with an acceptance loop for a migration. A discovery step emits a bounded JSON array of call sites; map runs a per-item adversarial migrate→verify pipeline with onItemFailure skip. A bounded acceptance loop then judges the WHOLE change, entering at the reviewer: fix runs in a fresh independent session driven by git state and feedback, while the reviewer re-judges cross-file regressions via a self-reference and the map record. Submit gates on the stop reason and emits a structured JSON delivery report (output json) listing rejected/failed sites and unverified items.",
     useCases: [
       "Sweep a from→to API or pattern migration across a repository call site by call site.",
       "Catch cross-file regressions the per-item verify cannot see with a whole-change reviewer.",

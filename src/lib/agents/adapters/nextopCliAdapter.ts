@@ -1023,11 +1023,22 @@ function readRawNonSuccessTerminalStatus(
   }
 }
 
+function isTextMessage(message: NextopMessage): boolean {
+  // tool_call / tool_result messages carry a literal rendering in `text`
+  // (e.g. "tool_call: Bash"); only messages that are genuine assistant text
+  // should be considered. Tolerate messages with no `kind` for backward compat.
+  const kind = readOptionalString(message.kind);
+  return kind === undefined || kind === "text";
+}
+
 export function latestAssistantText(messages: NextopMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     const role = readOptionalString(message.role);
     if (role !== "assistant" && role !== "agent") {
+      continue;
+    }
+    if (!isTextMessage(message)) {
       continue;
     }
     const text = readOptionalString(message.text);
@@ -1042,6 +1053,9 @@ export function newestAssistantText(messages: NextopMessage[]): string {
   for (const message of messages) {
     const role = readOptionalString(message.role);
     if (role !== "assistant" && role !== "agent") {
+      continue;
+    }
+    if (!isTextMessage(message)) {
       continue;
     }
     const text = readOptionalString(message.text);

@@ -1173,7 +1173,15 @@ const acceptance = await loop({
             ? "阻断：缺少边界测试\nFAIL"
             : "验收通过\nPASS"
           : input.title === "提交 MR"
-            ? "MR prepared"
+            ? JSON.stringify({
+                result: "mr_created",
+                prUrl: "https://example.com/mr/1",
+                branch: "feature/human-gate",
+                commit: "abc1234",
+                checks: "focused tests passed",
+                unverified: [],
+                summary: "已创建 MR",
+              })
             : "implementation updated",
       };
       yield { type: "done", status: "completed", reason: "completed" };

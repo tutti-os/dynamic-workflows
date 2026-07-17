@@ -615,6 +615,33 @@ describe("nextop cli adapter", () => {
     ).toBe("newest");
   });
 
+  it("skips a trailing tool_call message when selecting the latest text", () => {
+    expect(
+      latestAssistantText([
+        { role: "assistant", kind: "text", text: "the report" },
+        { role: "assistant", kind: "tool_call", text: "tool_call: Bash" },
+      ]),
+    ).toBe("the report");
+  });
+
+  it("skips a leading tool_call message when selecting the newest text", () => {
+    expect(
+      newestAssistantText([
+        { role: "assistant", kind: "tool_call", text: "tool_call: Bash" },
+        { role: "assistant", kind: "text", text: "the report" },
+      ]),
+    ).toBe("the report");
+  });
+
+  it("still selects legacy messages that carry no kind field", () => {
+    expect(
+      latestAssistantText([{ role: "assistant", text: "legacy report" }]),
+    ).toBe("legacy report");
+    expect(
+      newestAssistantText([{ role: "agent", text: "legacy report" }]),
+    ).toBe("legacy report");
+  });
+
   it("streams session refs and final text from waiting", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({
