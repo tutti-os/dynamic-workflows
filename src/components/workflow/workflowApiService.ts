@@ -15,6 +15,7 @@ import type {
   ParsedWorkflow,
   WorkflowHumanTask,
   WorkflowRunEvent,
+  WorkflowRunNote,
   WorkflowValue,
 } from "@/lib/workflow/types";
 import type {
@@ -579,6 +580,32 @@ export function loadWorkflowRun(input: {
     `/api/workflows/${input.workflowId}/runs/${input.runId}`,
     undefined,
     "RUN_NOT_FOUND",
+  );
+}
+
+export function addWorkflowRunNote(input: {
+  workflowId: string;
+  runId: string;
+  message: string;
+  target?: "current" | "next-step";
+  nodeId?: string;
+}): Promise<{
+  note: WorkflowRunNote;
+  delivery?: { ok: boolean; agentSessionId?: string; detail?: string };
+  run: WorkflowRunRecord;
+}> {
+  return apiJson(
+    `/api/workflows/${input.workflowId}/runs/${input.runId}/notes`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: input.message,
+        target: input.target ?? "next-step",
+        ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+      }),
+    },
+    "RUN_NOTE_INVALID",
   );
 }
 

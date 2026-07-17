@@ -6,6 +6,7 @@ The pre-push acceptance gate for changes that touch the run UI or runtime behavi
 
 - The implementing session does not accept its own work. Acceptance runs in a separate agent session (historically Codex via `tutti agent start/send`), driving the real app in a browser.
 - The acceptance agent verifies only: it must not modify code. Preparing scenario scaffolding outside the repo (flag files in /tmp, imported test workflows) is allowed and expected.
+- Steering a run mid-acceptance must go through an Operator Note (`runs note`, or the run detail "Add note" affordance), never a raw `tutti agent send` to the underlying session — an unrecorded steer poisons the run record the acceptance is judging.
 - FAIL verdicts must be honest and specific: location, symptom, screenshot, blocking-vs-suggestion. A run that "mostly works" with one blocking defect is a FAIL.
 - Fixes return to the SAME acceptance session (`tutti agent send`) for a focused re-verification of only the failed points; completed runs stay in the DB, so re-verification can often reuse persisted runs instead of spending new agent executions.
 

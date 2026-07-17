@@ -35,6 +35,7 @@ import type {
   WorkflowHumanAction,
   WorkflowHumanTask,
   WorkflowNode,
+  WorkflowRunNote,
   WorkflowValue,
 } from "@/lib/workflow/types";
 
@@ -59,10 +60,15 @@ export function RunDetailPanel(props: {
     values: Record<string, WorkflowValue>;
     revision: number;
   }) => Promise<void>;
+  onAddRunNote?: (input: { message: string; nodeId?: string }) => Promise<void>;
 }) {
   const { detail } = props;
   const { run } = detail;
   const selectedRunError = getRunError(run.result);
+  const canSteer =
+    run.status === "running" ||
+    run.status === "waiting_for_human" ||
+    run.status === "interrupted";
 
   return (
     <>
@@ -83,6 +89,13 @@ export function RunDetailPanel(props: {
       <HumanTasksSection
         tasks={detail.humanTasks ?? []}
         onRespond={props.onRespondHumanTask}
+      />
+
+      <OperatorNotesSection
+        notes={detail.notes ?? []}
+        canSteer={canSteer}
+        selectedNodeId={props.selectedNodeRun?.node.id}
+        onAddRunNote={props.onAddRunNote}
       />
 
       <div className="run-facts">
@@ -185,6 +198,112 @@ function HumanTasksSection(props: {
               ) : null}
             </div>
           ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function OperatorNotesSection(props: {
+  notes: WorkflowRunNote[];
+  canSteer: boolean;
+  selectedNodeId?: string;
+  onAddRunNote?: (input: { message: string; nodeId?: string }) => Promise<void>;
+}) {
+  const [message, setMessage] = useState("");
+  const [scopeToNode, setScopeToNode] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const showComposer = props.canSteer && Boolean(props.onAddRunNote);
+  if (props.notes.length === 0 && !showComposer) {
+    return null;
+  }
+
+  const submit = async () => {
+    const trimmed = message.trim();
+    if (!trimmed || !props.onAddRunNote) {
+      return;
+    }
+    setSubmitting(true);
+    setError(undefined);
+    try {
+      await props.onAddRunNote({
+        message: trimmed,
+        nodeId: scopeToNode ? props.selectedNodeId : undefined,
+      });
+      setMessage("");
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Operator note failed.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="operator-notes-section">
+      <div className="field-heading">
+        <label>Operator notes</label>
+        <Badge variant="muted">{props.notes.length}</Badge>
+      </div>
+      {props.notes.length > 0 ? (
+        <div className="operator-notes-history">
+          {props.notes.map((note) => (
+            <div className="operator-note-item" key={note.id}>
+              <div className="operator-note-meta">
+                <Badge
+                  variant={
+                    note.status === "consumed" || note.status === "delivered"
+                      ? "success"
+                      : note.status === "failed"
+                        ? "warning"
+                        : "muted"
+                  }
+                >
+                  {note.status}
+                </Badge>
+                <span>{note.target}</span>
+                {note.nodeId ? <span>· {note.nodeId}</span> : null}
+              </div>
+              <pre className="output-box">{note.message}</pre>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {showComposer ? (
+        <div className="operator-note-composer field">
+          <Textarea
+            rows={3}
+            value={message}
+            placeholder="Steer the next agent execution (recorded as a run event)…"
+            disabled={submitting}
+            onChange={(event) => setMessage(event.target.value)}
+          />
+          {props.selectedNodeId ? (
+            <label className="operator-note-scope">
+              <input
+                type="checkbox"
+                checked={scopeToNode}
+                disabled={submitting}
+                onChange={(event) => setScopeToNode(event.target.checked)}
+              />
+              Only the selected node ({props.selectedNodeId})
+            </label>
+          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            disabled={submitting || !message.trim()}
+            onClick={() => void submit()}
+          >
+            {submitting ? <Spinner size={14} /> : null}
+            Add note
+          </Button>
+          {error ? <div className="diagnostic error">{error}</div> : null}
         </div>
       ) : null}
     </section>

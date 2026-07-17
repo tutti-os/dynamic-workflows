@@ -257,6 +257,57 @@ export type WorkflowHumanTaskRequest = {
   spec: RenderedWorkflowHumanSpec;
 };
 
+/** Where an operator note is delivered. */
+export type WorkflowRunNoteTarget = "current" | "next-step";
+
+/**
+ * Lifecycle of an operator note:
+ * - `pending`: recorded, not yet delivered (next-step notes awaiting an
+ *   execution; a current note only lives in this state momentarily before
+ *   delivery is attempted).
+ * - `consumed`: a next-step note that was injected into an execution's prompt.
+ * - `delivered`: a current note handed to a live agent session.
+ * - `failed`: a current note whose live delivery failed.
+ */
+export type WorkflowRunNoteStatus =
+  | "pending"
+  | "consumed"
+  | "delivered"
+  | "failed";
+
+/**
+ * An operator note steering a running workflow with full provenance. Recorded
+ * as a first-class run event before any delivery so run review and replay stay
+ * truthful. See {@link WorkflowRunNoteTarget} for the two delivery semantics.
+ */
+export type WorkflowRunNote = {
+  id: string;
+  runId: string;
+  message: string;
+  target: WorkflowRunNoteTarget;
+  /** When set, only an execution of this top-level node consumes the note. */
+  nodeId?: string;
+  status: WorkflowRunNoteStatus;
+  /** Fine-grained execution key that consumed a next-step note. */
+  consumedExecutionKey?: string;
+  /** Result of a current-target live delivery. */
+  delivery?: {
+    ok: boolean;
+    agentSessionId?: string;
+    detail?: string;
+  };
+  createdAt: string;
+  /** When a next-step note was consumed or a current note was delivered. */
+  consumedAt?: string;
+};
+
+export type WorkflowRunNoteRequest = {
+  runId: string;
+  message: string;
+  target: WorkflowRunNoteTarget;
+  nodeId?: string;
+};
+
 export type WorkflowInputCommon = {
   required?: boolean;
   label?: string;
@@ -339,6 +390,17 @@ export type WorkflowRunRequest = {
   onHumanTask?: (
     request: WorkflowHumanTaskRequest,
   ) => WorkflowHumanTask | Promise<WorkflowHumanTask>;
+  /**
+   * Atomically claim any pending next-step operator notes that this execution
+   * should consume, marking them consumed with `executionKey`. A note without a
+   * nodeId matches any execution; a nodeId-scoped note matches only executions
+   * of that top-level node. One note = one delivery, first consumer wins.
+   */
+  onConsumeNotes?: (input: {
+    runId: string;
+    nodeId: string;
+    executionKey: string;
+  }) => WorkflowRunNote[] | Promise<WorkflowRunNote[]>;
   signal?: AbortSignal;
 };
 
@@ -520,6 +582,11 @@ export type WorkflowRunEvent =
       restored?: boolean;
       output?: WorkflowValue;
       error?: string;
+    }
+  | {
+      type: "run_note";
+      runId: string;
+      note: WorkflowRunNote;
     }
   | {
       type: "node_completed";

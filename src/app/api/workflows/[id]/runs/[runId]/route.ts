@@ -12,6 +12,7 @@ import {
 } from "@/lib/workflow/run-log";
 import { markWorkflowRunInterruptedIfStale } from "@/lib/workflow/run-jobs";
 import { listWorkflowHumanTasks } from "@/lib/db/workflows/human-tasks";
+import { listWorkflowRunNotes } from "@/lib/db/workflows/run-notes";
 
 export async function GET(
   _request: Request,
@@ -35,6 +36,7 @@ export async function GET(
   return NextResponse.json({
     run,
     humanTasks: listWorkflowHumanTasks(run.id),
+    notes: listWorkflowRunNotes(run.id),
     ...logPreview,
   });
 }

@@ -611,6 +611,21 @@ export function createNextopCliAgentAdapter(
       }
       await runner(["--json", "agent", "open", "--session-id", trimmed]);
     },
+    async sendToSession(agentSessionId: string, message: string): Promise<void> {
+      const trimmed = agentSessionId.trim();
+      if (!trimmed) {
+        throw new Error("agentSessionId is required");
+      }
+      await runner([
+        "--json",
+        "agent",
+        "send",
+        "--session-id",
+        trimmed,
+        "--prompt",
+        message,
+      ]);
+    },
   };
 
   return adapter;

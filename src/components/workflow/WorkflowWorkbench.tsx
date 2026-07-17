@@ -195,6 +195,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     copyRunText,
     openAgentSession,
     respondHumanTask,
+    addRunNote,
   } = useWorkflowRunController({
     workflowId,
     detail,
@@ -460,6 +461,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
           void openAgentSession(agentSessionId)
         }
         onRespondHumanTask={respondHumanTask}
+        onAddRunNote={addRunNote}
       />
     </main>
   );

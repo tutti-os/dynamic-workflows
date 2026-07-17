@@ -22,6 +22,9 @@ import {
   createOrGetWorkflowHumanTask,
 } from "@/lib/db/workflows/human-tasks";
 import {
+  consumeMatchingRunNotes,
+} from "@/lib/db/workflows/run-notes";
+import {
   getWorkflowVersion,
 } from "@/lib/db/workflows/versions";
 import type {
@@ -860,6 +863,10 @@ async function executeWorkflowRunJob(
           inputs: executionOptions.inputs,
           recovery: executionOptions.recovery,
           onHumanTask: (request) => createOrGetWorkflowHumanTask(request),
+          onConsumeNotes: (noteInput) => {
+            ensureWorkflowRunJobOwned(run.id, job);
+            return consumeMatchingRunNotes(noteInput);
+          },
           onCheckpoint: async (checkpoint) => {
             ensureWorkflowRunJobOwned(run.id, job);
             try {
@@ -1299,4 +1306,31 @@ function appendAndPublish(
       // UI subscribers are observational; a broken stream must not fail the run.
     }
   }
+}
+
+/**
+ * Append an out-of-band run event (an operator-note record) to the run log and
+ * publish it to any live UI subscribers. Used by the note service, which
+ * records notes independent of the executor generator; the executor still owns
+ * the note-consumption events it yields.
+ */
+export function recordOutOfBandRunEvent(
+  run: WorkflowRunRecord,
+  event: WorkflowRunEvent,
+): string {
+  // A run created but never launched in-process may not have its log directory
+  // yet; ensure it so the provenance append never fails.
+  ensureRunLogDirectory(run.logPath);
+  const entry = appendRunLogEvent(run.logPath, event);
+  const job = jobs.get(run.id);
+  if (job) {
+    for (const subscriber of job.subscribers) {
+      try {
+        subscriber(event, entry.id);
+      } catch {
+        // Observational subscribers must not fail note recording.
+      }
+    }
+  }
+  return entry.id;
 }

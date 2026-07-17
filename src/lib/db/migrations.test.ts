@@ -17,8 +17,22 @@ describe("migrateDb", () => {
           "workflow_runs",
           "workflow_run_checkpoints",
           "workflow_run_human_tasks",
+          "workflow_run_notes",
           "workflow_generations",
           "workflow_edit_jobs",
+        ]),
+      );
+      expect(readColumnNames(database, "workflow_run_notes")).toEqual(
+        expect.arrayContaining([
+          "run_id",
+          "message",
+          "target",
+          "node_id",
+          "status",
+          "consumed_execution_key",
+          "delivery_json",
+          "created_at",
+          "consumed_at",
         ]),
       );
       expect(readColumnNames(database, "workflow_versions")).toEqual(
@@ -146,6 +160,7 @@ describe("migrateDb", () => {
       expect(readTableNames(database)).toContain("workflow_edit_jobs");
       expect(readTableNames(database)).toContain("workflow_run_checkpoints");
       expect(readTableNames(database)).toContain("workflow_run_human_tasks");
+      expect(readTableNames(database)).toContain("workflow_run_notes");
       expect(readColumnNames(database, "workflow_versions")).toEqual(
         expect.arrayContaining(["source", "base_version_id", "note"]),
       );

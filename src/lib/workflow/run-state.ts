@@ -15,6 +15,7 @@ import type {
   WorkflowNodeStatus,
   WorkflowRunEvent,
   WorkflowHumanTask,
+  WorkflowRunNote,
   WorkflowValue,
 } from "./types";
 
@@ -43,6 +44,7 @@ export type RunDetail = {
   run: WorkflowRunRecord;
   log: string;
   humanTasks?: WorkflowHumanTask[];
+  notes?: WorkflowRunNote[];
   logSizeBytes?: number;
   logReturnedBytes?: number;
   logTruncated?: boolean;
@@ -278,6 +280,13 @@ export function applyWorkflowRunEvent(
     return next;
   }
 
+  if (event.type === "run_note") {
+    // Operator notes are surfaced from the notes table (like human tasks), not
+    // folded into result_json; the run-log event is a provenance/timeline
+    // marker. Replaying it must leave the run summary untouched.
+    return next;
+  }
+
   if (event.type === "node_completed") {
     next.nodeStatuses[event.nodeId] = "completed";
     next.outputs[event.nodeId] = event.output;
@@ -492,6 +501,7 @@ export function applyRunEventToDetail(
   );
   const nextLog = appendRunLog(detail.log, event);
   const humanTasks = applyHumanTaskEvent(detail.humanTasks ?? [], event);
+  const notes = applyRunNoteEvent(detail.notes ?? [], event);
 
   return {
     run: {
@@ -508,10 +518,29 @@ export function applyRunEventToDetail(
     },
     log: nextLog.log,
     humanTasks,
+    notes,
     logSizeBytes: detail.logSizeBytes,
     logReturnedBytes: detail.logReturnedBytes,
     logTruncated: detail.logTruncated || nextLog.truncated,
   };
+}
+
+/**
+ * Fold a streamed `run_note` event into the detail's note list keyed by note
+ * id, so a later event (a next-step consumption or a current delivery result)
+ * supersedes the earlier record for the same note.
+ */
+function applyRunNoteEvent(
+  notes: WorkflowRunNote[],
+  event: WorkflowRunEvent,
+): WorkflowRunNote[] {
+  if (event.type !== "run_note") {
+    return notes;
+  }
+  return [
+    ...notes.filter((note) => note.id !== event.note.id),
+    event.note,
+  ].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
 function applyHumanTaskEvent(
@@ -893,6 +922,7 @@ function isWorkflowRunEvent(value: unknown): value is WorkflowRunEvent {
     type === "node_event" ||
     type === "loop_step_state" ||
     type === "map_item_state" ||
+    type === "run_note" ||
     type === "node_completed" ||
     type === "human_task_requested" ||
     type === "human_task_resolved" ||

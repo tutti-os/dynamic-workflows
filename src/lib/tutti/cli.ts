@@ -70,6 +70,11 @@ import {
   resumeWorkflowRunJob,
   startWorkflowRunJob,
 } from "@/lib/workflow/run-jobs";
+import {
+  RunNoteError,
+  listWorkflowRunNotes,
+  recordRunNote,
+} from "@/lib/workflow/run-notes";
 import type { WorkflowValue } from "@/lib/workflow/types";
 
 type CliOutput =
@@ -117,6 +122,7 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "runs/get",
   "runs/wait",
   "runs/respond",
+  "runs/note",
   "blueprints/list",
   "blueprints/search",
   "blueprints/get",
@@ -155,6 +161,8 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(await runsWaitCommand(input));
       case "runs/respond":
         return cliJson(await runsRespondCommand(input));
+      case "runs/note":
+        return cliJson(await runsNoteCommand(input));
       case "resume":
         return cliJson(await resumeCommand(input));
       case "blueprints/list":
@@ -588,6 +596,53 @@ async function runsRespondCommand(input: CliInput) {
   };
 }
 
+/**
+ * Record an operator note steering a run. `next-step` (default) injects the
+ * note into the next agent execution's rendered prompt; `current` delegates it
+ * to the live agent session. Either way the note is recorded as a run event
+ * first, so run review and replay stay truthful. Returns the recorded note and,
+ * for current delivery, the live-delivery result.
+ */
+async function runsNoteCommand(input: CliInput) {
+  const runId = readRequiredString(input, ["run-id", "runId"]);
+  const message = readRequiredString(input, ["message"]);
+  const nodeId = readOptionalString(input, ["node-id", "nodeId"]);
+  const targetRaw = readOptionalString(input, ["target"]) ?? "next-step";
+  if (targetRaw !== "current" && targetRaw !== "next-step") {
+    throw new CliHttpError(
+      "invalid_input",
+      'target must be "current" or "next-step".',
+      400,
+    );
+  }
+
+  if (!getWorkflowRun(runId)) {
+    throw new CliHttpError("run_not_found", "Run not found.", 404);
+  }
+
+  try {
+    const result = await recordRunNote({
+      runId,
+      message,
+      target: targetRaw,
+      nodeId,
+    });
+    return {
+      note: result.note,
+      ...(result.delivery ? { delivery: result.delivery } : {}),
+    };
+  } catch (error) {
+    if (error instanceof RunNoteError) {
+      throw new CliHttpError(
+        error.code === "RUN_NOT_FOUND" ? "run_not_found" : error.code.toLowerCase(),
+        error.message,
+        error.status,
+      );
+    }
+    throw error;
+  }
+}
+
 function readHumanTaskValues(input: CliInput): Record<string, WorkflowValue> {
   const rawValues = readOptionalString(input, ["values", "values-json", "valuesJson"]);
   if (!rawValues) {
@@ -656,6 +711,7 @@ function buildRunDetail(run: WorkflowRunRecord) {
     run,
     result,
     humanTasks: listWorkflowHumanTasks(run.id, "pending"),
+    notes: listWorkflowRunNotes(run.id),
     report: buildRunReport(run, result.outputs),
   };
 }

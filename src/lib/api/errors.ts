@@ -13,6 +13,9 @@ export type ApiErrorCode =
   | "HUMAN_TASK_NOT_FOUND"
   | "HUMAN_TASK_INVALID"
   | "HUMAN_TASK_CONFLICT"
+  | "RUN_NOTE_INVALID"
+  | "RUN_NOTE_RUN_NOT_ACTIVE"
+  | "RUN_NOTE_NO_LIVE_SESSION"
   | "WORKFLOW_SCRIPT_INVALID"
   | "WORKFLOW_INPUTS_INVALID"
   | "WORKFLOW_CWD_INVALID"
@@ -60,6 +63,11 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   HUMAN_TASK_NOT_FOUND: "Human task not found.",
   HUMAN_TASK_INVALID: "Human task response is invalid.",
   HUMAN_TASK_CONFLICT: "Human task was already handled.",
+  RUN_NOTE_INVALID: "The operator note is invalid.",
+  RUN_NOTE_RUN_NOT_ACTIVE:
+    "Operator notes can only steer a run that is still active.",
+  RUN_NOTE_NO_LIVE_SESSION:
+    "No live agent session is available to steer right now; use a next-step note instead.",
   WORKFLOW_SCRIPT_INVALID:
     "The workflow script has syntax or workflow rule errors.",
   WORKFLOW_INPUTS_INVALID: "Workflow inputs are invalid.",

@@ -4,12 +4,13 @@ import { parseWorkflowScript } from "./parser";
 import {
   applyWorkflowRunEvent,
   createInitialRunSummary,
+  parseRunLogEvents,
   readNodeStatusesFromRunLog,
   readRunResult,
   serializeRunEvent,
   toWorkflowRunResult,
 } from "./run-state";
-import type { WorkflowRunEvent } from "./types";
+import type { WorkflowRunEvent, WorkflowRunNote } from "./types";
 
 const parsed = parseWorkflowScript(`
 const scan = await agent({ id: "scan", prompt: "scan" })
@@ -17,7 +18,51 @@ log("done")
 `);
 const scanNode = parsed.nodes.find((node) => node.id === "scan");
 
+const sampleNote: WorkflowRunNote = {
+  id: "note-1",
+  runId: "run-1",
+  message: "steer left",
+  target: "next-step",
+  status: "consumed",
+  consumedExecutionKey: "scan",
+  createdAt: new Date(0).toISOString(),
+};
+
 describe("workflow run state", () => {
+  it("replays run_note events cleanly without altering the run result", () => {
+    const events: WorkflowRunEvent[] = [
+      { type: "run_started", runId: "run-1", parsed },
+      { type: "run_note", runId: "run-1", note: { ...sampleNote, status: "pending" } },
+      { type: "node_started", runId: "run-1", nodeId: "scan", node: scanNode!, agent: "mock", input: "scan" },
+      { type: "run_note", runId: "run-1", note: sampleNote },
+      { type: "node_completed", runId: "run-1", nodeId: "scan", output: "found" },
+      { type: "run_completed", runId: "run-1", status: "completed", outputs: {} },
+    ];
+
+    // run_note events survive the log round-trip (accepted by isWorkflowRunEvent).
+    const log = events.map(serializeRunEvent).join("\n");
+    const replayed = parseRunLogEvents(log);
+    expect(replayed.filter((event) => event.type === "run_note")).toHaveLength(2);
+
+    // Reducing the full stream leaves the summary identical to reducing it with
+    // the run_note events removed — they are pure timeline markers.
+    let withNotes = createInitialRunSummary(undefined, {
+      queueExecutableNodes: false,
+    });
+    for (const event of events) {
+      withNotes = applyWorkflowRunEvent(withNotes, event);
+    }
+    let withoutNotes = createInitialRunSummary(undefined, {
+      queueExecutableNodes: false,
+    });
+    for (const event of events.filter((event) => event.type !== "run_note")) {
+      withoutNotes = applyWorkflowRunEvent(withoutNotes, event);
+    }
+    expect(withNotes).toEqual(withoutNotes);
+    expect(withNotes.status).toBe("completed");
+    expect(withNotes.outputs).toEqual({ scan: "found" });
+  });
+
   it("queues only executable nodes in the initial summary", () => {
     const summary = createInitialRunSummary(parsed);
 

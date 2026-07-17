@@ -70,6 +70,7 @@ type WorkflowInspectorPaneProps = {
     values: Record<string, WorkflowValue>;
     revision: number;
   }) => Promise<void>;
+  onAddRunNote?: (input: { message: string; nodeId?: string }) => Promise<void>;
 };
 
 export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
@@ -164,6 +165,7 @@ export function WorkflowInspectorPane(props: WorkflowInspectorPaneProps) {
             onCopyRunText={props.onCopyRunText}
             onOpenAgentSession={props.onOpenAgentSession}
             onRespondHumanTask={props.onRespondHumanTask}
+            onAddRunNote={props.onAddRunNote}
           />
         )}
       </ScrollArea>

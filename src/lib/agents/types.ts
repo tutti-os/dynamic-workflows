@@ -126,4 +126,6 @@ export type AgentRuntimeAdapter = {
   cancel?(runId: string): Promise<void>;
   cancelSession?(agentSessionId: string): Promise<void>;
   openSession?(agentSessionId: string): Promise<void>;
+  /** Deliver an out-of-band message to a live agent session (steering). */
+  sendToSession?(agentSessionId: string, message: string): Promise<void>;
 };

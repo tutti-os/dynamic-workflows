@@ -64,3 +64,16 @@ export async function cancelAgentRun(runId: string) {
   }
   await adapter.cancel(runId);
 }
+
+export async function sendAgentMessage(input: {
+  agentSessionId: string;
+  message: string;
+}): Promise<void> {
+  const adapter = getAgentRuntimeAdapter();
+  if (!adapter.sendToSession) {
+    throw new Error(
+      "Delivering a message to a live agent session is not supported by this adapter.",
+    );
+  }
+  await adapter.sendToSession(input.agentSessionId, input.message);
+}

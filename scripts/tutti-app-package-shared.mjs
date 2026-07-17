@@ -233,6 +233,37 @@ export function cliManifest(options = {}) {
         handler: httpHandler("/tutti/cli/runs/respond"),
       },
       {
+        path: ["runs", "note"],
+        summary: "Steer a running run with a recorded operator note",
+        description:
+          "Record an operator note that steers a running workflow with full provenance. The note is written to the run log as a run_note event BEFORE any delivery, so run review and replay stay truthful. target=next-step (default) injects the note as a final labeled block into the NEXT agent execution's rendered prompt (any node/step/map item; scope it to one node with node-id); target=current delegates the note to the live agent session via the tutti agent channel and rejects with a clear error if no live session exists. Returns the recorded note and, for current, the delivery result.",
+        inputSchema: objectSchema(
+          {
+            "run-id": {
+              type: "string",
+              description: "Workflow run id to steer.",
+            },
+            message: {
+              type: "string",
+              description: "Operator guidance to inject or deliver.",
+            },
+            target: {
+              type: "string",
+              description:
+                'Delivery semantics: "next-step" (default) injects into the next agent execution; "current" delegates to the live agent session.',
+            },
+            "node-id": {
+              type: "string",
+              description:
+                "Optional node id. For next-step, only an execution of this node consumes the note; for current, selects which live session to steer.",
+            },
+          },
+          ["run-id", "message"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/runs/note"),
+      },
+      {
         path: ["blueprints", "list"],
         summary: "List workflow blueprints",
         description:
@@ -398,6 +429,7 @@ export function commandsMarkdown(options = {}) {
     `tutti --json ${scope} runs wait --run-id <run-id> --timeout-ms 120000`,
     `tutti --json ${scope} runs get --run-id <run-id>`,
     `tutti --json ${scope} runs respond --run-id <run-id> --task-id <task-id> --action approve --values '{"notes":"ship it"}'`,
+    `tutti --json ${scope} runs note --run-id <run-id> --message 'Prioritize the failing auth test' --target next-step`,
     `tutti --json ${scope} resume --workflow-id <id> --run-id <run-id>`,
     `tutti --json ${scope} blueprints list`,
     `tutti --json ${scope} blueprints search --query 'acceptance loop' --category coding`,
@@ -418,6 +450,7 @@ export function commandsMarkdown(options = {}) {
     "- `runs wait`: block until a run reaches a stop point (terminal status or waiting on human input), returning a reason and a timedOut flag; loop on bounded waits.",
     "- `runs get`: fetch a run's record, structured result, pending human tasks, and a convenience report of the terminal node outputs.",
     "- `runs respond`: answer a pending human task (action id + field values) and resume the run exactly as the UI does; returns the refreshed `runs get` payload so you can loop back into `runs wait`.",
+    "- `runs note`: steer a running run with a recorded operator note (`next-step` injects into the next agent execution; `current` delegates to the live agent session). See \"Steering a run\" below.",
     "- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.",
     "- `blueprints list|search|get`: browse the built-in workflow blueprint library.",
     "- `authoring validate|submit`: validate and save scripts produced by authoring sessions.",
@@ -513,6 +546,19 @@ function agentJourneyGuide(scope) {
     "```",
     "",
     "then go back to `runs wait`. A terminal `failed` run cannot be resumed; it can be retried from the run detail UI (a retry route exists for terminal runs). `canceled` means a human stopped it — do not restart it without your user's say-so.",
+    "",
+    "### Steering a run",
+    "",
+    "To course-correct a run that is already executing, record an operator note — never steer the underlying agent session directly. A note is a first-class, recorded workflow event, so run review and replay stay truthful; an out-of-band `tutti agent send` to the session bypasses the run log and poisons the record.",
+    "",
+    "```bash",
+    `tutti --json ${scope} runs note --run-id <run-id> --message '<guidance>' --target next-step`,
+    "```",
+    "",
+    "- `--target next-step` (default): the note is injected as a final labeled block into the NEXT agent execution's rendered prompt (any node, loop step, or map item). Use this for guidance that should shape upcoming work; it is durable and shows up in the persisted prompt. Scope it to one node with `--node-id <id>` so only executions of that node consume it. One note is delivered once, to the first matching execution.",
+    "- `--target current`: the note is delivered to the agent session running right now via the tutti agent channel. Use this to interrupt an in-flight turn. If no live session exists, it is rejected — fall back to next-step. The note is recorded either way before delivery is attempted.",
+    "",
+    "Recorded notes surface in `runs get` under `notes` (with delivery/consumption status), so you can confirm a next-step note was actually consumed by an execution.",
     "",
     "### End-to-end sequence",
     "",

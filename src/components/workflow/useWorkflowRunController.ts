@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  addWorkflowRunNote,
   cancelWorkflowRun,
   loadWorkflowRun,
   openWorkflowAgentSession,
@@ -85,6 +86,7 @@ export function useWorkflowRunController(input: {
     values: Record<string, WorkflowValue>;
     revision: number;
   }) => Promise<void>;
+  addRunNote: (input: { message: string; nodeId?: string }) => Promise<void>;
 } {
   const [isRunning, setIsRunning] = useState(false);
   const [isCancellingRun, setIsCancellingRun] = useState(false);
@@ -596,6 +598,30 @@ export function useWorkflowRunController(input: {
     });
   }
 
+  async function addRunNote(noteInput: { message: string; nodeId?: string }) {
+    const sourceRun = selectedRun?.run;
+    if (!sourceRun) {
+      return;
+    }
+    try {
+      await addWorkflowRunNote({
+        workflowId: input.workflowId,
+        runId: sourceRun.id,
+        message: noteInput.message,
+        target: "next-step",
+        nodeId: noteInput.nodeId,
+      });
+      appendEventLog(`operator note added: ${sourceRun.id}`);
+      // The active run's stream also delivers the run_note event, but reloading
+      // covers the selected-but-not-streaming case too.
+      await loadRun(sourceRun.id);
+    } catch (error) {
+      const apiError = readApiJsonError(error, "RUN_NOTE_INVALID");
+      appendEventLog(`operator note failed: ${apiError.message}`);
+      throw error;
+    }
+  }
+
   return {
     selectedRun,
     visibleRuns,
@@ -625,5 +651,6 @@ export function useWorkflowRunController(input: {
     copyRunText,
     openAgentSession,
     respondHumanTask,
+    addRunNote,
   };
 }

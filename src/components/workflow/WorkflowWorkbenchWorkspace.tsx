@@ -88,6 +88,7 @@ export function WorkflowWorkbenchWorkspace(props: {
     values: Record<string, WorkflowValue>;
     revision: number;
   }) => Promise<void>;
+  onAddRunNote?: (input: { message: string; nodeId?: string }) => Promise<void>;
 }) {
   const reactFlowInstanceRef = useRef<
     ReactFlowInstance<Node<FlowNodeData>, Edge> | null
@@ -169,6 +170,7 @@ export function WorkflowWorkbenchWorkspace(props: {
         onCopyRunText={props.onCopyRunText}
         onOpenAgentSession={props.onOpenAgentSession}
         onRespondHumanTask={props.onRespondHumanTask}
+        onAddRunNote={props.onAddRunNote}
       />
     </section>
   );

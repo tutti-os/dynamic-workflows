@@ -35,12 +35,51 @@ import type {
   WorkflowMapSpec,
   WorkflowNode,
   WorkflowNodeStatus,
+  WorkflowRunNote,
   WorkflowRunRecoveryState,
   WorkflowRunEvent,
   WorkflowRunRequest,
   WorkflowSessionSpec,
   WorkflowValue,
 } from "./types";
+
+// Language-neutral label so operator notes read the same regardless of the
+// prompt's authored language (prompts are user-authored in either language).
+const OPERATOR_NOTE_LABEL = "Operator note (injected):";
+
+/**
+ * Claim any pending next-step operator notes this execution should consume and
+ * yield a `run_note` provenance event for each (carrying the consuming
+ * execution key set by the atomic claim). Returns the claimed notes in arrival
+ * order so callers can append them to the rendered prompt.
+ */
+async function* claimOperatorNotes(input: {
+  request: WorkflowRunRequest;
+  runId: string;
+  nodeId: string;
+  executionKey: string;
+}): AsyncGenerator<WorkflowRunEvent, WorkflowRunNote[]> {
+  const notes = input.request.onConsumeNotes
+    ? await input.request.onConsumeNotes({
+        runId: input.runId,
+        nodeId: input.nodeId,
+        executionKey: input.executionKey,
+      })
+    : [];
+  for (const note of notes) {
+    yield { type: "run_note", runId: input.runId, note };
+  }
+  return notes;
+}
+
+/** Append a final labeled block for each consumed operator note. */
+function applyOperatorNotes(prompt: string, notes: WorkflowRunNote[]): string {
+  if (notes.length === 0) {
+    return prompt;
+  }
+  const blocks = notes.map((note) => `${OPERATOR_NOTE_LABEL}\n${note.message}`);
+  return `${prompt}\n\n${blocks.join("\n\n")}`;
+}
 
 export async function* runWorkflow(
   request: WorkflowRunRequest,
@@ -344,9 +383,18 @@ async function* runAgentNode(input: {
     input.request.inputs,
   );
   const cwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
-  const prompt = renderPrompt(input.node, input.outputs, input.request.inputs, {
+  let prompt = renderPrompt(input.node, input.outputs, input.request.inputs, {
     cwd,
   });
+  // Inject pending operator notes before emitting node_started so the injected
+  // block flows into the persisted rendered prompt (nodeInputs) for free.
+  const operatorNotes = yield* claimOperatorNotes({
+    request: input.request,
+    runId: input.runId,
+    nodeId: input.node.id,
+    executionKey: input.node.id,
+  });
+  prompt = applyOperatorNotes(prompt, operatorNotes);
   const sessionKey = resolveSessionKey(input.node.session);
   const resumeSessionId = sessionKey
     ? input.sessionIdsByKey[sessionKey]
@@ -725,14 +773,25 @@ async function* runLoopNode(input: {
                   currentStepOutputs,
                 })
               : undefined;
+            // Inject pending operator notes into whichever prompt this step
+            // actually sends (full or append), attributed to this step's
+            // execution key so the note is consumed exactly once.
+            const operatorNotes = yield* claimOperatorNotes({
+              request: input.request,
+              runId: input.runId,
+              nodeId: input.node.id,
+              executionKey: loopStep.executionKey,
+            });
             stepOutput = yield* runLoopAgentStep({
               runId: input.runId,
               nodeId: input.node.id,
               loopStep,
               syntheticId,
               step,
-              prompt,
-              appendPrompt,
+              prompt: applyOperatorNotes(prompt, operatorNotes),
+              appendPrompt: appendPrompt
+                ? applyOperatorNotes(appendPrompt, operatorNotes)
+                : undefined,
               defaultAgent: agent,
               defaultModel: model,
               defaultSession: loop.session,
@@ -1354,7 +1413,20 @@ async function* runMapItem(input: {
       input.defaultModel,
       input.request.inputs,
     );
-    const prompt = renderMapItemText(step.prompt, context);
+    // Inject pending operator notes before emitting the item's running state so
+    // the block flows into the persisted map-item input. A note without a
+    // nodeId (or scoped to this map node) goes to the FIRST item execution that
+    // claims it; concurrent items never double-consume (atomic claim).
+    const operatorNotes = yield* claimOperatorNotes({
+      request: input.request,
+      runId: input.runId,
+      nodeId: input.node.id,
+      executionKey: mapItem.executionKey,
+    });
+    const prompt = applyOperatorNotes(
+      renderMapItemText(step.prompt, context),
+      operatorNotes,
+    );
     let output = "";
 
     yield mapItemStateEvent({
