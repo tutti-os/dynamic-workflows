@@ -20,7 +20,10 @@ const breakdown = loop({
   id: "breakdown",
   label: "Decompose with human approval",
   maxIterations: 4,
-  onMaxIterations: "complete",
+  // "fail", not "complete": without approval there is no plan. Completing on
+  // exhaustion would let extract feed a decomposition the human explicitly
+  // rejected into the final plan with no unapproved marker anywhere.
+  onMaxIterations: "fail",
   steps: [
     agent({
       id: "decompose",
