@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { listAgentTargets } from "@/lib/agents/runtime";
 import type { AgentTargetOption } from "@/lib/agents/types";
+import { isAppError } from "@/lib/api/app-error";
 import {
   createWorkflowFromScript,
   getWorkflowDetail,
@@ -9,6 +10,10 @@ import {
 import {
   getWorkflowVersion,
 } from "@/lib/db/workflows/versions";
+import {
+  getWorkflowRun,
+} from "@/lib/db/workflows/runs";
+import { listWorkflowHumanTasks } from "@/lib/db/workflows/human-tasks";
 import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
@@ -40,6 +45,8 @@ import {
 import {
   readRunResult,
 } from "@/lib/workflow/run-state";
+import { createWorkflowExecutionPlan } from "@/lib/workflow/execution-plan";
+import { stringifyWorkflowValue } from "@/lib/workflow/templates";
 import {
   normalizeWorkflowInputsForSchema,
   readWorkflowInputsObject,
@@ -52,9 +59,11 @@ import {
   summarizeWorkflowDiagnostics,
 } from "@/lib/workflow/validation";
 import {
+  markWorkflowRunInterruptedIfStale,
   resumeWorkflowRunJob,
   startWorkflowRunJob,
 } from "@/lib/workflow/run-jobs";
+import type { WorkflowValue } from "@/lib/workflow/types";
 
 type CliOutput =
   | {
@@ -98,6 +107,8 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "validate",
   "create",
   "run",
+  "runs/get",
+  "runs/wait",
   "blueprints/list",
   "blueprints/search",
   "blueprints/get",
@@ -130,6 +141,10 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(await createCommand(input));
       case "run":
         return cliJson(await runCommand(input));
+      case "runs/get":
+        return cliJson(await runsGetCommand(input));
+      case "runs/wait":
+        return cliJson(await runsWaitCommand(input));
       case "resume":
         return cliJson(await resumeCommand(input));
       case "blueprints/list":
@@ -416,6 +431,7 @@ async function runCommand(input: CliInput) {
   const model = readOptionalString(input, ["model"]);
   const cwd = readOptionalString(input, ["cwd"]);
   const versionId = readOptionalString(input, ["version-id", "versionId"]);
+  const force = readOptionalBoolean(input, ["force"]) ?? false;
   const inputs = readWorkflowInputs(input);
   const result = await runWorkflowForCli({
     workflowId,
@@ -423,6 +439,7 @@ async function runCommand(input: CliInput) {
     agent,
     model,
     cwd,
+    force,
     inputs,
   });
 
@@ -443,12 +460,168 @@ async function resumeCommand(input: CliInput) {
   };
 }
 
+// A wait caller loops on bounded waits; keep the server-side hold well under
+// any HTTP timeout the daemon CLI proxy might impose. The proxy's own timeout
+// is not observable from this repo, so cap conservatively at 120s and let
+// callers re-issue `runs wait` until they see a terminal or waiting reason.
+const RUNS_WAIT_DEFAULT_TIMEOUT_MS = 120_000;
+const RUNS_WAIT_MAX_TIMEOUT_MS = 120_000;
+const RUNS_WAIT_POLL_INTERVAL_MS = 500;
+
+async function runsGetCommand(input: CliInput) {
+  const runId = readRequiredString(input, ["run-id", "runId"]);
+  const existing = getWorkflowRun(runId);
+  if (!existing) {
+    throw new CliHttpError("run_not_found", "Run not found.", 404);
+  }
+  const run = await markWorkflowRunInterruptedIfStale(existing);
+  return buildRunDetail(run);
+}
+
+async function runsWaitCommand(input: CliInput) {
+  const runId = readRequiredString(input, ["run-id", "runId"]);
+  const timeoutMs = clampInteger(
+    readOptionalInteger(input, ["timeout-ms", "timeoutMs"]) ??
+      RUNS_WAIT_DEFAULT_TIMEOUT_MS,
+    0,
+    RUNS_WAIT_MAX_TIMEOUT_MS,
+  );
+  if (!getWorkflowRun(runId)) {
+    throw new CliHttpError("run_not_found", "Run not found.", 404);
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const existing = getWorkflowRun(runId);
+    if (!existing) {
+      throw new CliHttpError("run_not_found", "Run not found.", 404);
+    }
+    // Reconcile first so a crashed "running" zombie resolves to `interrupted`
+    // (a real stop point) instead of spinning until the deadline.
+    const run = await markWorkflowRunInterruptedIfStale(existing);
+    const reason = runStopReason(run);
+    if (reason) {
+      return { reason, timedOut: false, ...buildRunDetail(run) };
+    }
+    if (Date.now() >= deadline) {
+      return { reason: "timeout" as const, timedOut: true, ...buildRunDetail(run) };
+    }
+    await delay(
+      Math.min(RUNS_WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())),
+    );
+  }
+}
+
+type RunStopReason =
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "interrupted"
+  | "waiting_human";
+
+/**
+ * A run reaches a stop point when it is terminal (completed/failed/canceled/
+ * interrupted) or has persisted the `waiting_for_human` status — the executor
+ * transitions running -> waiting_for_human (markWorkflowRunWaitingOwned) only
+ * once its pending human tasks are recorded, so that status is the reliable
+ * "blocked on human input, no active job" signal. A still-`running` run has not
+ * reached a stop point.
+ */
+function runStopReason(run: WorkflowRunRecord): RunStopReason | undefined {
+  switch (run.status) {
+    case "completed":
+    case "failed":
+    case "canceled":
+    case "interrupted":
+      return run.status;
+    case "waiting_for_human":
+      return "waiting_human";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The structured, agent-facing view of a run returned by `runs get` and nested
+ * into `runs wait`: the persisted run record, its structured result (outputs,
+ * node statuses, rendered node inputs, error), the pending human tasks with
+ * their rendered context so a caller can relay them, and a convenience `report`
+ * built from the run's terminal node outputs.
+ */
+function buildRunDetail(run: WorkflowRunRecord) {
+  const result = readRunResult(run.result);
+  return {
+    run,
+    result,
+    humanTasks: listWorkflowHumanTasks(run.id, "pending"),
+    report: buildRunReport(run, result.outputs),
+  };
+}
+
+/**
+ * The delivery report an agent caller reads without knowing node ids: the
+ * outputs of the run's terminal nodes (executable nodes that no other node
+ * consumes). `text` concatenates their stringified outputs for convenience.
+ */
+function buildRunReport(
+  run: WorkflowRunRecord,
+  outputs: Record<string, WorkflowValue>,
+) {
+  const terminalNodeIds = terminalNodeIdsForRun(run);
+  const reportOutputs: Record<string, WorkflowValue> = {};
+  const texts: string[] = [];
+  for (const nodeId of terminalNodeIds) {
+    if (Object.prototype.hasOwnProperty.call(outputs, nodeId)) {
+      reportOutputs[nodeId] = outputs[nodeId];
+      texts.push(stringifyWorkflowValue(outputs[nodeId]));
+    }
+  }
+  return {
+    nodeIds: terminalNodeIds,
+    outputs: reportOutputs,
+    text: texts.join("\n\n"),
+  };
+}
+
+function terminalNodeIdsForRun(run: WorkflowRunRecord): string[] {
+  const version = getWorkflowVersion(run.workflowVersionId);
+  if (!version) {
+    return [];
+  }
+  let executableNodes;
+  try {
+    executableNodes = createWorkflowExecutionPlan(
+      assertWorkflowScriptValid(version.script),
+    ).executableNodes;
+  } catch {
+    return [];
+  }
+  const consumed = new Set<string>();
+  for (const node of executableNodes) {
+    for (const nodeInput of node.inputs) {
+      if (nodeInput.sourceNodeId) {
+        consumed.add(nodeInput.sourceNodeId);
+      }
+    }
+  }
+  return executableNodes
+    .filter((node) => !consumed.has(node.id))
+    .map((node) => node.id);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function runWorkflowForCli(input: {
   workflowId: string;
   versionId?: string;
   agent: string;
   model?: string;
   cwd?: string;
+  force: boolean;
   inputs: Record<string, WorkflowInputValue>;
 }): Promise<{
   run: WorkflowRunRecord;
@@ -480,21 +653,30 @@ async function runWorkflowForCli(input: {
   const inputs = normalizeCliWorkflowInputs(parsed, input.inputs);
   assertRequiredWorkflowCwd(parsed, input.cwd);
   const cwd = resolveWorkflowCwd(input.cwd);
-  const run = startWorkflowRunJob({
-    workflowId: input.workflowId,
-    version,
-    executorKind: input.agent === "mock" ? "mock" : "local-agent",
-    agent: input.agent,
-    model: input.model,
-    cwd,
-    inputs,
-    input: compactWorkflowRunInput({
-      inputs,
+  let run: WorkflowRunRecord;
+  try {
+    run = startWorkflowRunJob({
+      workflowId: input.workflowId,
+      version,
+      executorKind: input.agent === "mock" ? "mock" : "local-agent",
       agent: input.agent,
       model: input.model,
       cwd,
-    }),
-  });
+      force: input.force,
+      inputs,
+      input: compactWorkflowRunInput({
+        inputs,
+        agent: input.agent,
+        model: input.model,
+        cwd,
+      }),
+    });
+  } catch (error) {
+    if (isAppError(error) && error.code === "WORKFLOW_RUN_CWD_CONFLICT") {
+      throw new CliHttpError("run_cwd_conflict", error.message, 409, error.details);
+    }
+    throw error;
+  }
 
   return {
     run,

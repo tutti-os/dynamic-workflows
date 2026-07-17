@@ -32,6 +32,7 @@ type WorkflowRunRequestBody = {
   model?: string;
   cwd?: string;
   inputs?: unknown;
+  force?: boolean;
 };
 
 export async function prepareCurrentWorkflowRun(input: {
@@ -81,6 +82,7 @@ export async function prepareCurrentWorkflowRun(input: {
     agent: body.agent,
     model: body.model,
     cwd,
+    force: body.force === true,
     inputs,
     input: compactWorkflowRunInput({
       inputs,

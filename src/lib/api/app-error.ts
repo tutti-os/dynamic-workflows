@@ -62,6 +62,18 @@ export function workflowRetryRequestInvalidError(message: string): AppError {
   return new AppError("WORKFLOW_RETRY_REQUEST_INVALID", message);
 }
 
+export function workflowRunCwdConflictError(input: {
+  runId: string;
+  cwd: string;
+}): AppError {
+  return new AppError(
+    "WORKFLOW_RUN_CWD_CONFLICT",
+    `Another workflow run (${input.runId}) is already active in ${input.cwd}. ` +
+      `Wait for it to finish or pass force to run anyway.`,
+    { details: { conflictingRunId: input.runId, cwd: input.cwd } },
+  );
+}
+
 export function workflowInputsInvalidError(error: unknown): AppError {
   return new AppError(
     "WORKFLOW_INPUTS_INVALID",

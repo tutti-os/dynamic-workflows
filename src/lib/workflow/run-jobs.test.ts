@@ -744,6 +744,109 @@ const afterFirst = await agent({ id: "after-first", prompt: "{{first.action}}" }
     expect(getWorkflowRun(zombie.id)?.status).toBe("interrupted");
     expect(getWorkflowRun(claimed.id)?.status).toBe("running");
   });
+  it("refuses a second run start in the same cwd and names the conflict", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    let releaseRun: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(SCRIPT);
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      const runId = request.runId ?? "run";
+      yield { type: "run_started", runId, parsed };
+      await blocked;
+      yield { type: "run_completed", runId, status: "completed", outputs: {} };
+    });
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { isWorkflowRunJobActive, startWorkflowRunJob } = await import(
+      "@/lib/workflow/run-jobs"
+    );
+    const { isAppError } = await import("@/lib/api/app-error");
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const cwd = process.cwd();
+    const first = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd,
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+
+    // A different cwd never conflicts.
+    const otherCwd = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: `${cwd}/nested`,
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+    expect(otherCwd.id).toBeDefined();
+
+    // A cwd-less run never conflicts.
+    const noCwd = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: "",
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+    expect(noCwd.id).toBeDefined();
+
+    // Same cwd while the first run is active is refused, naming the conflict.
+    let caught: unknown;
+    try {
+      startWorkflowRunJob({
+        workflowId: detail.workflow.id,
+        version,
+        cwd,
+        executorKind: "mock",
+        inputs: {},
+        input: { inputs: {} },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(isAppError(caught)).toBe(true);
+    if (isAppError(caught)) {
+      expect(caught.code).toBe("WORKFLOW_RUN_CWD_CONFLICT");
+      expect(caught.message).toContain(first.id);
+      expect(caught.details).toMatchObject({ conflictingRunId: first.id });
+    }
+
+    // force overrides the guard.
+    const forced = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd,
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+      force: true,
+    });
+    expect(forced.id).toBeDefined();
+
+    releaseRun?.();
+    await waitUntil(() => !isWorkflowRunJobActive(first.id));
+    await waitUntil(() => !isWorkflowRunJobActive(otherCwd.id));
+    await waitUntil(() => !isWorkflowRunJobActive(noCwd.id));
+    await waitUntil(() => !isWorkflowRunJobActive(forced.id));
+  });
 });
 
 async function waitUntil(predicate: () => boolean): Promise<void> {

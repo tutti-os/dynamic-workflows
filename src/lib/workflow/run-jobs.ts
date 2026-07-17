@@ -9,6 +9,7 @@ import {
   getWorkflowRun,
   isWorkflowRunExecutionClaimed,
   isWorkflowRunExecutionOwned,
+  listRunningWorkflowRunsByCwd,
   listWorkflowRunCheckpoints,
   markWorkflowRunInterrupted,
   markWorkflowRunWaitingOwned,
@@ -33,6 +34,7 @@ import {
   workflowMapRetryInvalidError,
   workflowRetryFromNodeInvalidError,
   workflowRetryNodeInvalidError,
+  workflowRunCwdConflictError,
   workflowRunNotFoundError,
   workflowVersionNotFoundError,
 } from "@/lib/api/app-error";
@@ -80,6 +82,10 @@ export type WorkflowRunJobOptions = {
   input: unknown;
   recovery?: WorkflowRunRecoveryState;
   initialSummary?: WorkflowRunSummary;
+  // Skip the same-cwd concurrency guard on run start. Every other run of ANY
+  // workflow that is actively executing in the same resolved cwd would
+  // otherwise refuse this start.
+  force?: boolean;
 };
 
 type RunSubscriber = (event: WorkflowRunEvent, entryId: string) => void;
@@ -104,6 +110,7 @@ globalForRunJobs.__dynamicWorkflowRunJobs = jobs;
 export function startWorkflowRunJob(
   options: WorkflowRunJobOptions,
 ): WorkflowRunRecord {
+  assertNoConflictingCwdRun(options);
   const executionToken = randomUUID();
   const run = createWorkflowRun({
     workflowId: options.workflowId,
@@ -128,6 +135,32 @@ export function startWorkflowRunJob(
 
   void executeWorkflowRunJob(run, options, job);
   return run;
+}
+
+/**
+ * Same-cwd concurrency guard: refuse to start a new run when another run of ANY
+ * workflow is currently *active* in the same resolved cwd, so two agent-driven
+ * runs never trample the same working tree. "Active" mirrors the stale-run
+ * reconciler: a `running` run that either owns an in-process job here OR carries
+ * a fresh cross-process execution claim. Stale zombies (running with no job and
+ * no fresh claim) and runs with no cwd never conflict, and `force` bypasses the
+ * check entirely.
+ */
+function assertNoConflictingCwdRun(options: WorkflowRunJobOptions): void {
+  if (options.force || !options.cwd) {
+    return;
+  }
+  for (const candidate of listRunningWorkflowRunsByCwd(options.cwd)) {
+    if (
+      jobs.has(candidate.id) ||
+      isWorkflowRunExecutionClaimed(candidate.id)
+    ) {
+      throw workflowRunCwdConflictError({
+        runId: candidate.id,
+        cwd: options.cwd,
+      });
+    }
+  }
 }
 
 export async function resumeWorkflowRunJob(input: {

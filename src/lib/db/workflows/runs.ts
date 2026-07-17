@@ -615,6 +615,29 @@ export function listWorkflowRuns(workflowId: string): WorkflowRunRecord[] {
   return rows.map(mapRun);
 }
 
+/**
+ * All runs of ANY workflow that are currently in the `running` state and bound
+ * to the given resolved cwd. Used by the same-cwd concurrency guard on run
+ * start; the caller narrows this to runs that are genuinely active (in-process
+ * job or fresh execution claim) versus stale zombies.
+ */
+export function listRunningWorkflowRunsByCwd(cwd: string): WorkflowRunRecord[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT workflow_runs.*,
+        (SELECT COUNT(*) FROM workflow_run_human_tasks tasks
+          WHERE tasks.run_id = workflow_runs.id AND tasks.status = 'pending')
+          AS pending_human_task_count
+      FROM workflow_runs
+      WHERE status = 'running' AND cwd = ?
+      ORDER BY started_at ASC, rowid ASC
+    `,
+    )
+    .all(cwd) as RunRow[];
+  return rows.map(mapRun);
+}
+
 export function countWorkflowRuns(workflowId: string): number {
   const row = getDb()
     .prepare("SELECT COUNT(*) AS count FROM workflow_runs WHERE workflow_id = ?")

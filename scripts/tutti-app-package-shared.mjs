@@ -145,11 +145,55 @@ export function cliManifest(options = {}) {
               description:
                 "Optional working directory, resolved inside the configured workflow cwd root.",
             },
+            force: {
+              type: "boolean",
+              description:
+                "Start even if another run is already active in the same resolved cwd. Without this, the run is refused when a same-cwd run is executing.",
+            },
           },
           ["workflow-id"],
         ),
         output: jsonOutput(),
         handler: httpHandler("/tutti/cli/run"),
+      },
+      {
+        path: ["runs", "get"],
+        summary: "Get a run's record, result, tasks, and report",
+        description:
+          "Fetch a workflow run's persisted record, structured result (outputs, node statuses, rendered node inputs, error), pending human tasks with rendered context, and a convenience report built from the run's terminal node outputs.",
+        inputSchema: objectSchema(
+          {
+            "run-id": {
+              type: "string",
+              description: "Workflow run id to fetch.",
+            },
+          },
+          ["run-id"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/runs/get"),
+      },
+      {
+        path: ["runs", "wait"],
+        summary: "Block until a run reaches a stop point",
+        description:
+          "Server-side bounded wait that returns when a run reaches a stop point: a terminal status (completed/failed/canceled/interrupted) or waiting on human input. Returns a reason, a timedOut flag, and the same detail shape as runs get; loop on bounded waits until a non-timeout reason.",
+        inputSchema: objectSchema(
+          {
+            "run-id": {
+              type: "string",
+              description: "Workflow run id to wait on.",
+            },
+            "timeout-ms": {
+              type: "integer",
+              description:
+                "Maximum server-side wait in milliseconds. Defaults to 120000 and is capped at 120000; on expiry the response has reason \"timeout\" and timedOut true.",
+            },
+          },
+          ["run-id"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/runs/wait"),
       },
       {
         path: ["blueprints", "list"],
@@ -314,6 +358,8 @@ export function commandsMarkdown(options = {}) {
     `tutti --json ${scope} validate --script '<workflow-js>'`,
     `tutti --json ${scope} create --prompt 'Summarize this repo and propose next steps' --agent local:codex`,
     `tutti --json ${scope} run --workflow-id <id> --agent local:codex --inputs '{"topic":"release"}'`,
+    `tutti --json ${scope} runs wait --run-id <run-id> --timeout-ms 120000`,
+    `tutti --json ${scope} runs get --run-id <run-id>`,
     `tutti --json ${scope} resume --workflow-id <id> --run-id <run-id>`,
     `tutti --json ${scope} blueprints list`,
     `tutti --json ${scope} blueprints search --query 'acceptance loop' --category coding`,
@@ -330,7 +376,9 @@ export function commandsMarkdown(options = {}) {
     "- `show`: one workflow, parsed node summary, versions, and recent runs.",
     "- `validate`: parser diagnostics for a workflow script without saving it.",
     "- `create`: launch an authoring agent session and return immediately; versions land whenever the agent submits.",
-    "- `run`: start the current saved workflow version in the background and persist a run record.",
+    "- `run`: start the current saved workflow version in the background and persist a run record. Refuses when another run is already active in the same resolved cwd unless `--force` is passed.",
+    "- `runs wait`: block until a run reaches a stop point (terminal status or waiting on human input), returning a reason and a timedOut flag; loop on bounded waits.",
+    "- `runs get`: fetch a run's record, structured result, pending human tasks, and a convenience report of the terminal node outputs.",
     "- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.",
     "- `blueprints list|search|get`: browse the built-in workflow blueprint library.",
     "- `authoring validate|submit`: validate and save scripts produced by authoring sessions.",
