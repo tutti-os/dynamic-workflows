@@ -8,9 +8,21 @@ import {
   listWorkflows,
 } from "@/lib/db/workflows/workflow-repository";
 import { ensureWorkflowGenerationStarted } from "@/lib/workflow/generation-jobs";
+import { reconcileStaleRunningRuns } from "@/lib/workflow/run-jobs";
 
 export async function GET() {
-  return NextResponse.json({ workflows: listWorkflows() });
+  // Reconcile any zombie "running" run surfaced as a workflow's latestRun so
+  // the home list stops showing it as running forever.
+  const workflows = await Promise.all(
+    listWorkflows().map(async (summary) => {
+      if (summary.latestRun?.status !== "running") {
+        return summary;
+      }
+      const [latestRun] = await reconcileStaleRunningRuns([summary.latestRun]);
+      return { ...summary, latestRun };
+    }),
+  );
+  return NextResponse.json({ workflows });
 }
 
 export async function POST(request: Request) {

@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentRunInput, AgentRuntimeEvent } from "@/lib/agents/types";
+import type { AgentRunInput } from "@/lib/agents/types";
+import { installMockAgentRuntime } from "./test-support/mock-agent-runtime";
 import type { WorkflowValue } from "./types";
 
 // Mock the agent runtime boundary (NOT the executor) so the REAL executor runs
@@ -48,38 +49,13 @@ const synthesis = await agent({
 
 let dataDir: string | undefined;
 
+// Shared realistic mock: it emits a session_ref by default (honoring
+// attach/resume), which populates nodeSessions and is what makes the
+// stale-attach regression visible in these tests.
 function mockAgentRuntime(
   reply: (input: AgentRunInput) => { text: string; fail?: boolean },
 ): AgentRunInput[] {
-  const calls: AgentRunInput[] = [];
-  let sessionCounter = 0;
-  runAgentMock.mockImplementation(async function* (
-    input: AgentRunInput,
-  ): AsyncGenerator<AgentRuntimeEvent> {
-    calls.push(input);
-    const result = reply(input);
-    // Real adapters report a session ref; emitting one here populates
-    // nodeSessions, which is what makes the stale-attach regression visible.
-    sessionCounter += 1;
-    yield {
-      type: "session_ref",
-      session: {
-        agentSessionId:
-          input.attachSessionId ??
-          input.resumeSessionId ??
-          `mock-session-${sessionCounter}`,
-        agent: input.agent,
-        status: "running",
-      },
-    };
-    if (result.fail) {
-      yield { type: "error", code: "mock_error", message: result.text };
-      return;
-    }
-    yield { type: "text_delta", text: result.text };
-    yield { type: "done", status: "completed", reason: "completed" };
-  });
-  return calls;
+  return installMockAgentRuntime(runAgentMock, reply, { sessionRef: "always" });
 }
 
 async function waitUntil(predicate: () => boolean): Promise<void> {

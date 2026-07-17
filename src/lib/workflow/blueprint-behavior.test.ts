@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentRunInput, AgentRuntimeEvent } from "@/lib/agents/types";
+import type { AgentRunInput } from "@/lib/agents/types";
+import { installMockAgentRuntime } from "./test-support/mock-agent-runtime";
 import type {
   WorkflowHumanTask,
   WorkflowHumanTaskRequest,
@@ -47,28 +48,15 @@ type AgentReply = { text: string; sessionId?: string };
  * Installs a runAgent mock that routes replies off the fully rendered input
  * (the mock receives the RENDERED prompt, which is where the behavioral value
  * lives). Returns the array of received inputs for prompt-content assertions.
+ *
+ * Uses the shared realistic mock with "when-provided" session emission so a
+ * session_ref is emitted only for session-ful agents (those returning a
+ * `sessionId`), preserving the sessionless-agent promptMode assertions here.
  */
 function mockAgentRuntime(reply: (input: AgentRunInput) => AgentReply): AgentRunInput[] {
-  const calls: AgentRunInput[] = [];
-  runAgentMock.mockImplementation(async function* (
-    input: AgentRunInput,
-  ): AsyncGenerator<AgentRuntimeEvent> {
-    const result = reply(input);
-    calls.push(input);
-    if (result.sessionId) {
-      yield {
-        type: "session_ref",
-        session: {
-          agentSessionId: input.resumeSessionId ?? result.sessionId,
-          agent: input.agent,
-          status: "running",
-        },
-      };
-    }
-    yield { type: "text_delta", text: result.text };
-    yield { type: "done", status: "completed", reason: "completed" };
+  return installMockAgentRuntime(runAgentMock, reply, {
+    sessionRef: "when-provided",
   });
-  return calls;
 }
 
 async function collectRun(request: WorkflowRunRequest): Promise<WorkflowRunEvent[]> {

@@ -680,6 +680,70 @@ const afterFirst = await agent({ id: "after-first", prompt: "{{first.action}}" }
       setTimeout(resolve, 0);
     });
   });
+
+  it("reconciles a stale running run in a list but leaves a claimed run running", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { createWorkflowRun, getWorkflowRun } = await import(
+      "@/lib/db/workflows/runs"
+    );
+    const { ensureRunLogDirectory } = await import("@/lib/workflow/run-log");
+    const { reconcileStaleRunningRuns } = await import(
+      "@/lib/workflow/run-jobs"
+    );
+
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+
+    // Zombie: "running" with no execution token (no claim) and no in-process
+    // job — the state a crash or an old bug leaves behind.
+    const zombie = createWorkflowRun({
+      workflowId: detail.workflow.id,
+      workflowVersionId: version.id,
+      executorKind: "mock",
+      cwd: process.cwd(),
+      request: { inputs: {} },
+    });
+    ensureRunLogDirectory(zombie.logPath);
+
+    // Legitimately claimed by another process: "running" with a fresh
+    // execution-claim heartbeat.
+    const claimed = createWorkflowRun({
+      workflowId: detail.workflow.id,
+      workflowVersionId: version.id,
+      executorKind: "mock",
+      cwd: process.cwd(),
+      request: { inputs: {} },
+      executionToken: "other-process-owner",
+    });
+
+    const zombieRun = getWorkflowRun(zombie.id);
+    const claimedRun = getWorkflowRun(claimed.id);
+    if (!zombieRun || !claimedRun) {
+      throw new Error("runs missing");
+    }
+    expect(zombieRun.status).toBe("running");
+    expect(claimedRun.status).toBe("running");
+
+    const [reconciledZombie, reconciledClaimed] =
+      await reconcileStaleRunningRuns([zombieRun, claimedRun]);
+
+    // The zombie is marked interrupted; the actively-claimed run stays running.
+    expect(reconciledZombie.status).toBe("interrupted");
+    expect(reconciledClaimed.status).toBe("running");
+
+    // The transitions are persisted, so any later list read is consistent.
+    expect(getWorkflowRun(zombie.id)?.status).toBe("interrupted");
+    expect(getWorkflowRun(claimed.id)?.status).toBe("running");
+  });
 });
 
 async function waitUntil(predicate: () => boolean): Promise<void> {

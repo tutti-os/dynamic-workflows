@@ -492,6 +492,27 @@ export async function markWorkflowRunInterruptedIfStale(
   );
 }
 
+/**
+ * Reconcile a collection of run records before returning it from a list
+ * endpoint. Only `running` candidates are considered (there should be few), and
+ * each is routed through {@link markWorkflowRunInterruptedIfStale}, which is a
+ * no-op unless the run has no in-process job AND no fresh execution claim from
+ * another process/heartbeat. A run legitimately claimed elsewhere stays
+ * running; a genuine zombie is marked interrupted so lists stop showing it as
+ * running forever.
+ */
+export async function reconcileStaleRunningRuns(
+  runs: WorkflowRunRecord[],
+): Promise<WorkflowRunRecord[]> {
+  return Promise.all(
+    runs.map((run) =>
+      run.status === "running"
+        ? markWorkflowRunInterruptedIfStale(run)
+        : Promise.resolve(run),
+    ),
+  );
+}
+
 export function cancelWorkflowRunJob(runId: string): boolean {
   const job = jobs.get(runId);
   if (!job) {

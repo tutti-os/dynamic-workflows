@@ -6,6 +6,7 @@ import {
   getWorkflowDetail,
   updateWorkflowMetadata,
 } from "@/lib/db/workflows/workflow-repository";
+import { reconcileStaleRunningRuns } from "@/lib/workflow/run-jobs";
 
 export async function GET(
   _request: Request,
@@ -17,7 +18,10 @@ export async function GET(
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
 
-  return NextResponse.json(detail);
+  // Reconcile zombie "running" runs (crash/old-bug leftovers) that never get
+  // reopened individually, so the runs list stops showing them as running.
+  const runs = await reconcileStaleRunningRuns(detail.runs);
+  return NextResponse.json({ ...detail, runs });
 }
 
 export async function PATCH(

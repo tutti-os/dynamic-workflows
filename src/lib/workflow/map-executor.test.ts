@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentRunInput, AgentRuntimeEvent } from "@/lib/agents/types";
+import {
+  installMockAgentRuntime,
+  type MockAgentReply,
+} from "./test-support/mock-agent-runtime";
 import type { WorkflowRunEvent, WorkflowRunRequest } from "./types";
 
 const runAgentMock = vi.hoisted(() => vi.fn());
@@ -30,25 +34,14 @@ async function collectRun(request: WorkflowRunRequest): Promise<WorkflowRunEvent
 
 /**
  * Routes replies off the RENDERED prompt/title. `fail` short-circuits a child
- * into a failed agent run; otherwise the reply text is streamed.
+ * into a failed agent run; `done` can force a terminal canceled/failed status;
+ * otherwise the reply text is streamed. Backed by the shared realistic mock,
+ * which also emits a session_ref (mirroring the real adapter's child sessions).
  */
 function mockAgentRuntime(
-  reply: (input: AgentRunInput) => { text: string; fail?: boolean },
+  reply: (input: AgentRunInput) => MockAgentReply,
 ): AgentRunInput[] {
-  const calls: AgentRunInput[] = [];
-  runAgentMock.mockImplementation(async function* (
-    input: AgentRunInput,
-  ): AsyncGenerator<AgentRuntimeEvent> {
-    calls.push(input);
-    const result = reply(input);
-    if (result.fail) {
-      yield { type: "error", code: "mock_error", message: result.text };
-      return;
-    }
-    yield { type: "text_delta", text: result.text };
-    yield { type: "done", status: "completed", reason: "completed" };
-  });
-  return calls;
+  return installMockAgentRuntime(runAgentMock, reply, { sessionRef: "always" });
 }
 
 const DISCOVER_ITEMS = [
@@ -736,6 +729,92 @@ describe("map node runtime", () => {
       "checked dev (restored)",
     );
     expect(LAST(resumeEvents)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "completed" }),
+    );
+  });
+
+  // Fidelity: the shared mock can emit the real adapter's terminal `done`
+  // shapes (canceled / failed). No other behavioral test drove these executor
+  // branches — every prior failure used an `error` event (fail: true).
+
+  it("cancels the whole run when the signal aborts while a map child is running", async () => {
+    const controller = new AbortController();
+    mockAgentRuntime((input) => {
+      if ((input.title ?? "") === "Discover") {
+        return { text: JSON.stringify(DISCOVER_ITEMS) };
+      }
+      if ((input.title ?? "") === "Migrate a.ts") {
+        // External cancellation arrives mid-item: abort the run, then report
+        // the canceled agent run the real adapter emits on abort.
+        controller.abort();
+        return { done: "canceled" };
+      }
+      return { text: "unused" };
+    });
+
+    const events = await collectRun({
+      script: MAP_SCRIPT,
+      agent: "mock",
+      cwd: process.cwd(),
+      signal: controller.signal,
+    });
+
+    // The canceled child aborts the map and the run reports canceled — not a
+    // per-item skip and not a plain failure.
+    expect(LAST(events)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "canceled" }),
+    );
+    // Downstream synthesis never completed.
+    expect(
+      events.some(
+        (event) =>
+          event.type === "node_completed" && event.nodeId === "synthesis",
+      ),
+    ).toBe(false);
+  });
+
+  it("fails a map item when a child reports a failed done status with no error event", async () => {
+    const calls = mockAgentRuntime((input) => {
+      if ((input.title ?? "") === "Discover") {
+        return { text: JSON.stringify(DISCOVER_ITEMS) };
+      }
+      if ((input.title ?? "") === "Migrate b.ts") {
+        // Terminal failed status without a preceding `error` event.
+        return { done: "failed" };
+      }
+      if ((input.title ?? "").startsWith("Migrate ")) {
+        return { text: `migrated ${(input.title ?? "").slice("Migrate ".length)}` };
+      }
+      return { text: "SYNTHESIS" };
+    });
+
+    const events = await collectRun({
+      script: MAP_SCRIPT,
+      agent: "mock",
+      cwd: process.cwd(),
+    });
+
+    // The failed child is recorded (skip mode) and the run still completes.
+    const output = nodeOutput(events, "migrated") as {
+      items: Array<{ index: number }>;
+      failed: Array<{ index: number; error: string }>;
+      total: number;
+    };
+    expect(output.total).toBe(3);
+    expect(output.items).toHaveLength(2);
+    expect(output.failed).toHaveLength(1);
+    expect(output.failed[0].index).toBe(2);
+    expect(typeof output.failed[0].error).toBe("string");
+    expect(output.failed[0].error.length).toBeGreaterThan(0);
+
+    expect(
+      LAST(mapItemStates(events, "map:migrated:2:migrate_one"))?.status,
+    ).toBe("failed");
+    // The healthy items still ran.
+    expect(
+      calls.some((call) => (call.title ?? "") === "Migrate a.ts"),
+    ).toBe(true);
+    expect(LAST(events)).toEqual(
       expect.objectContaining({ type: "run_completed", status: "completed" }),
     );
   });
