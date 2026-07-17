@@ -22,7 +22,7 @@ const delivery = await loop({
     agent({
       id: "worker",
       label: "Produce result",
-      prompt: "Produce the deliverable that satisfies the requirement below. Your final message is the deliverable itself and is shown to a human reviewer as-is — output the result, not a report about producing it. When previous feedback is present, revise the prior result accordingly instead of starting over.\n\nRequirement:\n{{requirement}}\n\nIteration: {{iteration}}\nPrevious human feedback (empty on the first iteration):\n{{review.values.comment}}",
+      prompt: "Produce the deliverable that satisfies the requirement below. Your final message is the deliverable itself and is shown to a human reviewer as-is — output the result, not a report about producing it. When previous feedback is present, revise your previous result below to address exactly that feedback — keep everything the reviewer did not ask to change, and do not start over.\n\nRequirement:\n{{requirement}}\n\nIteration: {{iteration}}\n\nYour previous result (empty on the first iteration):\n{{worker}}\n\nPrevious human feedback (empty on the first iteration):\n{{review.values.comment}}",
     }),
     human({
       id: "review",

@@ -454,6 +454,9 @@ describe("builtin blueprint behavior", () => {
       // worker round 2 renders the human comment and iteration 2.
       expect(workerCalls[1].prompt).toContain("add error handling");
       expect(workerCalls[1].prompt).toContain("Iteration: 2");
+      // The sessionless worker receives its own previous result through the
+      // dataflow self-reference — it cannot revise what it cannot see.
+      expect(workerCalls[1].prompt).toContain("deliverable round 1");
 
       // summary sees the delivery loop record (worker outputs + stop reason).
       const summaryCalls = callsWithTitle(calls, "Summarize delivery");

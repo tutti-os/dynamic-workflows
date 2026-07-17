@@ -12,7 +12,7 @@ An agent's final message IS the node's output: downstream prompts receive it ver
 - When a loop matches a verdict, pin the contract: one exact token alone on the final non-empty line, stated in the prompt with the same spelling `until.finalStatus` expects.
 - When a human node supplies the decision, prefer the structured matcher (`{ source: "gate.action", equals: "pass" }`) over parsing text.
 - When an agent supplies a verdict or a machine-readable list, prefer `output: "json"` plus a structured matcher (`{ source: "review.verdict", equals: "pass" }`) over `until.finalStatus` token-matching: the agent ends its message with only the JSON block, the executor stores the parsed value, and downstream reads fields by dotted path.
-- Terminal delivery reports are load-bearing outputs too — give the final reporting node an `output: "json"` contract so a malformed or truncated final message fails that node (recoverable via retry-from-node) instead of completing the run green with a junk report.
+- Terminal delivery records are load-bearing outputs too — when the final node reports facts (PR links, branches, statuses, verdicts, unverified lists), give it an `output: "json"` contract so a malformed or truncated final message fails that node (recoverable via retry-from-node) instead of completing the run green with a junk record. Prose deliverables meant for human readers (research reports, review syntheses, plans) stay prose — wrapping long-form writing in JSON degrades it for no enforcement gain.
 
 ## Node prompt anatomy
 
