@@ -25,6 +25,15 @@ export const inputs = {
     label: "Reviewer model",
     description: "可选：整体验收 Reviewer 使用的模型，需与所选 agent 兼容。留空则使用 run 级 model。整体验收是质量门禁，值得配置更强的模型。",
   },
+  max_rounds: {
+    type: "number",
+    required: false,
+    min: 1,
+    max: 10,
+    label: "验收循环轮数",
+    description:
+      "按需求量级选择：小需求（单文件/明确修补）建议 2；中等（跨少数文件的特性）建议 3；大需求（跨模块/含迁移）建议 4-5。留空用默认 3。上游 agent 按此标准自行决策。",
+  },
 };
 
 phase("发现调用点");
@@ -65,7 +74,7 @@ const acceptance_loop = loop({
   label: "整体验收循环",
   cwd: ".",
   inputs: { migrate_all },
-  maxIterations: 3,
+  maxIterations: "{{max_rounds:3}}",
   onMaxIterations: "complete",
   firstIteration: { startAt: "reviewer" },
   steps: [
@@ -73,7 +82,7 @@ const acceptance_loop = loop({
       id: "fix",
       label: "整体修复",
       session: { mode: "independent" },
-      prompt: "你负责在独立会话中对整个工作区做一次迁移修复。你没有历史对话，一切以仓库当前状态为准：先查看 git status 与 git diff，针对将要修改的文件做定向重读，再依据下方 Reviewer 反馈修复标注为「阻断」的问题。在本轮内完成实现与验证后再结束回合。\n\n工作要求：\n1. 修复面向整份迁移说明，可跨文件处理逐点迁移遗漏或引入的回归；但不要扩大到迁移说明「明确不做」的范围，也不要重做已 VERIFIED 且无问题的条目。\n2. Reviewer 不能扩展或改写迁移说明：若反馈需要新增产品决策或超出原始范围，标注「需要对齐」并说明原因，不要自行扩大范围。\n3. 改动保留在工作区，不要自行 commit 或 push；修复后运行相关 focused checks 并如实报告结果。\n4. 最后输出简洁的本轮修复摘要（改了哪些文件、修了哪些阻断、已运行检查及结果）。\n\n启动工作目录：\n{{workflow.cwd}}\n\n迁移说明：\n{{migration_brief}}\n\n逐点迁移记录（items 为各条目结果，failed 为失败条目）：\n{{migrate_all}}\n\nReviewer 最新一轮反馈：\n{{reviewer}}",
+      prompt: "你负责在独立会话中对整个工作区做一次迁移修复。你没有历史对话，一切以仓库当前状态为准：先查看 git status 与 git diff，针对将要修改的文件做定向重读，再依据下方 Reviewer 反馈修复标注为「阻断」的问题。在本轮内完成实现与验证后再结束回合。\n\n工作要求：\n1. 修复面向整份迁移说明，可跨文件处理逐点迁移遗漏或引入的回归；但不要扩大到迁移说明「明确不做」的范围，也不要重做已 VERIFIED 且无问题的条目。\n2. Reviewer 不能扩展或改写迁移说明：若反馈需要新增产品决策或超出原始范围，标注「需要对齐」并说明原因，不要自行扩大范围。\n3. 改动保留在工作区，不要自行 commit 或 push；修复后运行相关 focused checks 并如实报告结果。\n4. 最后输出简洁的本轮修复摘要（改了哪些文件、修了哪些阻断、已运行检查及结果）。\n\n启动工作目录：\n{{workflow.cwd}}\n\n迁移说明：\n{{migration_brief}}\n\n逐点迁移记录（items 为各条目结果，failed 为失败条目）：\n{{migrate_all}}\n\nReviewer 阻断（逐条修复；每项含 location/issue/evidence/expectation）：\n{{reviewer.blockers}}\n\nReviewer 建议（可选处理，非阻断）：\n{{reviewer.suggestions}}",
     }),
     agent({
       id: "reviewer",
@@ -81,10 +90,11 @@ const acceptance_loop = loop({
       agent: "{{reviewer_agent}}",
       model: "{{reviewer_model}}",
       session: { mode: "independent" },
-      prompt: "你是独立的整体验收 Reviewer，每一轮都在全新会话中工作，不修改代码，也不读取或依赖任何迁移叙述。只依据迁移说明和仓库当前实际状态，判断整份迁移是否完成。\n\n验收方法：\n1. 从迁移说明提炼逐条、可验证的完成标准，不自行新增产品需求或扩大范围。若下方上一轮验收记录已含完成标准清单且迁移说明未变，沿用该清单逐项重验，不必重新推导；仅当需求或范围理解被证明有误时才修订清单。\n2. 独立查看 git status、git diff、相关代码、测试与配置，运行与本次迁移相关的 focused checks；无法验证的项明确说明原因。复验轮次优先验证上一轮「阻断」的修复及其影响面，加上针对性回归；完整检查面（全量测试/构建等重型检查）只在你准备返回 PASS 的轮次要求，首轮仍需完整建立基线。\n3. 你的判断覆盖整体，而不只是单点：全仓是否仍残留「从」侧写法、逐点迁移之间是否引入跨文件回归或不一致、下方逐点迁移记录中标为 REJECTED 或出现在 failed 列表的条目是否已被妥善处理。\n4. 下方附有你上一轮的验收记录（首轮为空）：逐条核对其中「阻断」是否已解决，并检查是否引入新问题。上一轮记录只是你自己的历史判断，不构成当前证据；若迁移说明、相关代码和同一个阻断都没有变化，不要重复无关检查，简洁确认阻断仍存在并返回 FAIL。\n\n判定标准：\n- FAIL 仅用于不满足迁移说明的阻断性问题；风格类意见标注为「建议」，不作为 FAIL 依据。\n- FAIL 时逐条给出位置、问题、证据、期望行为，并标注「阻断」或「建议」。\n- 迁移说明缺少判断所必需的信息时，标注「阻断：需要对齐」并返回 FAIL，不要替用户做产品决策。\n\n输出顺序：完成标准及结论、阻断问题、建议、已运行检查及结果、未验证项。没有内容的章节写「无」。最后一个非空行必须只为 PASS 或 FAIL 之一。\n\n启动工作目录：\n{{workflow.cwd}}\n\n迁移说明：\n{{migration_brief}}\n\n逐点迁移记录（items 为各条目结果，failed 为失败条目）：\n{{migrate_all}}\n\n上一轮验收记录（首轮为空）：\n{{reviewer}}",
+      output: "json",
+      prompt: "你是独立的整体验收 Reviewer，每一轮都在全新会话中工作，不修改代码，也不读取或依赖任何迁移叙述。只依据迁移说明和仓库当前实际状态，判断整份迁移是否完成。\n\n验收方法：\n1. 从迁移说明提炼逐条、可验证的完成标准，不自行新增产品需求或扩大范围。若下方「上一轮完成标准」非空且迁移说明未变，沿用该清单逐项重验，不必重新推导；仅当需求或范围理解被证明有误时才修订清单。\n2. 独立查看 git status、git diff、相关代码、测试与配置，运行与本次迁移相关的 focused checks；无法验证的项明确说明原因并列入 unverified。\n3. 复验轮次的验证范围＝上一轮阻断的修复及其影响面 ＋ 自上一轮评审以来的全部新改动面（用 git diff 对比确定）——新问题只可能藏在新改动里。完整检查面（全量测试/构建等重型检查）只在你准备返回 PASS 的轮次要求，首轮仍需完整建立基线。\n4. 你的判断覆盖整体，而不只是单点：全仓是否仍残留「从」侧写法、逐点迁移之间是否引入跨文件回归或不一致、下方逐点迁移记录中标为 REJECTED 或出现在 failed 列表的条目是否已被妥善处理。\n5. 若下方「上一轮阻断」非空，逐条核对其是否已解决，并检查是否引入新问题。上一轮记录只是你自己的历史判断，不构成当前证据；若迁移说明、相关代码和同一个阻断都没有变化，不要重复无关检查，简洁确认阻断仍存在并返回 verdict=FAIL。\n\n返回 PASS 之前：上一轮清单只是核对起点，不是扫描边界——必须以全新视角覆盖整个变更面，主动寻找清单之外的问题。\n\n判定标准：\n- verdict=FAIL 仅用于不满足迁移说明的阻断性问题；风格类意见放入 suggestions，不作为 FAIL 依据。\n- 每个阻断在 blockers 中逐条给出 location、issue、evidence、expectation。\n- 迁移说明缺少判断所必需的信息时，作为一个 blocker（issue 以「需要对齐」开头）并返回 verdict=FAIL，不要替用户做产品决策。\n\n输出契约（output: \"json\"）：可先给出简短的验收推理，但消息最后只包含一个 JSON 对象，其后不得有任何多余文字。形如：\n{\"verdict\": \"PASS\" | \"FAIL\", \"criteria\": [{\"id\": 1, \"text\": \"完成标准原文\", \"result\": \"通过\" | \"不通过\" | \"未验证\"}], \"blockers\": [{\"location\": \"文件/函数\", \"issue\": \"问题\", \"evidence\": \"证据\", \"expectation\": \"期望行为\"}], \"suggestions\": [\"非阻断的改进建议\"], \"checks\": \"已运行检查的简要清单（一段）\", \"unverified\": [\"未能验证的项及原因\"]}\n字段规则：verdict=PASS 时 blockers 为 []；criteria 逐条覆盖完成标准，result 三选一；suggestions/unverified 没有则填 []；checks 一段话如实说明。\n\n启动工作目录：\n{{workflow.cwd}}\n\n迁移说明：\n{{migration_brief}}\n\n逐点迁移记录（items 为各条目结果，failed 为失败条目）：\n{{migrate_all}}\n\n上一轮完成标准（首轮为空，沿用重验）：\n{{reviewer.criteria}}\n\n上一轮阻断（首轮为空，逐条核对是否已解决）：\n{{reviewer.blockers}}",
     }),
   ],
-  until: { source: "reviewer", finalStatus: "PASS" },
+  until: { source: "reviewer.verdict", equals: "PASS" },
 });
 
 phase("提交");

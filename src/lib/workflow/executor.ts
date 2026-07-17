@@ -609,13 +609,21 @@ async function* runLoopNode(input: {
   try {
     throwIfAborted(input.request.signal);
 
+    const maxIterations = resolveLoopMaxIterations(
+      loop.maxIterations,
+      input.request.inputs,
+    );
+
     yield loopStatusEvent({
       runId: input.runId,
       nodeId: input.node.id,
-      message: `Loop "${input.node.id}" started with maxIterations=${loop.maxIterations}.`,
+      message: `Loop "${input.node.id}" started with maxIterations=${maxIterations}.`,
     });
 
-    const recoveredStopReason = readRecoveredLoopStopReason(recoveredLoop, loop);
+    const recoveredStopReason = readRecoveredLoopStopReason(
+      recoveredLoop,
+      maxIterations,
+    );
     if (recoveredStopReason) {
       stopReason = recoveredStopReason;
       const output = formatLoopOutput({
@@ -644,7 +652,7 @@ async function* runLoopNode(input: {
 
     for (
       let iteration = recoveredLoop?.nextIteration ?? 1;
-      iteration <= loop.maxIterations;
+      iteration <= maxIterations;
       iteration += 1
     ) {
       throwIfAborted(input.request.signal);
@@ -1752,6 +1760,31 @@ function resolveRuntimeOption(
   return rendered || fallback;
 }
 
+// Resolve a loop's maxIterations to a concrete integer at loop start. A number
+// is already resolved at parse time; a runtime option template resolves from run
+// inputs (an empty/omitted optional input falls back to the template default).
+// The resolved value must again be an integer 1..10 — a violation throws, which
+// fails the loop node with a clear message.
+function resolveLoopMaxIterations(
+  maxIterations: number | string,
+  workflowInputs: Record<string, WorkflowInputValue> = {},
+): number {
+  if (typeof maxIterations === "number") {
+    return maxIterations;
+  }
+  const rendered = renderValueTemplate(
+    maxIterations,
+    (name) => workflowInputs[name],
+  ).trim();
+  const parsed = Number(rendered);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10) {
+    throw new Error(
+      `Loop maxIterations resolved to "${rendered || "(empty)"}" from template "${maxIterations}", which is not an integer from 1 to 10.`,
+    );
+  }
+  return parsed;
+}
+
 function assertRequiredWorkflowCwd(
   parsed: ParsedWorkflow,
   cwd: string | undefined,
@@ -1951,7 +1984,7 @@ function sanitizeLoopIterationCheckpoint(
 
 function readRecoveredLoopStopReason(
   recoveredLoop: WorkflowLoopRecoveryState | undefined,
-  loop: NonNullable<WorkflowNode["loop"]>,
+  maxIterations: number,
 ): "until_matched" | "max_iterations_reached" | undefined {
   const latestIteration = recoveredLoop?.iterations.at(-1);
   if (!latestIteration) {
@@ -1960,7 +1993,7 @@ function readRecoveredLoopStopReason(
   if (latestIteration.untilMatched) {
     return "until_matched";
   }
-  if ((recoveredLoop?.nextIteration ?? 1) > loop.maxIterations) {
+  if ((recoveredLoop?.nextIteration ?? 1) > maxIterations) {
     return "max_iterations_reached";
   }
   return undefined;

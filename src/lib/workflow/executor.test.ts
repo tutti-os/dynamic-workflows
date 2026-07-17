@@ -730,6 +730,122 @@ const delivery = await loop({
     ]);
   });
 
+  it("resolves loop maxIterations from a number input", async () => {
+    const calls: AgentRunInput[] = [];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield { type: "text_delta", text: "FAIL" };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+export const inputs = {
+  max_rounds: { type: "number", required: false, min: 1, max: 10 },
+}
+
+const delivery = await loop({
+  id: "delivery",
+  onMaxIterations: "complete",
+  maxIterations: "{{max_rounds:3}}",
+  steps: [agent({ id: "acceptance", prompt: "Review" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+      inputs: { max_rounds: 2 },
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toHaveLength(2);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Loop "delivery" started with maxIterations=2.',
+      ]),
+    );
+  });
+
+  it("falls back to the maxIterations template default when the input is omitted", async () => {
+    const calls: AgentRunInput[] = [];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield { type: "text_delta", text: "FAIL" };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+export const inputs = {
+  max_rounds: { type: "number", required: false, min: 1, max: 10 },
+}
+
+const delivery = await loop({
+  id: "delivery",
+  onMaxIterations: "complete",
+  maxIterations: "{{max_rounds:3}}",
+  steps: [agent({ id: "acceptance", prompt: "Review" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toHaveLength(3);
+    expect(readStatusMessages(events)).toEqual(
+      expect.arrayContaining([
+        'Loop "delivery" started with maxIterations=3.',
+      ]),
+    );
+  });
+
+  it("fails the loop when a resolved maxIterations input is out of bounds", async () => {
+    runAgentMock.mockImplementation(async function* (): AsyncGenerator<AgentRuntimeEvent> {
+      yield { type: "text_delta", text: "FAIL" };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const events = [];
+    for await (const event of runWorkflow({
+      script: `
+export const inputs = {
+  max_rounds: { type: "number", required: false },
+}
+
+const delivery = await loop({
+  id: "delivery",
+  maxIterations: "{{max_rounds:3}}",
+  steps: [agent({ id: "acceptance", prompt: "Review" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+      inputs: { max_rounds: 99 },
+    })) {
+      events.push(event);
+    }
+
+    expect(readNodeFailures(events)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("not an integer from 1 to 10"),
+      ]),
+    );
+    expect(events.at(-1)).toEqual(
+      expect.objectContaining({ type: "run_completed", status: "failed" }),
+    );
+  });
+
   it("resumes a loop from a persisted step checkpoint", async () => {
     const calls: AgentRunInput[] = [];
     const checkpoints: unknown[] = [];
@@ -1225,8 +1341,29 @@ const acceptance = await loop({
         type: "text_delta",
         text: isReviewer
           ? reviewerRuns === 1
-            ? "阻断：缺少边界测试\nFAIL"
-            : "验收通过\nPASS"
+            ? JSON.stringify({
+                verdict: "FAIL",
+                criteria: [{ id: 1, text: "边界完整", result: "不通过" }],
+                blockers: [
+                  {
+                    location: "src/x.ts",
+                    issue: "缺少边界测试",
+                    evidence: "证据",
+                    expectation: "期望行为",
+                  },
+                ],
+                suggestions: [],
+                checks: "运行了检查",
+                unverified: [],
+              })
+            : JSON.stringify({
+                verdict: "PASS",
+                criteria: [{ id: 1, text: "边界完整", result: "通过" }],
+                blockers: [],
+                suggestions: [],
+                checks: "运行了检查",
+                unverified: [],
+              })
           : input.title === "提交 MR"
             ? JSON.stringify({
                 result: "mr_created",
@@ -1276,7 +1413,8 @@ const acceptance = await loop({
       undefined,
     ]);
     expect(calls[1].prompt).toContain("请补充边界测试");
-    expect(calls[3].prompt).toContain("阻断：缺少边界测试");
+    // RD 修复 receives the reviewer's structured blockers via {{reviewer.blockers}}.
+    expect(calls[3].prompt).toContain("缺少边界测试");
     expect(calls[5].prompt).toContain("Stop reason: until_matched");
     expect(events.at(-1)).toEqual(expect.objectContaining({
       type: "run_completed",

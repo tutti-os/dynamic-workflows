@@ -25,6 +25,15 @@ export const inputs = {
     label: "Reviewer model",
     description: "可选：验收 Reviewer 使用的模型，需与所选 agent 兼容。留空则使用 run 级 model。验收是质量门禁，值得配置更强的模型。",
   },
+  max_rounds: {
+    type: "number",
+    required: false,
+    min: 1,
+    max: 10,
+    label: "验收循环轮数",
+    description:
+      "按需求量级选择：小需求（单文件/明确修补）建议 2；中等（跨少数文件的特性）建议 3；大需求（跨模块/含迁移）建议 4-5。留空用默认 3。上游 agent 按此标准自行决策。（仅作用于独立验收循环；Human 对齐循环固定 5 轮。）",
+  },
 };
 
 phase("RD 与 Human 对齐");
@@ -107,7 +116,7 @@ const acceptance_loop = loop({
   label: "Reviewer 验收循环",
   cwd: ".",
   inputs: { human_alignment },
-  maxIterations: 4,
+  maxIterations: "{{max_rounds:3}}",
   onMaxIterations: "complete",
   firstIteration: { startAt: "reviewer" },
   steps: [
@@ -116,7 +125,7 @@ const acceptance_loop = loop({
       label: "RD 修复",
       session: { mode: "inherit", key: "rd_room" },
       prompt: `
-Human 对齐门禁已经完成，不需要再次请求 Human 审批。请修复下方 Reviewer 验收反馈中标注为「阻断」且属于原始需求范围的问题，运行相关检查，并保留改动在工作区。若反馈暴露出必须新增产品决策的信息缺口，标注「需要重新对齐」并停止猜测，不要擅自扩展需求。不要 commit 或 push。
+Human 对齐门禁已经完成，不需要再次请求 Human 审批。请逐条修复下方「阻断」中属于原始需求范围的问题，运行相关检查，并保留改动在工作区。若某条阻断暴露出必须新增产品决策的信息缺口，标注「需要重新对齐」并停止猜测，不要擅自扩展需求。不要 commit 或 push。
 
 启动工作目录：
 {{workflow.cwd}}
@@ -124,16 +133,22 @@ Human 对齐门禁已经完成，不需要再次请求 Human 审批。请修复�
 原始需求：
 {{requirement}}
 
-Reviewer 验收反馈：
-{{reviewer}}
+Reviewer 阻断（逐条修复；每项含 location/issue/evidence/expectation）：
+{{reviewer.blockers}}
+
+Reviewer 建议（可选处理，非阻断）：
+{{reviewer.suggestions}}
 `,
       appendPrompt: `
-Reviewer 最新一轮验收未通过，反馈见下方。Human 对齐门禁已经完成，不要再次请求 Human 审批。请继续使用当前同一个 RD 会话和工作目录修复「阻断」问题。
+Reviewer 最新一轮验收未通过，阻断见下方。Human 对齐门禁已经完成，不要再次请求 Human 审批。请继续使用当前同一个 RD 会话和工作目录逐条修复这些阻断。
 
-先重新锚定仓库当前状态：查看 git status 与 git diff，并对将要修改的文件做针对性重读；当会话记忆与仓库实际内容冲突时，一律以仓库为准。再核对反馈是否符合原始需求，不要因建议项或范围外意见扩大实现；若必须新增产品决策，标注「需要重新对齐」并停止猜测。修复后运行相关检查并输出简洁的修复摘要，沿用上一轮的上下文纪律；不要 commit 或 push。
+先重新锚定仓库当前状态：查看 git status 与 git diff，并对将要修改的文件做针对性重读；当会话记忆与仓库实际内容冲突时，一律以仓库为准。再核对阻断是否符合原始需求，不要因建议项或范围外意见扩大实现；若必须新增产品决策，标注「需要重新对齐」并停止猜测。修复后运行相关检查并输出简洁的修复摘要，沿用上一轮的上下文纪律；不要 commit 或 push。
 
-Reviewer 验收反馈：
-{{reviewer}}
+Reviewer 阻断（逐条修复；每项含 location/issue/evidence/expectation）：
+{{reviewer.blockers}}
+
+Reviewer 建议（可选处理，非阻断）：
+{{reviewer.suggestions}}
 `,
     }),
     agent({
@@ -142,19 +157,21 @@ Reviewer 验收反馈：
       agent: "{{reviewer_agent}}",
       model: "{{reviewer_model}}",
       session: { mode: "inherit", key: "reviewer_room" },
+      output: "json",
       prompt: `
 你是独立验收 Reviewer，不修改代码，也不读取或依赖 RD 的交付叙述。Human 通过只表示允许进入验收，不构成需求已经满足的证据。只依据原始需求和仓库当前实际状态验收。
 
 验收要求：
 1. 从原始需求提炼逐条、可验证的标准，不增加产品需求或扩大范围。
-2. 独立查看 git status、git diff、相关代码、测试与配置，并运行相关 focused checks。复验轮次优先验证上一轮「阻断」的修复及其影响面，加上针对性回归；完整检查面（全量测试/构建等重型检查）只在你准备返回 PASS 的轮次要求，首轮仍需完整建立基线。
-3. FAIL 只用于不满足原始需求的阻断问题；改进意见标注为「建议」，不作为 FAIL 依据。
-4. FAIL 时逐条给出位置、问题、证据和期望行为；必要信息缺失时标注「阻断：需要对齐」。
+2. 独立查看 git status、git diff、相关代码、测试与配置，并运行相关 focused checks。复验轮次的验证范围＝上一轮阻断的修复及其影响面 ＋ 自上一轮评审以来的全部新改动面（用 git diff 对比确定）——新问题只可能藏在新改动里。完整检查面（全量测试/构建等重型检查）只在你准备返回 PASS 的轮次要求，首轮仍需完整建立基线。
+3. FAIL 只用于不满足原始需求的阻断问题；改进意见放入 suggestions，不作为 FAIL 依据。
+4. 每个阻断在 blockers 中逐条给出 location、issue、evidence、expectation；必要信息缺失时作为一个 blocker（issue 以「需要对齐」开头）。
 
-输出：验收标准及结论、阻断问题、建议、检查结果、未验证项。最后一个非空行必须只为：
-PASS
-或
-FAIL
+返回 PASS 之前：上一轮清单只是核对起点，不是扫描边界——必须以全新视角覆盖整个变更面，主动寻找清单之外的问题。
+
+输出契约（output: "json"）：可先给出简短的验收推理，但消息最后只包含一个 JSON 对象，其后不得有任何多余文字。形如：
+{"verdict": "PASS" | "FAIL", "criteria": [{"id": 1, "text": "验收标准原文", "result": "通过" | "不通过" | "未验证"}], "blockers": [{"location": "文件/函数", "issue": "问题", "evidence": "证据", "expectation": "期望行为"}], "suggestions": ["非阻断的改进建议"], "checks": "已运行检查的简要清单（一段）", "unverified": ["未能验证的项及原因"]}
+字段规则：verdict=PASS 时 blockers 为 []；criteria 逐条覆盖你提炼的标准，result 三选一；suggestions/unverified 没有则填 []；checks 一段话如实说明。
 
 启动工作目录：
 {{workflow.cwd}}
@@ -163,16 +180,15 @@ FAIL
 {{requirement}}
 `,
       appendPrompt: `
-请基于原始需求和仓库当前实际状态重新验收。独立查看当前代码与 diff，核对上一轮阻断问题是否解决，同时检查是否引入新回归。以仓库当前状态为准，不要依赖会话记忆中的旧代码内容，也不要依赖 RD 的交付摘要。你上一轮已建立验收标准清单，若原始需求未变，沿用该清单逐项重验，不必重新推导；仅当需求或范围理解被证明有误时才修订清单。若原始需求、相关代码和同一个「需要对齐」阻断都没有变化，不要重复运行无关检查或扩写相同意见，简洁确认阻断仍存在并返回 FAIL。判定标准和输出格式不变。
+请基于原始需求和仓库当前实际状态重新验收。独立查看当前代码与 diff，核对上一轮阻断问题是否解决，同时检查是否引入新回归。以仓库当前状态为准，不要依赖会话记忆中的旧代码内容，也不要依赖 RD 的交付摘要。你上一轮 JSON 输出中的 criteria 清单即验收标准，若原始需求未变，沿用该清单逐项重验，不必重新推导；仅当需求或范围理解被证明有误时才修订清单。复验轮次的验证范围＝上一轮阻断的修复及其影响面 ＋ 自上一轮评审以来的全部新改动面（用 git diff 对比确定）。若原始需求、相关代码和同一个「需要对齐」阻断都没有变化，不要重复运行无关检查或扩写相同意见，简洁确认阻断仍存在并返回 verdict=FAIL。
 
-最后一个非空行必须只为：
-PASS
-或
-FAIL
+返回 PASS 之前：上一轮 criteria 只是核对起点，不是扫描边界——必须以全新视角覆盖整个变更面，主动寻找清单之外的问题。
+
+判定标准和 JSON 输出契约不变：消息最后只包含同一形状的 JSON 对象，其后不得有任何多余文字。
 `,
     }),
   ],
-  until: { source: "reviewer", finalStatus: "PASS" },
+  until: { source: "reviewer.verdict", equals: "PASS" },
 });
 
 phase("提交");

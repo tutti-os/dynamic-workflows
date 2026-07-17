@@ -106,6 +106,40 @@ function loopStepRunning(
 
 const LAST = <T>(items: T[]): T | undefined => items.at(-1);
 
+/**
+ * Builds an acceptance reviewer's contract JSON reply. The reviewers now emit
+ * output: "json" with a structured verdict/criteria/blockers/suggestions shape;
+ * the loop's until reads `<reviewer>.verdict`, and cross-round injection reads
+ * `<reviewer>.criteria` / `<reviewer>.blockers` / `<reviewer>.suggestions`.
+ */
+function reviewerJsonReply(input: {
+  verdict: "PASS" | "FAIL";
+  criteriaText: string;
+  blockerIssue?: string;
+  suggestion?: string;
+}): string {
+  const fail = input.verdict === "FAIL";
+  return JSON.stringify({
+    verdict: input.verdict,
+    criteria: [
+      { id: 1, text: input.criteriaText, result: fail ? "不通过" : "通过" },
+    ],
+    blockers: fail
+      ? [
+          {
+            location: "src/x.ts",
+            issue: input.blockerIssue ?? "阻断问题",
+            evidence: "证据",
+            expectation: "期望行为",
+          },
+        ]
+      : [],
+    suggestions: fail && input.suggestion ? [input.suggestion] : [],
+    checks: "运行了相关 focused checks",
+    unverified: [],
+  });
+}
+
 // ---------------------------------------------------------------------------
 
 describe("builtin blueprint behavior", () => {
@@ -127,8 +161,20 @@ describe("builtin blueprint behavior", () => {
         if (input.title === "验收 Reviewer") {
           acceptanceRuns += 1;
           return acceptanceRuns === 1
-            ? { text: "阻断：缺少测试\nFAIL" }
-            : { text: "验收通过\nPASS" };
+            ? {
+                text: reviewerJsonReply({
+                  verdict: "FAIL",
+                  criteriaText: "功能实现完整",
+                  blockerIssue: "缺少测试",
+                  suggestion: "优化命名",
+                }),
+              }
+            : {
+                text: reviewerJsonReply({
+                  verdict: "PASS",
+                  criteriaText: "功能实现完整",
+                }),
+              };
         }
         return {
           text: JSON.stringify({
@@ -167,14 +213,13 @@ describe("builtin blueprint behavior", () => {
         loopStepRunning(events, "loop:delivery_loop:2:acceptance")?.promptMode,
       ).toBe("full");
 
-      // Round 1 acceptance: the {{acceptance}} self-reference renders EMPTY, so
-      // the "previous review" label is the final content of the prompt.
-      expect(acceptanceCalls[0].prompt).toContain("上一轮验收记录（首轮为空）：");
-      expect(acceptanceCalls[0].prompt.trimEnd()).toMatch(
-        /上一轮验收记录（首轮为空）：$/,
-      );
-      // Round 2 acceptance carries round 1's FAIL feedback.
-      expect(acceptanceCalls[1].prompt).toContain("阻断：缺少测试");
+      // Round 1 acceptance: the dotted {{acceptance.criteria}} /
+      // {{acceptance.blockers}} self-references render EMPTY, so the "previous
+      // blockers" label is the final content of the prompt.
+      expect(acceptanceCalls[0].prompt).toContain("上一轮阻断（首轮为空");
+      expect(acceptanceCalls[0].prompt.trimEnd()).toMatch(/是否已解决）：$/);
+      // Round 2 acceptance carries round 1's criteria via the dotted injection.
+      expect(acceptanceCalls[1].prompt).toContain("功能实现完整");
 
       // RD round 2 resumes its session (appendPrompt mode) and sees the feedback.
       expect(
@@ -183,7 +228,8 @@ describe("builtin blueprint behavior", () => {
       expect(
         loopStepRunning(events, "loop:delivery_loop:2:rd")?.promptMode,
       ).toBe("append");
-      expect(rdCalls[1].prompt).toContain("阻断：缺少测试");
+      // RD round 2 receives the reviewer's blockers via {{acceptance.blockers}}.
+      expect(rdCalls[1].prompt).toContain("缺少测试");
 
       // submit_mr sees the until_matched stop reason from the loop output.
       expect(submitCalls[0].prompt).toContain("Stop reason: until_matched");
@@ -215,7 +261,13 @@ describe("builtin blueprint behavior", () => {
           return { text: "implementation delivered", sessionId: "rd-session" };
         }
         if (input.title === "验收 Reviewer") {
-          return { text: "阻断：仍未满足\nFAIL" };
+          return {
+            text: reviewerJsonReply({
+              verdict: "FAIL",
+              criteriaText: "功能实现完整",
+              blockerIssue: "仍未满足",
+            }),
+          };
         }
         return {
           text: JSON.stringify({
@@ -306,8 +358,21 @@ describe("builtin blueprint behavior", () => {
         if (input.title === "验收 Reviewer") {
           reviewerRuns += 1;
           return reviewerRuns === 1
-            ? { text: "阻断：缺少边界测试\nFAIL", sessionId: "reviewer-session" }
-            : { text: "验收通过\nPASS", sessionId: "reviewer-session" };
+            ? {
+                text: reviewerJsonReply({
+                  verdict: "FAIL",
+                  criteriaText: "边界完整",
+                  blockerIssue: "缺少边界测试",
+                }),
+                sessionId: "reviewer-session",
+              }
+            : {
+                text: reviewerJsonReply({
+                  verdict: "PASS",
+                  criteriaText: "边界完整",
+                }),
+                sessionId: "reviewer-session",
+              };
         }
         return {
           text: JSON.stringify({
@@ -374,7 +439,8 @@ describe("builtin blueprint behavior", () => {
       ).toBe("append");
       const rdFixCalls = callsWithTitle(calls, "RD 修复");
       expect(rdFixCalls).toHaveLength(1);
-      expect(rdFixCalls[0].prompt).toContain("阻断：缺少边界测试");
+      // rd_fix receives the reviewer's blockers via {{reviewer.blockers}}.
+      expect(rdFixCalls[0].prompt).toContain("缺少边界测试");
       expect(rdFixCalls[0].resumeSessionId).toBe("rd-session");
 
       // submit_mr runs after reviewer PASS with the until_matched stop reason.
@@ -604,8 +670,19 @@ describe("builtin blueprint behavior", () => {
         if (input.title === "整体验收 Reviewer") {
           reviewerRuns += 1;
           return reviewerRuns === 1
-            ? { text: "阻断：跨文件回归\nFAIL" }
-            : { text: "整体通过\nPASS" };
+            ? {
+                text: reviewerJsonReply({
+                  verdict: "FAIL",
+                  criteriaText: "全部调用点已迁移",
+                  blockerIssue: "跨文件回归",
+                }),
+              }
+            : {
+                text: reviewerJsonReply({
+                  verdict: "PASS",
+                  criteriaText: "全部调用点已迁移",
+                }),
+              };
         }
         return {
           text: JSON.stringify({
@@ -656,7 +733,8 @@ describe("builtin blueprint behavior", () => {
       ).toBe("full");
       const fixCalls = callsWithTitle(calls, "整体修复");
       expect(fixCalls).toHaveLength(1);
-      expect(fixCalls[0].prompt).toContain("阻断：跨文件回归");
+      // fix receives the reviewer's blockers via {{reviewer.blockers}}.
+      expect(fixCalls[0].prompt).toContain("跨文件回归");
 
       // submit_mr gates on the until_matched stop reason.
       const submitCalls = callsWithTitle(calls, "提交 MR");

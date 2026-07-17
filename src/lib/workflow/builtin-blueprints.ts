@@ -32,11 +32,11 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     difficulty: "advanced",
     requiresCwd: true,
     patternSummary:
-      "In a bounded two-role loop, an RD agent implements the requirement while an independent reviewer judges only the original requirement and current repository state, never the RD delivery narrative. The RD keeps an inherited session with appendPrompt deltas; the reviewer runs each round fresh and independent, seeing only its own previous review, and returns PASS or FAIL on the final line. A final step gates on the acceptance result, then emits a structured JSON delivery report (output json): an MR/PR, or an honest blocked/not-accepted status carrying the review's unverified items.",
+      "In a bounded two-role loop, an RD agent implements the requirement while an independent reviewer judges only the original requirement and current repository state. The RD keeps an inherited session with appendPrompt deltas; the reviewer runs each round fresh (output json) and emits a structured verdict report. The loop exits on until verdict PASS; across rounds the RD gets the reviewer's blockers and the reviewer reuses its own criteria via dotted paths. The round budget is run-configurable via a max_rounds input (default 3). A final step gates on the result and emits a JSON delivery report.",
     useCases: [
       "Implement a requirement in a local repository with adversarial acceptance review.",
       "Keep reviewer judgment independent from the implementer's delivery narrative and claimed change scope.",
-      "Demonstrate a bounded loop, an inherited RD session with appendPrompt, a fresh reviewer session per round, and until finalStatus primitives.",
+      "Demonstrate a bounded loop, an inherited RD session with appendPrompt, a fresh JSON-verdict reviewer per round, until on a verdict field, and a run-configurable round budget.",
       "Create a reusable RD/reviewer delivery pattern that degrades to a status report instead of failing silently.",
     ],
     script: readBuiltinBlueprintScript(

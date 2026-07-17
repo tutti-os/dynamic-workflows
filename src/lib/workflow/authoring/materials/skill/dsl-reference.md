@@ -154,7 +154,7 @@ loop({
 });
 ```
 
-- `maxIterations` must be an integer from 1 to 10.
+- `maxIterations` must be an integer from 1 to 10, OR a whole-field runtime option template (`maxIterations: "{{max_rounds:3}}"`) whose referenced input is declared `type: "number"`. A literal default in the template must itself be an integer 1..10, and the value resolved from run inputs must be an integer 1..10 (a violation fails the loop node at run time). Declaring the input with `{ min: 1, max: 10 }` gives run-dialog-side validation for free. See "Runtime option templates" below.
 - `firstIteration: { startAt: "<step id>" }` optionally starts only the first iteration at a later step. Every subsequent iteration runs all steps in their declared order. The `until.source` step must not be skipped by this entry point. This is useful for `[repair, reviewer]`: review immediately, then repair and re-review only after a failure. `maxIterations` counts these evaluation cycles, including the initial review.
 - `onMaxIterations` decides what happens when the loop exhausts its iterations without the `until` status: `"fail"` (the default) fails the run, `"complete"` continues to the next node. Use `"complete"` only when downstream steps can safely run on unaccepted work.
 - Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `cwd`, and `session`.
@@ -198,21 +198,23 @@ map({
 - Children run with an internal concurrency pool (up to 4 at a time).
 - The map output is a record you reference downstream like any node output: `{ items: [{ index, item, status: "completed", output }...], failed: [{ index, item, step, error }...], total }`. Each failure's `step` is the id of the step that failed. Failures stay visible in `failed`; a synthesizer reading `{{migrate_all}}` sees the full record.
 
-## Runtime option templates for agent / model
+## Runtime option templates for agent / model / maxIterations
 
-`agent` and `model` may be run-configurable, but only as the entire field value:
+`agent`, `model`, and a loop's `maxIterations` may be run-configurable, but only as the entire field value:
 
 ```js
 agent({ id: "coder", agent: "{{coder_agent:local:codex}}", model: "{{coder_model:gpt-5}}", prompt: "..." })
+loop({ id: "review", maxIterations: "{{max_rounds:3}}", steps: [/* ... */], until: { source: "acceptance.verdict", equals: "PASS" } })
 ```
 
 - Allowed forms: `"{{input_name}}"` or `"{{input_name:default_value}}"`. The referenced input must be declared in `export const inputs`; whether it is required at run time follows that declaration (`required: true` with no `default` means required).
+- `maxIterations` templates additionally require the referenced input to be `type: "number"`, and enforce the integer 1..10 bound at both times: a literal default is checked at parse time, and the value resolved from run inputs is checked at loop start (out of bounds fails the loop node). An omitted optional input falls back to the template default.
 - A declared optional input left empty at run time makes the field fall back to the run-level `agent`/`model` value. Declaring `reviewer_model: { type: "string", required: false, ... }` and setting `model: "{{reviewer_model}}"` is therefore the way to offer a per-role override without forcing a value or baking in a provider-specific default.
 - Partial or multiple templates are invalid: never `model: "gpt-{{m}}"` or `model: "{{a}}{{b}}"`.
 - Templates resolve run inputs only, never upstream node or loop step outputs.
 - Runtime option input names must not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names. Multiple roles may intentionally share one input, such as `{{review_model:gpt-5}}`.
 
-## Resolution order for agent / model
+## Resolution order for agent / model / maxIterations
 
 1. Loop step `agent` / `model`
 2. Loop or normal node `agent` / `model`

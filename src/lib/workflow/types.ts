@@ -129,7 +129,13 @@ export type WorkflowLoopUntil =
     };
 
 export type WorkflowLoopSpec = {
-  maxIterations: number;
+  /**
+   * Iteration ceiling. A plain integer (1..10) is resolved at parse time. A
+   * whole-field runtime option template (`"{{input}}"` / `"{{input:default}}"`)
+   * is kept as a string and resolved from run inputs at loop start, where the
+   * resolved value must again be an integer 1..10.
+   */
+  maxIterations: number | string;
   onMaxIterations: "fail" | "complete";
   firstIteration?: {
     startAt: string;

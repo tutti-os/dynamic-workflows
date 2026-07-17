@@ -145,6 +145,7 @@ export function parseWorkflowScript(script: string): ParsedWorkflow {
   addRuntimeOptionDiagnostics(state);
   connectTemplateRefs(state);
   addInputSchemaReferenceDiagnostics(state, inputSchema);
+  addLoopMaxIterationsInputTypeDiagnostics(state, inputSchema);
   addWorkflowQualityDiagnostics(state, meta);
   state.diagnostics.push(...validateWorkflowExecutionGraph(state));
 
@@ -320,7 +321,7 @@ function addLoopNode(
     `loop_${state.anonymousIndex++}`;
   const label = readObjectString(options, "label") ?? humanize(id);
   const session = readSessionSpec(options, state, "loop");
-  const maxIterations = readObjectNumber(options, "maxIterations");
+  const maxIterations = readLoopMaxIterations(options, callExpression, state);
   const onMaxIterations = readLoopOnMaxIterations(options, state);
   const steps = readLoopSteps(options, state);
   const stepIds = new Set(steps.map((step) => step.id));
@@ -338,16 +339,6 @@ function addLoopNode(
   ];
   const inputs = readInputs(options, state);
 
-  if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 10) {
-    state.diagnostics.push({
-      severity: "error",
-      message: "loop(...) requires maxIterations as an integer from 1 to 10.",
-      range:
-        readObjectPropertyValueRange(options, "maxIterations") ??
-        toRange(callExpression),
-    });
-  }
-
   if (steps.length === 0) {
     state.diagnostics.push({
       severity: "error",
@@ -357,7 +348,7 @@ function addLoopNode(
   }
 
   const loop: WorkflowLoopSpec = {
-    maxIterations: Number.isInteger(maxIterations) ? maxIterations : 1,
+    maxIterations,
     onMaxIterations,
     ...(firstIteration ? { firstIteration } : {}),
     ...(session ? { session } : {}),
@@ -387,6 +378,62 @@ function addLoopNode(
     state.variableToNodeId[variableName] = node.id;
   }
   addInputEdges(node, state);
+}
+
+// maxIterations is an integer (1..10) OR a whole-field runtime option template
+// (`"{{input}}"` / `"{{input:default}}"`). A literal integer is resolved at
+// parse time; a template is kept as a string and resolved from run inputs at
+// loop start. Template shape and name-collision diagnostics are added centrally
+// in addRuntimeOptionDiagnostics (mirroring agent/model); the number-type check
+// on the referenced input runs once the input schema is known. Here we enforce
+// the maxIterations-specific integer 1..10 bound: on a literal integer, and on
+// a literal default inside a template.
+function readLoopMaxIterations(
+  options: AnyNode | undefined,
+  callExpression: AnyNode,
+  state: ParserState,
+): number | string {
+  const value = readObjectPropertyValue(options, "maxIterations");
+  const range =
+    readObjectPropertyValueRange(options, "maxIterations") ??
+    toRange(callExpression);
+
+  const template = readStringLike(value);
+  if (template !== undefined) {
+    const ref = validateRuntimeOptionTemplate(template).refs[0];
+    if (ref?.defaultValue !== undefined) {
+      const parsedDefault = Number(ref.defaultValue);
+      if (
+        !Number.isInteger(parsedDefault) ||
+        parsedDefault < 1 ||
+        parsedDefault > 10
+      ) {
+        state.diagnostics.push({
+          severity: "error",
+          message: `loop maxIterations template default "${ref.defaultValue}" must be an integer from 1 to 10.`,
+          range,
+        });
+      }
+    }
+    return template;
+  }
+
+  const numeric = readNumberLike(value);
+  if (
+    numeric !== undefined &&
+    Number.isInteger(numeric) &&
+    numeric >= 1 &&
+    numeric <= 10
+  ) {
+    return numeric;
+  }
+  state.diagnostics.push({
+    severity: "error",
+    message:
+      'loop(...) requires maxIterations as an integer from 1 to 10, or a runtime input template like "{{max_rounds:3}}".',
+    range,
+  });
+  return 1;
 }
 
 function readLoopFirstIteration(
@@ -1518,6 +1565,16 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
     if (!node.loop) {
       continue;
     }
+    if (typeof node.loop.maxIterations === "string") {
+      validateRuntimeOptionField({
+        value: node.loop.maxIterations,
+        fieldName: "maxIterations",
+        ownerLabel: `loop "${node.id}"`,
+        range: node.sourceRange,
+        disallowedInputNames: workflowNames,
+        state,
+      });
+    }
     const loopStepNames = new Set(node.loop.steps.map((step) => step.id));
     for (const step of node.loop.steps) {
       const disallowedInputNames = new Set([
@@ -1546,7 +1603,7 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
 
 function validateRuntimeOptionField(input: {
   value: string | undefined;
-  fieldName: "agent" | "model";
+  fieldName: "agent" | "model" | "maxIterations";
   ownerLabel: string;
   range?: EditableRange;
   disallowedInputNames: Set<string>;
@@ -1631,6 +1688,36 @@ function addInputSchemaReferenceDiagnostics(
       path: workflowInputPath(name),
       hint: `Use "{{${name}}}" in a prompt or runtime option, or remove this input from export const inputs.`,
     }));
+  }
+}
+
+// A loop maxIterations runtime option template may only reference a declared
+// number input — an integer bound cannot come from a string/enum/boolean input.
+// Undeclared refs are already flagged as runtime option inputs; here we only
+// check the type of refs that resolve to a declared input.
+function addLoopMaxIterationsInputTypeDiagnostics(
+  state: ParserState,
+  inputSchema: WorkflowInputSchema,
+): void {
+  for (const node of state.nodes) {
+    const maxIterations = node.loop?.maxIterations;
+    if (typeof maxIterations !== "string") {
+      continue;
+    }
+    for (const ref of validateRuntimeOptionTemplate(maxIterations).refs) {
+      const definition = inputSchema[ref.name];
+      if (!definition || definition.type === "number") {
+        continue;
+      }
+      state.diagnostics.push(workflowDiagnostic({
+        severity: "error",
+        code: "workflow.loop.maxIterationsInputType",
+        message: `loop "${node.id}" maxIterations template input "${ref.name}" must be declared as a number input (found "${definition.type}").`,
+        path: workflowInputPath(ref.name),
+        range: node.sourceRange,
+        hint: `Declare "${ref.name}" as { type: "number", min: 1, max: 10 } in export const inputs.`,
+      }));
+    }
   }
 }
 
@@ -1926,6 +2013,9 @@ function collectRuntimeOptionRefs(node: WorkflowNode): {
   const refs = [
     ...collectRuntimeOptionFieldRefs(node.agent),
     ...collectRuntimeOptionFieldRefs(node.model),
+    ...(node.loop && typeof node.loop.maxIterations === "string"
+      ? collectRuntimeOptionFieldRefs(node.loop.maxIterations)
+      : []),
     ...(node.loop?.steps.flatMap((step) => [
       ...collectRuntimeOptionFieldRefs(step.agent),
       ...collectRuntimeOptionFieldRefs(step.model),

@@ -795,6 +795,121 @@ const broken = await loop({
     ).toThrow(WorkflowScriptSyntaxError);
   });
 
+  it("accepts a maxIterations runtime option template bound to a number input", () => {
+    const parsed = parseWorkflowScript(`
+export const inputs = {
+  max_rounds: { type: "number", required: false, min: 1, max: 10 },
+}
+const review = await loop({
+  id: "review",
+  maxIterations: "{{max_rounds:3}}",
+  steps: [
+    agent({ id: "coder", prompt: "Code" }),
+    agent({ id: "acceptance", output: "json", prompt: "Review {{coder}}. Return JSON." }),
+  ],
+  until: { source: "acceptance.verdict", equals: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes[0].loop?.maxIterations).toBe("{{max_rounds:3}}");
+    expect(parsed.optionalInputNames).toContain("max_rounds");
+    expect(
+      parsed.diagnostics.some(
+        (item) => item.code === "workflow.input.unused" && item.path === "inputs.max_rounds",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a maxIterations template bound to a non-number input", () => {
+    const parsed = parseWorkflowScript(`
+export const inputs = {
+  rounds: { type: "string", required: false },
+}
+const review = await loop({
+  id: "review",
+  maxIterations: "{{rounds:3}}",
+  steps: [agent({ id: "acceptance", prompt: "Review" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "workflow.loop.maxIterationsInputType",
+        message: expect.stringContaining(
+          'maxIterations template input "rounds" must be declared as a number input',
+        ),
+      }),
+    );
+  });
+
+  it("rejects a maxIterations template whose literal default is out of range", () => {
+    const parsed = parseWorkflowScript(`
+export const inputs = {
+  max_rounds: { type: "number", required: false },
+}
+const review = await loop({
+  id: "review",
+  maxIterations: "{{max_rounds:0}}",
+  steps: [agent({ id: "acceptance", prompt: "Review" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining(
+          'maxIterations template default "0" must be an integer from 1 to 10',
+        ),
+      }),
+    );
+  });
+
+  it("rejects a maxIterations template referencing an undeclared input", () => {
+    const parsed = parseWorkflowScript(`
+const review = await loop({
+  id: "review",
+  maxIterations: "{{max_rounds:3}}",
+  steps: [agent({ id: "acceptance", prompt: "Review" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        code: "workflow.runtimeInput.undeclared",
+        message: expect.stringContaining(
+          'Runtime option input "max_rounds" is not declared',
+        ),
+      }),
+    );
+  });
+
+  it("rejects a maxIterations template colliding with a workflow node id", () => {
+    const parsed = parseWorkflowScript(`
+const setup = await agent({ id: "setup", prompt: "setup" })
+const review = await loop({
+  id: "review",
+  maxIterations: "{{setup}}",
+  steps: [agent({ id: "acceptance", prompt: "Review {{setup}}" })],
+  until: { source: "acceptance", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        severity: "error",
+        message: expect.stringContaining(
+          'runtime input "setup" conflicts with a workflow node',
+        ),
+      }),
+    );
+  });
+
   it("keeps the loop RD acceptance sample aligned with cwd protocol", () => {
     const script = fs.readFileSync(
       path.join(
@@ -821,7 +936,16 @@ const broken = await loop({
     // own previous review, carried through dataflow rather than session memory.
     expect(acceptance?.session).toEqual({ mode: "independent" });
     expect(acceptance?.appendPrompt).toBeUndefined();
-    expect(acceptance?.templateRefs).toContain("acceptance");
+    // JSON output enables precise dotted self-reference: criteria + blockers are
+    // injected across rounds, not the whole previous record.
+    expect(acceptance?.output).toBe("json");
+    expect(acceptance?.templateRefs).toContain("acceptance.criteria");
+    expect(acceptance?.templateRefs).toContain("acceptance.blockers");
+    expect(parsed.nodes[0].loop?.until).toEqual({
+      source: "acceptance.verdict",
+      equals: "PASS",
+    });
+    expect(parsed.nodes[0].loop?.maxIterations).toBe("{{max_rounds:3}}");
   });
 
   it("keeps the human-gated RD blueprint on one RD session across both loops", () => {
