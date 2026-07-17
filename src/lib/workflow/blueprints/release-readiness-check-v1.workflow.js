@@ -13,6 +13,12 @@ export const inputs = {
     placeholder: "Releasing:\n\nVersion / branch:\n\nSpecial concerns:\n",
     widget: "textarea",
   },
+  check_permission_mode: {
+    type: "string",
+    required: false,
+    label: "Check permission mode",
+    description: "Optional permission mode id shared by all five checks. Discover ids with tutti agent composer-options --agent-id <id> --json (permissionConfig.modes). Leave empty to inherit the run-level mode, falling back to the agent's own default. Checks inspect and judge only — if the agent offers a read-only mode, set it here to enforce that at the permission layer.",
+  },
 };
 
 phase("Checks");
@@ -31,6 +37,7 @@ const checks = map({
   step: agent({
     id: "check_one",
     label: "Check {{item.check}}",
+    permissionMode: "{{check_permission_mode}}",
     output: "json",
     prompt: "You verify exactly one release-readiness dimension against the ACTUAL repository. Other dimensions are handled by parallel checks, so stay strictly within this one. Do not modify anything; inspect and judge only.\n\nInstructions:\n1. Verify the single dimension named in the item, exactly as its \"verify\" field describes, against the real repository state (files, tests, diff, config) plus the release scope below.\n2. Base the verdict on evidence you actually observed — cite the file, command, or test you checked. If you cannot verify something, that is itself grounds for \"blocked\", not a silent pass.\n3. Judge only this dimension; note anything out of scope in \"notes\" rather than acting on it.\n\nOutput contract: end your message with ONLY a JSON object shaped {\"check\": \"<the dimension>\", \"verdict\": \"ready\" | \"blocked\", \"evidence\": \"what you observed\", \"notes\": \"caveats or follow-ups, or empty\"}, with no prose after it.\n\nWorking directory:\n{{workflow.cwd}}\n\nRelease scope:\n{{release_scope}}\n\nCheck to run {{item_index}}:\n{{item}}",
   }),

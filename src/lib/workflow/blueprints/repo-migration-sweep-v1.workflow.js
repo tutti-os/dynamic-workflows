@@ -25,6 +25,12 @@ export const inputs = {
     label: "Reviewer model",
     description: "可选：整体验收 Reviewer 使用的模型，需与所选 agent 兼容。留空则使用 run 级 model。整体验收是质量门禁，值得配置更强的模型。",
   },
+  reviewer_permission_mode: {
+    type: "string",
+    required: false,
+    label: "Reviewer permission mode",
+    description: "可选：整体验收 Reviewer 的权限模式 id。先用 tutti agent composer-options --agent-id <reviewer_agent> --json 查询 permissionConfig.modes；留空先继承 run 级权限，run 级也未设置时使用该 agent 的默认权限。Reviewer 是只读角色——若该 agent 提供只读类权限模式，建议在此指定，从权限层强制它不改代码。",
+  },
   max_rounds: {
     type: "number",
     required: false,
@@ -89,6 +95,7 @@ const acceptance_loop = loop({
       label: "整体验收 Reviewer",
       agent: "{{reviewer_agent}}",
       model: "{{reviewer_model}}",
+      permissionMode: "{{reviewer_permission_mode}}",
       session: { mode: "independent" },
       output: "json",
       prompt: "你是独立的整体验收 Reviewer，每一轮都在全新会话中工作，不修改代码，也不读取或依赖任何迁移叙述。只依据迁移说明和仓库当前实际状态，判断整份迁移是否完成。\n\n验收方法：\n1. 从迁移说明提炼逐条、可验证的完成标准，不自行新增产品需求或扩大范围。若下方「上一轮完成标准」非空且迁移说明未变，沿用该清单逐项重验，不必重新推导；仅当需求或范围理解被证明有误时才修订清单。\n2. 独立查看 git status、git diff、相关代码、测试与配置，运行与本次迁移相关的 focused checks；无法验证的项明确说明原因并列入 unverified。\n3. 复验轮次的验证范围＝上一轮阻断的修复及其影响面 ＋ 自上一轮评审以来的全部新改动面（用 git diff 对比确定）——新问题只可能藏在新改动里。完整检查面（全量测试/构建等重型检查）只在你准备返回 PASS 的轮次要求，首轮仍需完整建立基线。\n4. 你的判断覆盖整体，而不只是单点：全仓是否仍残留「从」侧写法、逐点迁移之间是否引入跨文件回归或不一致、下方逐点迁移记录中标为 REJECTED 或出现在 failed 列表的条目是否已被妥善处理。\n5. 若下方「上一轮阻断」非空，逐条核对其是否已解决，并检查是否引入新问题。上一轮记录只是你自己的历史判断，不构成当前证据；若迁移说明、相关代码和同一个阻断都没有变化，不要重复无关检查，简洁确认阻断仍存在并返回 verdict=FAIL。\n\n返回 PASS 之前：上一轮清单只是核对起点，不是扫描边界——必须以全新视角覆盖整个变更面，主动寻找清单之外的问题。\n\n判定标准：\n- verdict=FAIL 仅用于不满足迁移说明的阻断性问题；风格类意见放入 suggestions，不作为 FAIL 依据。\n- 每个阻断在 blockers 中逐条给出 location、issue、evidence、expectation。\n- 迁移说明缺少判断所必需的信息时，作为一个 blocker（issue 以「需要对齐」开头）并返回 verdict=FAIL，不要替用户做产品决策。\n\n输出契约（output: \"json\"）：可先给出简短的验收推理，但消息最后只包含一个 JSON 对象，其后不得有任何多余文字。形如：\n{\"verdict\": \"PASS\" | \"FAIL\", \"criteria\": [{\"id\": 1, \"text\": \"完成标准原文\", \"result\": \"通过\" | \"不通过\" | \"未验证\"}], \"blockers\": [{\"location\": \"文件/函数\", \"issue\": \"问题\", \"evidence\": \"证据\", \"expectation\": \"期望行为\"}], \"suggestions\": [\"非阻断的改进建议\"], \"checks\": \"已运行检查的简要清单（一段）\", \"unverified\": [\"未能验证的项及原因\"]}\n字段规则：verdict=PASS 时 blockers 为 []；criteria 逐条覆盖完成标准，result 三选一；suggestions/unverified 没有则填 []；checks 一段话如实说明。\n\n启动工作目录：\n{{workflow.cwd}}\n\n迁移说明：\n{{migration_brief}}\n\n逐点迁移记录（items 为各条目结果，failed 为失败条目）：\n{{migrate_all}}\n\n上一轮完成标准（首轮为空，沿用重验）：\n{{reviewer.criteria}}\n\n上一轮阻断（首轮为空，逐条核对是否已解决）：\n{{reviewer.blockers}}",
