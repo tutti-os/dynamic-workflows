@@ -344,3 +344,211 @@ describe("dynamic workflows CLI runs wait", () => {
     expect(body.value.humanTasks[0].nodeId).toBe("first");
   });
 });
+
+// A human-gated workflow that blocks on one task, then completes on resume.
+// Follows the run-jobs harness contract: the generator returns after
+// `run_waiting` (invocation 1) so the job ends and the run persists as
+// waiting_for_human; `resumeWorkflowRunAfterHumanTask` re-runs the generator
+// (invocation 2), which completes. The CLI respond command drives exactly that
+// resolve + resume pair internally.
+const HUMAN_GATE_SCRIPT = `
+export const meta = { name: "gate", description: "Human gated workflow" }
+const first = await agent({ id: "first", prompt: "first" })
+`;
+
+describe("dynamic workflows CLI runs respond", () => {
+  async function startGatedRun() {
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(HUMAN_GATE_SCRIPT);
+    let invocation = 0;
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      invocation += 1;
+      const runId = request.runId ?? "run";
+      yield { type: "run_started", runId, parsed };
+      if (invocation === 1) {
+        const task = await request.onHumanTask?.({
+          runId,
+          nodeId: "first",
+          executionKey: "human:first",
+          spec: {
+            description: "Approve the plan?",
+            context: [
+              { label: "Plan", value: "Ship it", display: "text" as const },
+            ],
+            actions: [
+              {
+                id: "approve",
+                label: "Approve",
+                intent: "primary" as const,
+                fields: [
+                  {
+                    id: "notes",
+                    type: "text" as const,
+                    label: "Notes",
+                    required: false,
+                  },
+                ],
+              },
+            ],
+          },
+        });
+        if (!task) {
+          throw new Error("task missing");
+        }
+        yield { type: "human_task_requested", runId, nodeId: "first", task };
+        yield {
+          type: "run_waiting",
+          runId,
+          pendingTaskIds: [task.id],
+          outputs: {},
+        };
+        return;
+      }
+      yield { type: "node_completed", runId, nodeId: "first", output: "done" };
+      yield { type: "run_completed", runId, status: "completed", outputs: {} };
+    });
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { startWorkflowRunJob, isWorkflowRunJobActive } = await import(
+      "@/lib/workflow/run-jobs"
+    );
+    const { getWorkflowRun } = await import("@/lib/db/workflows/runs");
+    const { listWorkflowHumanTasks } = await import(
+      "@/lib/db/workflows/human-tasks"
+    );
+
+    const detail = createWorkflowFromScript(HUMAN_GATE_SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: process.cwd(),
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+    // The gate job ends after run_waiting; the run persists as waiting_for_human.
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+    expect(getWorkflowRun(run.id)?.status).toBe("waiting_for_human");
+    const task = listWorkflowHumanTasks(run.id, "pending")[0];
+    return { runId: run.id, task };
+  }
+
+  it("resolves a pending task, resumes the run, and returns the refreshed detail", async () => {
+    useDataDir();
+    const { runId, task } = await startGatedRun();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const { isWorkflowRunJobActive } = await import("@/lib/workflow/run-jobs");
+    const { getWorkflowHumanTask } = await import(
+      "@/lib/db/workflows/human-tasks"
+    );
+    const { getWorkflowRun } = await import("@/lib/db/workflows/runs");
+
+    const response = await handleDynamicWorkflowsCliRequest(["runs", "respond"], {
+      input: {
+        "run-id": runId,
+        "task-id": task.id,
+        action: "approve",
+        values: JSON.stringify({ notes: "ship it" }),
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    // The service recorded the response and bumped the revision.
+    expect(body.value.task.status).toBe("resolved");
+    expect(body.value.task.response).toEqual({
+      action: "approve",
+      values: { notes: "ship it" },
+    });
+    expect(getWorkflowHumanTask(task.id)?.status).toBe("resolved");
+    // The payload is the refreshed runs get detail: same shape, no pending tasks.
+    expect(body.value.run.id).toBe(runId);
+    expect(body.value.humanTasks).toEqual([]);
+    expect(body.value).toHaveProperty("result");
+    expect(body.value).toHaveProperty("report");
+
+    // The resume kicked off invocation 2, which drives the run to completion.
+    await waitUntil(() => !isWorkflowRunJobActive(runId));
+    expect(getWorkflowRun(runId)?.status).toBe("completed");
+  });
+
+  it("rejects an unknown action for a pending task", async () => {
+    useDataDir();
+    const { runId, task } = await startGatedRun();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+
+    const response = await handleDynamicWorkflowsCliRequest(["runs", "respond"], {
+      input: { "run-id": runId, "task-id": task.id, action: "nope" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe("human_task_invalid");
+  });
+
+  it("rejects an unknown task id", async () => {
+    useDataDir();
+    const { runId } = await startGatedRun();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+
+    const response = await handleDynamicWorkflowsCliRequest(["runs", "respond"], {
+      input: {
+        "run-id": runId,
+        "task-id": "does-not-exist",
+        action: "approve",
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error.code).toBe("human_task_not_found");
+  });
+
+  it("rejects a stale revision as a conflict", async () => {
+    useDataDir();
+    const { runId, task } = await startGatedRun();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+
+    const response = await handleDynamicWorkflowsCliRequest(["runs", "respond"], {
+      input: {
+        "run-id": runId,
+        "task-id": task.id,
+        action: "approve",
+        revision: task.revision + 5,
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error.code).toBe("human_task_conflict");
+  });
+
+  it("returns run_not_found for an unknown run", async () => {
+    useDataDir();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const response = await handleDynamicWorkflowsCliRequest(["runs", "respond"], {
+      input: {
+        "run-id": "does-not-exist",
+        "task-id": "task",
+        action: "approve",
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(body.error.code).toBe("run_not_found");
+  });
+});

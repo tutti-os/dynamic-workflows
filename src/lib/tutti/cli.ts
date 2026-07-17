@@ -13,7 +13,13 @@ import {
 import {
   getWorkflowRun,
 } from "@/lib/db/workflows/runs";
-import { listWorkflowHumanTasks } from "@/lib/db/workflows/human-tasks";
+import {
+  HumanTaskConflictError,
+  HumanTaskValidationError,
+  getWorkflowHumanTask,
+  listWorkflowHumanTasks,
+  resolveWorkflowHumanTask,
+} from "@/lib/db/workflows/human-tasks";
 import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
@@ -60,6 +66,7 @@ import {
 } from "@/lib/workflow/validation";
 import {
   markWorkflowRunInterruptedIfStale,
+  resumeWorkflowRunAfterHumanTask,
   resumeWorkflowRunJob,
   startWorkflowRunJob,
 } from "@/lib/workflow/run-jobs";
@@ -109,6 +116,7 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "run",
   "runs/get",
   "runs/wait",
+  "runs/respond",
   "blueprints/list",
   "blueprints/search",
   "blueprints/get",
@@ -145,6 +153,8 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(await runsGetCommand(input));
       case "runs/wait":
         return cliJson(await runsWaitCommand(input));
+      case "runs/respond":
+        return cliJson(await runsRespondCommand(input));
       case "resume":
         return cliJson(await resumeCommand(input));
       case "blueprints/list":
@@ -510,6 +520,98 @@ async function runsWaitCommand(input: CliInput) {
       Math.min(RUNS_WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())),
     );
   }
+}
+
+/**
+ * Respond to a pending human task from an agent caller, then resume the run.
+ *
+ * This is a thin surface over the exact service the UI uses
+ * (`resolveWorkflowHumanTask` + `resumeWorkflowRunAfterHumanTask`), so the
+ * revision check, response validation, and run resumption behave identically.
+ * `--revision` is optional: when omitted we read the task's current revision
+ * (read-modify-write). That is safe because the service performs the resolve
+ * inside a transaction guarded by `revision = ?`; a concurrent resolve makes our
+ * read stale and surfaces as a conflict rather than a silent wrong write. When
+ * `--revision` is supplied we honor it verbatim (strict optimistic concurrency,
+ * matching the UI). On success the response carries the resolved task plus the
+ * refreshed `runs get` payload so the caller can loop straight back into
+ * `runs wait`.
+ */
+async function runsRespondCommand(input: CliInput) {
+  const runId = readRequiredString(input, ["run-id", "runId"]);
+  const taskId = readRequiredString(input, ["task-id", "taskId"]);
+  const action = readRequiredString(input, ["action", "action-id", "actionId"]);
+  const values = readHumanTaskValues(input);
+  const providedRevision = readOptionalInteger(input, ["revision"]);
+
+  const run = getWorkflowRun(runId);
+  if (!run) {
+    throw new CliHttpError("run_not_found", "Run not found.", 404);
+  }
+  const task = getWorkflowHumanTask(taskId);
+  if (!task || task.runId !== runId) {
+    throw new CliHttpError("human_task_not_found", "Human task not found.", 404);
+  }
+  const revision = providedRevision ?? task.revision;
+
+  let resolved;
+  try {
+    resolved = resolveWorkflowHumanTask({
+      runId,
+      taskId,
+      action,
+      values,
+      revision,
+      resolvedBy: "agent-cli",
+    });
+  } catch (error) {
+    if (error instanceof HumanTaskConflictError) {
+      throw new CliHttpError("human_task_conflict", error.message, 409);
+    }
+    if (error instanceof HumanTaskValidationError) {
+      if (error.message === "Human task not found.") {
+        throw new CliHttpError("human_task_not_found", error.message, 404);
+      }
+      throw new CliHttpError("human_task_invalid", error.message, 400);
+    }
+    throw error;
+  }
+
+  const resumedRun = await resumeWorkflowRunAfterHumanTask({
+    workflowId: run.workflowId,
+    runId,
+  });
+
+  return {
+    task: resolved,
+    ...buildRunDetail(resumedRun),
+  };
+}
+
+function readHumanTaskValues(input: CliInput): Record<string, WorkflowValue> {
+  const rawValues = readOptionalString(input, ["values", "values-json", "valuesJson"]);
+  if (!rawValues) {
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawValues);
+  } catch (error) {
+    throw new CliHttpError(
+      "invalid_input",
+      `values must be a JSON object: ${
+        error instanceof Error ? error.message : "invalid JSON"
+      }`,
+      400,
+    );
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new CliHttpError("invalid_input", "values must be a JSON object.", 400);
+  }
+
+  return parsed as Record<string, WorkflowValue>;
 }
 
 type RunStopReason =
