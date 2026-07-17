@@ -756,7 +756,14 @@ describe("builtin blueprint behavior", () => {
         if (input.title === "Summarize readiness") {
           return { text: "NO-GO: security blocked" };
         }
-        return { text: "AUDIT RECORD" };
+        return {
+          text: JSON.stringify({
+            decision: "no_go",
+            reason: "security check is blocked",
+            blockers: ["security: blocked"],
+            summary: "Release held pending security fix.",
+          }),
+        };
       });
 
       const events = await collectRun({
@@ -793,8 +800,17 @@ describe("builtin blueprint behavior", () => {
 
       // record restates the decision action and the human's reason via dotted refs.
       const record = callsWithTitle(calls, "Record decision")[0];
-      expect(record.prompt).toContain('chose "no_go"');
+      expect(record.prompt).toContain('"no_go"');
       expect(record.prompt).toContain("security check is blocked");
+
+      // The audit record is a parsed JSON fact object — an upstream agent reads
+      // the decision from the run's report field without parsing prose.
+      const recordOutput = events.find(
+        (event): event is Extract<WorkflowRunEvent, { type: "node_completed" }> =>
+          event.type === "node_completed" && event.nodeId === "record",
+      )?.output as { decision?: string; blockers?: string[] };
+      expect(recordOutput?.decision).toBe("no_go");
+      expect(recordOutput?.blockers).toEqual(["security: blocked"]);
 
       expect(LAST(events)).toEqual(
         expect.objectContaining({ type: "run_completed", status: "completed" }),

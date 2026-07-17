@@ -172,7 +172,7 @@ export const BUILTIN_WORKFLOW_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     difficulty: "starter",
     requiresCwd: true,
     patternSummary:
-      "A static inline list of five checks (changelog, tests, migrations, docs, security) drives a map whose single step verifies exactly one dimension against the actual repository and ends with a JSON verdict of ready or blocked. A summary merges the verdicts into a GO/NO-GO recommendation with blocked and failed checks explicit, a human gate captures go (primary) or no_go (danger, reason required), and a final record agent restates the decision, the reason via dotted refs, and outstanding blockers plainly for audit — with no external side effects.",
+      "A static inline list of five checks (changelog, tests, migrations, docs, security) drives a map whose single step verifies exactly one dimension against the actual repository and ends with a JSON verdict of ready or blocked. A summary merges the verdicts into a GO/NO-GO recommendation with blocked and failed checks explicit, a human gate captures go (primary) or no_go (danger, reason required), and a final record agent emits the decision, verbatim reason, and blockers as a JSON audit record (output json) with no external side effects.",
     useCases: [
       "Gate a release on a fixed checklist verified against the real repository state.",
       "Demonstrate a static-list map, a JSON per-check verdict, and a human go/no-go gate.",
