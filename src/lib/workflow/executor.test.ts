@@ -567,6 +567,36 @@ const delivery = await loop({
     expect(calls.map((call) => call.title)).toEqual(["Implement", "Review"]);
   });
 
+  it("captures the rendered prompt on a top-level node_started event", async () => {
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      // Echo the prompt so the upstream node's output is the deterministic
+      // string we can then look for substituted into the downstream prompt.
+      yield { type: "text_delta", text: input.prompt };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    const nodeInputs: Record<string, string | undefined> = {};
+    for await (const event of runWorkflow({
+      script: `
+const first = await agent({ id: "first", prompt: "one" })
+const second = await agent({ id: "second", inputs: { first }, prompt: "two {{first}}" })
+`,
+      agent: "mock",
+      cwd: process.cwd(),
+    })) {
+      if (event.type === "node_started") {
+        nodeInputs[event.nodeId] = event.input;
+      }
+    }
+
+    expect(nodeInputs.first).toBe("one");
+    // Proves it is the RENDERED prompt: the upstream output "one" is substituted
+    // into "two {{first}}".
+    expect(nodeInputs.second).toBe("two one");
+  });
+
   it("resolves agent and model templates from workflow inputs with defaults", async () => {
     const calls: AgentRunInput[] = [];
 

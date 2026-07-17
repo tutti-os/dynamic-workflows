@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { stringifyJsonObjectColumn } from "@/lib/db/workflows/json-schemas";
 import { parseWorkflowScript } from "./parser";
 import {
   applyWorkflowRunEvent,
   createInitialRunSummary,
   readNodeStatusesFromRunLog,
+  readRunResult,
   serializeRunEvent,
   toWorkflowRunResult,
 } from "./run-state";
@@ -80,6 +82,7 @@ describe("workflow run state", () => {
       nodeSessions: {},
       loopStepRuns: {},
       mapItemRuns: {},
+      nodeInputs: {},
     });
   });
 
@@ -327,5 +330,60 @@ describe("workflow run state", () => {
     ].join("\n");
 
     expect(readNodeStatusesFromRunLog(log)).toEqual({ scan: "completed" });
+  });
+
+  it("reduces node_started input into nodeInputs and round-trips through the strict JSON guard", () => {
+    if (!scanNode) {
+      throw new Error("scan node missing");
+    }
+
+    let summary = createInitialRunSummary(parsed);
+    summary = applyWorkflowRunEvent(summary, {
+      type: "node_started",
+      runId: "run-1",
+      nodeId: "scan",
+      node: scanNode,
+      agent: "mock",
+      input: "scan the repo",
+    });
+
+    expect(summary.nodeInputs).toEqual({ scan: "scan the repo" });
+
+    // Regression against the explicit-undefined-property failure class: the
+    // strict result_json guard must accept a non-empty nodeInputs record.
+    const serialized = stringifyJsonObjectColumn(toWorkflowRunResult(summary), {
+      table: "workflow_runs",
+      column: "result_json",
+      id: "run-1",
+    });
+    expect(JSON.parse(serialized).nodeInputs).toEqual({ scan: "scan the repo" });
+  });
+
+  it("ignores node_started events without an input string", () => {
+    if (!scanNode) {
+      throw new Error("scan node missing");
+    }
+
+    let summary = createInitialRunSummary(parsed);
+    summary = applyWorkflowRunEvent(summary, {
+      type: "node_started",
+      runId: "run-1",
+      nodeId: "scan",
+      node: scanNode,
+      agent: "mock",
+    });
+
+    expect(summary.nodeInputs).toEqual({});
+  });
+
+  it("reads a legacy result object without nodeInputs as an empty record", () => {
+    const result = readRunResult({
+      outputs: { scan: "final" },
+      nodeStatuses: { scan: "completed" },
+      nodeSessions: {},
+      loopStepRuns: {},
+    });
+
+    expect(result.nodeInputs).toEqual({});
   });
 });

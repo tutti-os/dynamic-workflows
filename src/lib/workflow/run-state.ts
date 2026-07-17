@@ -28,6 +28,9 @@ export type WorkflowRunResult = {
   // Optional so existing WorkflowRunResult literals keep compiling; always
   // populated by the run-state reducers below (mirrors loopStepRuns).
   mapItemRuns?: Record<string, WorkflowMapItemRun>;
+  // Rendered prompts captured at run time, keyed by top-level node id. Optional
+  // so legacy result_json (written before this field existed) reads cleanly.
+  nodeInputs?: Record<string, string>;
   error?: string;
   errorCode?: ApiErrorCode;
 };
@@ -66,6 +69,7 @@ export function createInitialRunSummary(
     nodeSessions: {},
     loopStepRuns: {},
     mapItemRuns: {},
+    nodeInputs: {},
   };
 }
 
@@ -80,6 +84,7 @@ export function applyWorkflowRunEvent(
     nodeSessions: { ...summary.nodeSessions },
     loopStepRuns: { ...summary.loopStepRuns },
     mapItemRuns: { ...(summary.mapItemRuns ?? {}) },
+    nodeInputs: { ...(summary.nodeInputs ?? {}) },
     error: summary.error,
     errorCode: summary.errorCode,
   };
@@ -94,6 +99,16 @@ export function applyWorkflowRunEvent(
 
   if (event.type === "node_started") {
     next.nodeStatuses[event.nodeId] = "running";
+    // Only a string lands in nodeInputs: the result_json guard rejects explicit
+    // undefined properties, and legacy/non-agent node_started events omit input.
+    // Cap with limitRunText — rendered prompts embed upstream outputs and can be
+    // large. (Loop/map step records store their prompt uncapped; see report.)
+    if (typeof event.input === "string") {
+      next.nodeInputs = {
+        ...(next.nodeInputs ?? {}),
+        [event.nodeId]: limitRunText(event.input),
+      };
+    }
     return next;
   }
 
@@ -378,6 +393,7 @@ export function toWorkflowRunResult(
     nodeSessions: summary.nodeSessions,
     loopStepRuns: summary.loopStepRuns,
     mapItemRuns: summary.mapItemRuns ?? {},
+    nodeInputs: summary.nodeInputs ?? {},
     ...(summary.error === undefined ? {} : { error: summary.error }),
     ...(summary.errorCode === undefined ? {} : { errorCode: summary.errorCode }),
   };
@@ -391,6 +407,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
       nodeSessions: {},
       loopStepRuns: {},
       mapItemRuns: {},
+      nodeInputs: {},
     };
   }
 
@@ -400,6 +417,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
     nodeSessions?: unknown;
     loopStepRuns?: unknown;
     mapItemRuns?: unknown;
+    nodeInputs?: unknown;
     error?: unknown;
     errorCode?: unknown;
   };
@@ -412,6 +430,7 @@ export function readRunResult(result: unknown): WorkflowRunResult {
     nodeSessions: readNodeSessionRecord(raw.nodeSessions),
     loopStepRuns: readLoopStepRunRecord(raw.loopStepRuns),
     mapItemRuns: readMapItemRunRecord(raw.mapItemRuns),
+    nodeInputs: readStringRecord(raw.nodeInputs),
     error: typeof raw.error === "string" ? raw.error : undefined,
     errorCode:
       typeof raw.errorCode === "string"
@@ -697,6 +716,16 @@ function readMapItemRunRecord(
     return {};
   }
   return Object.fromEntries(entries) as Record<string, WorkflowMapItemRun>;
+}
+
+function readStringRecord(value: unknown): Record<string, string> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const entries = Object.entries(value).filter(
+    ([nodeId, input]) => typeof nodeId === "string" && typeof input === "string",
+  );
+  return Object.fromEntries(entries) as Record<string, string>;
 }
 
 function isWorkflowMapItemRun(value: unknown): value is WorkflowMapItemRun {

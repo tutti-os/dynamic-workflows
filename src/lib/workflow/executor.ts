@@ -361,6 +361,7 @@ async function* runAgentNode(input: {
     node: input.node,
     agent,
     model,
+    input: prompt,
   };
 
   try {

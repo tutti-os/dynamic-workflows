@@ -1141,6 +1141,10 @@ function mergePersistedRunResult(
       ...(summary.mapItemRuns ?? {}),
       ...(persisted.mapItemRuns ?? {}),
     },
+    nodeInputs: {
+      ...(summary.nodeInputs ?? {}),
+      ...(persisted.nodeInputs ?? {}),
+    },
     error: options.clearError ? undefined : summary.error,
     errorCode: options.clearError ? undefined : summary.errorCode,
   };

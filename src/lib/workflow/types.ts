@@ -475,6 +475,12 @@ export type WorkflowRunEvent =
       node: WorkflowNode;
       agent: string;
       model?: string;
+      /**
+       * The rendered prompt actually sent to the agent, captured at run time so
+       * run detail shows what was sent rather than re-rendering it from current
+       * outputs. Optional: only agent nodes emit it, and legacy logs lack it.
+       */
+      input?: string;
     }
   | {
       type: "node_event";

@@ -62,7 +62,13 @@ export function buildRunNodeDetail(
 ): RunNodeDetail {
   const result = readRunResult(detail.run.result);
   const workflowInputs = readWorkflowRunInputs(detail.run.input);
-  const input = renderPrompt(node, result.outputs, workflowInputs);
+  // Prefer the prompt captured at run time; fall back to re-rendering from
+  // current outputs only for legacy runs that never persisted nodeInputs.
+  const persistedInput = result.nodeInputs?.[node.id];
+  const input =
+    persistedInput !== undefined
+      ? persistedInput
+      : renderPrompt(node, result.outputs, workflowInputs);
   const nodeEvents = parseRunLogEvents(detail.log).filter(
     (event) => "nodeId" in event && event.nodeId === node.id,
   );

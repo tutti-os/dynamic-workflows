@@ -1,105 +1,21 @@
-# Workflow Script Runtime Options
+# Workflow Script DSL — Canonical References
 
-Workflow scripts can set `agent` and `model` on normal `agent({...})` nodes, `loop({...})` defaults, and loop step `agent({...})` calls.
+The authoritative, always-current contract for the workflow script DSL lives in the authoring skill materials, NOT in this file. Those files are materialized into every authoring workspace and are pinned by tests, so they are maintained as part of every DSL change; this page previously duplicated parts of them and drifted twice.
 
-Agent values are exact target ids from `tutti --json agent list`. The catalog is
-daemon-owned and may include multiple targets backed by the same provider, so do
-not derive an agent id from a provider name or assume a fixed product list. The
-examples below use `local:codex` only as an example target id.
+Read, in order:
 
-Resolution order:
+- [`src/lib/workflow/authoring/materials/skill/dsl-reference.md`](../src/lib/workflow/authoring/materials/skill/dsl-reference.md) — the full language contract: `meta`, `inputs`, `phase`, `log`, agent nodes (`output: "json"`, runtime `agent`/`model` option templates and their run-level fallback, `{{workflow.cwd}}`/`requiresCwd` coupling), sessions and `appendPrompt`, human tasks, `loop` (including `firstIteration`, dotted-source `until`, step self-references), and `map` (dynamic and static-list sources, per-item `steps` pipelines, failure records).
+- [`src/lib/workflow/authoring/materials/skill/patterns.md`](../src/lib/workflow/authoring/materials/skill/patterns.md) — the design disciplines: execution model, prompt anatomy, outputs-as-data, fan-out/fan-in, adversarial verify, acceptance loops, long-running-role drift guards, no-silent-caps.
+- [`src/lib/workflow/authoring/materials/skill/blueprint-guide.md`](../src/lib/workflow/authoring/materials/skill/blueprint-guide.md) — behavior-keyed guidance for choosing and adapting the builtin blueprints, including composed shapes like the loop→map extract bridge.
 
-1. Loop step `agent` / `model`
-2. Loop or normal node `agent` / `model`
-3. Run-level `agent` / `model`
-4. Runtime fallback, currently `mock` for agent when no value is provided
+Related docs in this directory:
 
-## Dynamic Inputs
+- [`workflow-blueprints.md`](./workflow-blueprints.md) — the builtin blueprint contract and how to add one.
+- [`dynamic-fan-out-design.md`](./dynamic-fan-out-design.md) — the map/retry design record (phases, deviations, retry-from-node).
+- [`acceptance.md`](./acceptance.md) — the browser acceptance playbook for UI/runtime changes.
 
-`agent` and `model` may be runtime-configurable with a single run input placeholder:
+Quick orientation (details and exact rules live in the dsl-reference):
 
-```js
-agent({
-  id: "coder",
-  agent: "{{coder_agent:local:codex}}",
-  model: "{{coder_model:gpt-5}}",
-  prompt: "Implement {{requirement}}",
-})
-```
-
-At run time:
-
-```json
-{
-  "requirement": "fix login",
-  "coder_model": "gpt-5.5"
-}
-```
-
-If `coder_model` is omitted, the workflow uses the default `gpt-5`. Inputs with defaults are optional and are shown as optional in the run dialog so they can still be overridden.
-
-Every runtime option input must be declared in `export const inputs`; whether it is required at run time follows that declaration (`required: true` with no `default`). A declared optional input left empty makes the field fall back to the run-level `agent`/`model` value — declare `reviewer_model: { type: "string", required: false }` and set `model: "{{reviewer_model}}"` to offer a per-role override without forcing a value or baking in a provider-specific default.
-
-## Constraints
-
-- `agent` and `model` runtime templates must be the entire field value: `{{input_name}}` or `{{input_name:default_value}}`.
-- Partial templates are invalid: do not write `model: "gpt-{{coder_model}}"`.
-- Multiple placeholders are invalid: do not write `model: "{{a}}{{b}}"`.
-- Runtime option templates resolve run inputs only; they do not resolve upstream node outputs or loop step outputs.
-- Runtime option input names must not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names.
-- Multiple roles may intentionally share the same runtime option input, such as `{{review_model:gpt-5}}`.
-
-For role-specific loop models, prefer descriptive input names instead of engine-level role names:
-
-```js
-const delivery = loop({
-  id: "delivery",
-  agent: "{{loop_agent:local:codex}}",
-  model: "{{loop_model:gpt-5}}",
-  maxIterations: 4,
-  steps: [
-    agent({ id: "coder", model: "{{coder_model:gpt-5.5}}", prompt: "Code {{requirement}}" }),
-    agent({ id: "reviewer", model: "{{reviewer_model:gpt-5}}", prompt: "Review {{coder}}. Put PASS or FAIL on the final non-empty line." }),
-  ],
-  until: { source: "reviewer", finalStatus: "PASS" },
-});
-```
-
-When the first evaluation should skip preparation work, set a first-iteration entry point. The first iteration starts at that step; every later iteration runs the full ordered step list:
-
-```js
-const acceptance = loop({
-  id: "acceptance",
-  maxIterations: 4,
-  firstIteration: { startAt: "reviewer" },
-  steps: [
-    agent({ id: "rd_fix", prompt: "Fix the latest reviewer blockers: {{reviewer}}" }),
-    agent({ id: "reviewer", prompt: "Review the repository. End with PASS or FAIL." }),
-  ],
-  until: { source: "reviewer", finalStatus: "PASS" },
-});
-```
-
-Here the initial repository state is reviewed immediately. A failed review makes the next iteration run `rd_fix` and then `reviewer`. `maxIterations` counts reviewer evaluation cycles, including that first review.
-
-A loop step may also reference its own id, such as `{{reviewer}}` inside the reviewer prompt. It resolves to the step's previous-iteration output and renders as an empty string on the step's first run. Combined with `session: { mode: "independent" }`, this passes a reviewer its own history through dataflow instead of session memory, so it re-judges from scratch each round.
-
-## Human Tasks
-
-Use `human({...})` as a top-level node or loop step to persist a request for user input. The dependent branch waits without keeping the runner process alive; unrelated branches may continue and a run can contain multiple pending tasks.
-
-Human responses are structured as `{ action, values }` and support dotted template paths such as `{{review.action}}` and `{{review.values.comment}}`. In loops, prefer an exact condition:
-
-```js
-until: { source: "review.action", equals: "pass" }
-```
-
-An agent step can supply the same structured decision by declaring `output: "json"`: its final message is parsed and stored as a JSON value, so the same dotted-source matcher applies to an agent verdict without pinning a token to the final line.
-
-```js
-agent({ id: "review", output: "json", prompt: "Judge {{worker}}. End with only { \"verdict\": \"pass\" | \"revise\" }." }),
-// ...
-until: { source: "review.verdict", equals: "pass" }
-```
-
-The v1 form controls are text, textarea, and select. Context can be displayed as text, Markdown, or JSON. Submitted responses are immutable and remain attached to the run history.
+- A workflow script is one JavaScript module using only the DSL primitives; prompts are single string literals with `{{...}}` placeholders.
+- `agent`/`model` resolve per step → node/loop → run level → runtime fallback; runtime option templates must be declared inputs, and empty optional values fall back to the run level.
+- Scheduling is dataflow-driven: independent nodes run concurrently; only `inputs`, session continuity, and loop/map membership order execution.
