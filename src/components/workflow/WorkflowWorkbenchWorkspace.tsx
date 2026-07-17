@@ -64,6 +64,7 @@ export function WorkflowWorkbenchWorkspace(props: {
   isRunning: boolean;
   isLoadingRunDetail: boolean;
   retryingRunId?: string;
+  runActionError?: string;
   copiedRunField?: string;
   onMainViewChange: (view: MainView) => void;
   onScriptChange: (script: string) => void;
@@ -76,6 +77,7 @@ export function WorkflowWorkbenchWorkspace(props: {
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onRetryMapItems: (runId: string, mapNodeId: string) => void;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
   onResumeRun: (runId: string) => void;
   onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
@@ -151,6 +153,7 @@ export function WorkflowWorkbenchWorkspace(props: {
         isRunning={props.isRunning}
         isLoadingRunDetail={props.isLoadingRunDetail}
         retryingRunId={props.retryingRunId}
+        runActionError={props.runActionError}
         copiedRunField={props.copiedRunField}
         onTabChange={props.onTabChange}
         onLabelChange={props.onLabelChange}
@@ -160,6 +163,7 @@ export function WorkflowWorkbenchWorkspace(props: {
         onSelectRun={props.onSelectRun}
         onRetryRun={props.onRetryRun}
         onRetryMapItems={props.onRetryMapItems}
+        onRetryFromNode={props.onRetryFromNode}
         onResumeRun={props.onResumeRun}
         onCancelRun={props.onCancelRun}
         onCopyRunText={props.onCopyRunText}

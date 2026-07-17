@@ -180,12 +180,14 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     isCancellingRun,
     isLoadingRunDetail,
     retryingRunId,
+    runActionError,
     copiedRunField,
     appendEventLog,
     resetVersionRunState,
     submitRunInputDialog,
     retryRun,
     retryMapItems,
+    retryFromNode,
     resumeRun,
     cancelCurrentRun,
     cancelRun,
@@ -422,6 +424,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         isRunning={isRunning}
         isLoadingRunDetail={isLoadingRunDetail}
         retryingRunId={retryingRunId}
+        runActionError={runActionError}
         copiedRunField={copiedRunField}
         onMainViewChange={setMainView}
         onScriptChange={setScriptFromEditor}
@@ -446,6 +449,9 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         onRetryRun={(runId) => void retryRun(runId)}
         onRetryMapItems={(runId, mapNodeId) =>
           void retryMapItems(runId, mapNodeId)
+        }
+        onRetryFromNode={(runId, fromNodeId) =>
+          void retryFromNode(runId, fromNodeId)
         }
         onResumeRun={(runId) => void resumeRun(runId)}
         onCancelRun={(runId) => void cancelRun(runId)}

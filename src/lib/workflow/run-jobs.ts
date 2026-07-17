@@ -4,6 +4,7 @@ import {
   claimWorkflowRunForResume,
   claimWorkflowRunForRetry,
   createWorkflowRun,
+  deleteWorkflowRunCheckpoint,
   finalizeWorkflowRunExecution,
   getWorkflowRun,
   isWorkflowRunExecutionClaimed,
@@ -30,9 +31,12 @@ import type {
 import {
   workflowMapNodeInvalidError,
   workflowMapRetryInvalidError,
+  workflowRetryFromNodeInvalidError,
+  workflowRetryNodeInvalidError,
   workflowRunNotFoundError,
   workflowVersionNotFoundError,
 } from "@/lib/api/app-error";
+import type { AppError } from "@/lib/api/app-error";
 import { resolveWorkflowCwdFrom } from "@/lib/workflow/cwd";
 import { createWorkflowExecutionPlan } from "@/lib/workflow/execution-plan";
 import { runWorkflow } from "@/lib/workflow/executor";
@@ -257,32 +261,16 @@ export async function retryFailedMapItems(input: {
   runId: string;
   mapNodeId: string;
 }): Promise<WorkflowRunRecord> {
-  const run = getWorkflowRun(input.runId);
-  if (!run || run.workflowId !== input.workflowId) {
-    throw workflowRunNotFoundError();
-  }
-  if (jobs.has(run.id)) {
-    throw workflowMapRetryInvalidError(
+  const { run, version, executableNodes } = loadTerminalRunForRetry({
+    workflowId: input.workflowId,
+    runId: input.runId,
+    invalid: workflowMapRetryInvalidError,
+    activeMessage:
       "This run is still executing and cannot retry map items yet.",
-    );
-  }
-  if (
-    run.status !== "completed" &&
-    run.status !== "failed" &&
-    run.status !== "canceled"
-  ) {
-    throw workflowMapRetryInvalidError(
+    terminalMessage:
       "Only a terminal workflow run can retry failed map items.",
-    );
-  }
+  });
 
-  const version = getWorkflowVersion(run.workflowVersionId);
-  if (!version || version.workflowId !== input.workflowId) {
-    throw workflowVersionNotFoundError();
-  }
-
-  const parsed = assertWorkflowScriptValid(version.script);
-  const { executableNodes } = createWorkflowExecutionPlan(parsed);
   const mapNode = executableNodes.find((node) => node.id === input.mapNodeId);
   if (!mapNode || mapNode.kind !== "map" || !mapNode.map) {
     throw workflowMapNodeInvalidError(
@@ -315,21 +303,209 @@ export async function retryFailedMapItems(input: {
   // Mark the map node and every node downstream of it as not-completed while
   // upstream stays completed. Downstream stale outputs are dropped so they
   // cannot leak into re-run prompts; each node re-runs and refreshes its own.
-  const resetNodeIds = computeMapRetryResetNodeIds(
+  const resetNodeIds = computeDownstreamResetNodeIds(
     executableNodes,
     input.mapNodeId,
   );
-  const log = await readRunLog(run.logPath);
-  const baseSummary = createRunRecoveryState({
+  const baseSummary = await reconstructTerminalRunSummary({ run, version });
+
+  return relaunchWorkflowRunFromReset({
     run,
     version,
+    baseSummary,
+    resetNodeIds,
+    // Rewrite the map checkpoint with the failed completions removed so
+    // recovery treats the cleared items as pending and re-runs only those.
+    // (Failed-item retry PRESERVES completed items — unlike retry-from-node,
+    // which deletes reset checkpoints entirely.)
+    mutateCheckpoints: () => {
+      upsertWorkflowRunCheckpoint({
+        runId: run.id,
+        nodeId: input.mapNodeId,
+        checkpoint: {
+          kind: "map",
+          state: { items: mapState.items, completions: keptCompletions },
+        },
+      });
+    },
+  });
+}
+
+/**
+ * Retry a terminal run from an arbitrary executable node: reset that node plus
+ * its transitive dataflow dependents to a fresh (queued, no output, no session)
+ * state, delete the checkpoints of every reset node (loop iterations and map
+ * expansions are stale once an upstream re-runs), and relaunch the run through
+ * the normal recovery path. Upstream nodes keep their outputs and never re-run;
+ * inherited session keys they established survive so a reset continuing-role
+ * node resumes the kept upstream session.
+ *
+ * Preconditions: the run is terminal; the node exists and is executable; no
+ * node in the reset set is a human node (v1 restriction); and every transitive
+ * upstream input source of the node completed in the reconstructed summary.
+ */
+export async function retryWorkflowRunFromNode(input: {
+  workflowId: string;
+  runId: string;
+  fromNodeId: string;
+}): Promise<WorkflowRunRecord> {
+  const { run, version, executableNodes } = loadTerminalRunForRetry({
+    workflowId: input.workflowId,
+    runId: input.runId,
+    invalid: workflowRetryFromNodeInvalidError,
+    activeMessage:
+      "This run is still executing and cannot be retried from a node yet.",
+    terminalMessage:
+      "Only a terminal workflow run can be retried from a node.",
+  });
+
+  const fromNode = executableNodes.find(
+    (node) => node.id === input.fromNodeId,
+  );
+  if (!fromNode) {
+    throw workflowRetryNodeInvalidError(
+      `"${input.fromNodeId}" is not an executable node in this run.`,
+    );
+  }
+
+  const resetNodeIds = computeDownstreamResetNodeIds(
+    executableNodes,
+    input.fromNodeId,
+  );
+
+  // v1 restriction: reject if the node itself or any reset dependent is a human
+  // node. Re-running a resolved human gate would let the old task satisfy the
+  // same executionKey instantly, approving content the human never saw.
+  const humanNodeIds = executableNodes
+    .filter((node) => resetNodeIds.has(node.id) && node.kind === "human")
+    .map((node) => node.id);
+  if (humanNodeIds.length > 0) {
+    throw workflowRetryFromNodeInvalidError(
+      `Cannot retry from "${input.fromNodeId}" because it would re-run human ` +
+        `node(s) ${formatNodeIdList(humanNodeIds)}. Re-running a resolved ` +
+        `human gate is not supported yet.`,
+    );
+  }
+
+  // Upstream-completed precondition: every transitive input source of the node
+  // must be completed in the reconstructed summary (the source of truth), or
+  // the resumed run would stall on unresolved dependencies.
+  const baseSummary = await reconstructTerminalRunSummary({ run, version });
+  const executableNodeIds = new Set(executableNodes.map((node) => node.id));
+  const upstreamSources = computeTransitiveInputSources(
+    executableNodes,
+    input.fromNodeId,
+  );
+  const incompleteUpstream = [...upstreamSources].filter(
+    (nodeId) =>
+      executableNodeIds.has(nodeId) &&
+      baseSummary.nodeStatuses[nodeId] !== "completed",
+  );
+  if (incompleteUpstream.length > 0) {
+    throw workflowRetryFromNodeInvalidError(
+      `Cannot retry from "${input.fromNodeId}" because upstream ` +
+        `node(s) ${formatNodeIdList(incompleteUpstream)} did not complete.`,
+    );
+  }
+
+  return relaunchWorkflowRunFromReset({
+    run,
+    version,
+    baseSummary,
+    resetNodeIds,
+    // Delete the checkpoint of every reset node: a loop's iteration progress and
+    // a map's item expansion are both stale once an upstream re-runs, and a map
+    // downstream of the reset origin must re-resolve its source from scratch.
+    mutateCheckpoints: () => {
+      for (const nodeId of resetNodeIds) {
+        deleteWorkflowRunCheckpoint({ runId: run.id, nodeId });
+      }
+    },
+  });
+}
+
+/**
+ * Validate that a run is a terminal, non-active retry candidate and return the
+ * parsed execution plan. Shared by the failed-item and from-node retry entries;
+ * the `invalid` factory decides which 409 error code the non-terminal / active
+ * rejections carry.
+ */
+function loadTerminalRunForRetry(input: {
+  workflowId: string;
+  runId: string;
+  invalid: (message: string) => AppError;
+  activeMessage: string;
+  terminalMessage: string;
+}): {
+  run: WorkflowRunRecord;
+  version: WorkflowVersionRecord;
+  executableNodes: WorkflowNode[];
+} {
+  const run = getWorkflowRun(input.runId);
+  if (!run || run.workflowId !== input.workflowId) {
+    throw workflowRunNotFoundError();
+  }
+  if (jobs.has(run.id)) {
+    throw input.invalid(input.activeMessage);
+  }
+  if (
+    run.status !== "completed" &&
+    run.status !== "failed" &&
+    run.status !== "canceled"
+  ) {
+    throw input.invalid(input.terminalMessage);
+  }
+
+  const version = getWorkflowVersion(run.workflowVersionId);
+  if (!version || version.workflowId !== input.workflowId) {
+    throw workflowVersionNotFoundError();
+  }
+
+  const parsed = assertWorkflowScriptValid(version.script);
+  const { executableNodes } = createWorkflowExecutionPlan(parsed);
+  return { run, version, executableNodes };
+}
+
+/**
+ * Reconstruct the run summary from its log and persisted result. The recovery
+ * state's summary — NOT the persisted result alone — is the source of truth for
+ * node statuses/outputs used by both retry preconditions and the reset.
+ */
+async function reconstructTerminalRunSummary(input: {
+  run: WorkflowRunRecord;
+  version: WorkflowVersionRecord;
+}): Promise<WorkflowRunSummary> {
+  const log = await readRunLog(input.run.logPath);
+  return createRunRecoveryState({
+    run: input.run,
+    version: input.version,
     log,
-    checkpoints,
+    checkpoints: listWorkflowRunCheckpoints(input.run.id),
   }).summary;
-  const resetSummary = resetSummaryForMapRetry(baseSummary, resetNodeIds);
+}
+
+/**
+ * Shared reset/claim/resume plumbing behind both retry entries: reset the given
+ * nodes in the summary, atomically claim the run back to running, mutate the
+ * run's checkpoints (each entry decides how), rebuild recovery state, and
+ * relaunch execution on the same run. Upstream completed nodes keep their
+ * outputs and sessions.
+ */
+async function relaunchWorkflowRunFromReset(input: {
+  run: WorkflowRunRecord;
+  version: WorkflowVersionRecord;
+  baseSummary: WorkflowRunSummary;
+  resetNodeIds: Set<string>;
+  mutateCheckpoints: () => void;
+}): Promise<WorkflowRunRecord> {
+  const { run, version } = input;
+  const resetSummary = resetSummaryForRetry(
+    input.baseSummary,
+    input.resetNodeIds,
+  );
 
   const claim = claimWorkflowRunForRetry({
-    workflowId: input.workflowId,
+    workflowId: run.workflowId,
     runId: run.id,
     result: toWorkflowRunResult(resetSummary),
   });
@@ -347,16 +523,7 @@ export async function retryFailedMapItems(input: {
   jobs.set(run.id, job);
 
   try {
-    // Rewrite the map checkpoint with the failed completions removed so
-    // recovery treats the cleared items as pending and re-runs only those.
-    upsertWorkflowRunCheckpoint({
-      runId: run.id,
-      nodeId: input.mapNodeId,
-      checkpoint: {
-        kind: "map",
-        state: { items: mapState.items, completions: keptCompletions },
-      },
-    });
+    input.mutateCheckpoints();
 
     const snapshot = createRecoveryStateFromSummary({
       run: claim.run,
@@ -392,13 +559,17 @@ export async function retryFailedMapItems(input: {
   }
 }
 
+function formatNodeIdList(nodeIds: string[]): string {
+  return nodeIds.map((nodeId) => `"${nodeId}"`).join(", ");
+}
+
 /**
- * The map node plus the transitive set of nodes that consume its output
+ * The origin node plus the transitive set of nodes that consume its output
  * (directly or through intermediate nodes), following dataflow input edges.
  */
-function computeMapRetryResetNodeIds(
+function computeDownstreamResetNodeIds(
   nodes: WorkflowNode[],
-  mapNodeId: string,
+  originNodeId: string,
 ): Set<string> {
   const dependentsBySource = new Map<string, string[]>();
   for (const node of nodes) {
@@ -412,8 +583,8 @@ function computeMapRetryResetNodeIds(
     }
   }
 
-  const reset = new Set<string>([mapNodeId]);
-  const queue = [mapNodeId];
+  const reset = new Set<string>([originNodeId]);
+  const queue = [originNodeId];
   while (queue.length > 0) {
     const current = queue.shift() as string;
     for (const dependent of dependentsBySource.get(current) ?? []) {
@@ -426,7 +597,34 @@ function computeMapRetryResetNodeIds(
   return reset;
 }
 
-function resetSummaryForMapRetry(
+/**
+ * The transitive set of nodes whose output feeds the target node, following
+ * dataflow input edges backward. Used to verify the target's upstream all
+ * completed before a retry-from-node resumes.
+ */
+function computeTransitiveInputSources(
+  nodes: WorkflowNode[],
+  targetNodeId: string,
+): Set<string> {
+  const nodesById = new Map(nodes.map((node) => [node.id, node]));
+  const sources = new Set<string>();
+  const queue = [targetNodeId];
+  const seen = new Set<string>([targetNodeId]);
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const nodeInput of nodesById.get(current)?.inputs ?? []) {
+      const sourceNodeId = nodeInput.sourceNodeId;
+      if (sourceNodeId && !seen.has(sourceNodeId)) {
+        seen.add(sourceNodeId);
+        sources.add(sourceNodeId);
+        queue.push(sourceNodeId);
+      }
+    }
+  }
+  return sources;
+}
+
+function resetSummaryForRetry(
   summary: WorkflowRunSummary,
   resetNodeIds: Set<string>,
 ): WorkflowRunSummary {

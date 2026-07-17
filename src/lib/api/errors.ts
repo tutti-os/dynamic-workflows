@@ -18,6 +18,9 @@ export type ApiErrorCode =
   | "WORKFLOW_CWD_INVALID"
   | "WORKFLOW_MAP_NODE_INVALID"
   | "WORKFLOW_MAP_RETRY_INVALID"
+  | "WORKFLOW_RETRY_NODE_INVALID"
+  | "WORKFLOW_RETRY_FROM_NODE_INVALID"
+  | "WORKFLOW_RETRY_REQUEST_INVALID"
   | "WORKFLOW_GENERATION_FAILED"
   | "WORKFLOW_EDIT_FAILED"
   | "WORKFLOW_REPAIR_FAILED"
@@ -64,6 +67,11 @@ const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   WORKFLOW_MAP_NODE_INVALID: "The map node is unknown or not a map node.",
   WORKFLOW_MAP_RETRY_INVALID:
     "This run cannot retry failed map items in its current state.",
+  WORKFLOW_RETRY_NODE_INVALID:
+    "The node to retry from is unknown or not executable.",
+  WORKFLOW_RETRY_FROM_NODE_INVALID:
+    "This run cannot be retried from that node in its current state.",
+  WORKFLOW_RETRY_REQUEST_INVALID: "The retry request is invalid.",
   WORKFLOW_GENERATION_FAILED: "Workflow generation failed.",
   WORKFLOW_EDIT_FAILED: "Workflow edit failed.",
   WORKFLOW_REPAIR_FAILED: "The agent could not repair this workflow script.",

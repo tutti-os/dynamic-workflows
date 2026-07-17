@@ -34,6 +34,7 @@ import { CopyToClipboardButton } from "@/components/workflow/CopyToClipboardButt
 import type {
   WorkflowHumanAction,
   WorkflowHumanTask,
+  WorkflowNode,
   WorkflowValue,
 } from "@/lib/workflow/types";
 
@@ -43,9 +44,11 @@ export function RunDetailPanel(props: {
   versionLabelById: Record<string, string>;
   isRunning: boolean;
   retryingRunId?: string;
+  runActionError?: string;
   copiedRunField?: string;
   onRetryRun: (runId: string) => void;
   onRetryMapItems: (runId: string, mapNodeId: string) => void;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
   onResumeRun: (runId: string) => void;
   onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
@@ -100,6 +103,13 @@ export function RunDetailPanel(props: {
         </div>
       ) : null}
 
+      {props.runActionError ? (
+        <div className="diagnostic error">
+          <WarningLinedIcon size={14} />
+          {props.runActionError}
+        </div>
+      ) : null}
+
       {props.selectedNodeRun ? (
         <RunNodeDetailSection
           runId={run.id}
@@ -108,6 +118,7 @@ export function RunDetailPanel(props: {
           retryPending={props.isRunning || props.retryingRunId === run.id}
           copiedRunField={props.copiedRunField}
           onRetryMapItems={props.onRetryMapItems}
+          onRetryFromNode={props.onRetryFromNode}
           onCopyRunText={props.onCopyRunText}
           onOpenAgentSession={props.onOpenAgentSession}
         />
@@ -439,6 +450,7 @@ function RunNodeDetailSection(props: {
   retryPending: boolean;
   copiedRunField?: string;
   onRetryMapItems: (runId: string, mapNodeId: string) => void;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
@@ -447,8 +459,11 @@ function RunNodeDetailSection(props: {
     return (
       <RunLoopStepDetailSection
         runId={props.runId}
+        run={props.run}
         nodeRun={nodeRun}
+        retryPending={props.retryPending}
         copiedRunField={props.copiedRunField}
+        onRetryFromNode={props.onRetryFromNode}
         onCopyRunText={props.onCopyRunText}
         onOpenAgentSession={props.onOpenAgentSession}
       />
@@ -463,6 +478,7 @@ function RunNodeDetailSection(props: {
         retryPending={props.retryPending}
         copiedRunField={props.copiedRunField}
         onRetryMapItems={props.onRetryMapItems}
+        onRetryFromNode={props.onRetryFromNode}
         onCopyRunText={props.onCopyRunText}
         onOpenAgentSession={props.onOpenAgentSession}
       />
@@ -508,6 +524,12 @@ function RunNodeDetailSection(props: {
           </Button>
         </div>
       ) : null}
+      <RetryFromNodeAction
+        run={props.run}
+        node={nodeRun.node}
+        retryPending={props.retryPending}
+        onRetryFromNode={props.onRetryFromNode}
+      />
       <RunTextBlock
         label="Node Input"
         text={nodeRun.input}
@@ -534,10 +556,56 @@ function RunNodeDetailSection(props: {
   );
 }
 
+/**
+ * "Retry from this node" action, shown on the detail of an executable node when
+ * its run is terminal. It re-runs the node and everything downstream fresh;
+ * server-side preconditions (upstream must be complete, no human node in the
+ * reset set) are surfaced through the existing error path, not recomputed here.
+ */
+function RetryFromNodeAction(props: {
+  run: WorkflowRunRecord;
+  node: WorkflowNode;
+  retryPending: boolean;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
+}) {
+  const runIsTerminal =
+    props.run.status === "completed" ||
+    props.run.status === "failed" ||
+    props.run.status === "canceled";
+  const isExecutableNode =
+    props.node.kind === "agent" ||
+    props.node.kind === "loop" ||
+    props.node.kind === "map";
+  if (!runIsTerminal || !isExecutableNode) {
+    return null;
+  }
+  return (
+    <div className="agent-session-actions">
+      <Button
+        size="sm"
+        variant="outline"
+        type="button"
+        disabled={props.retryPending}
+        onClick={() => props.onRetryFromNode(props.run.id, props.node.id)}
+      >
+        {props.retryPending ? (
+          <Spinner data-icon="inline-start" size={14} />
+        ) : (
+          <RefreshIcon data-icon="inline-start" />
+        )}
+        Retry from this node
+      </Button>
+    </div>
+  );
+}
+
 function RunLoopStepDetailSection(props: {
   runId: string;
+  run: WorkflowRunRecord;
   nodeRun: RunNodeDetail;
+  retryPending: boolean;
   copiedRunField?: string;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
@@ -551,6 +619,12 @@ function RunLoopStepDetailSection(props: {
         <label>Loop step execution</label>
         <Badge variant="muted">{loopStep.attempts.length} iterations</Badge>
       </div>
+      <RetryFromNodeAction
+        run={props.run}
+        node={props.nodeRun.node}
+        retryPending={props.retryPending}
+        onRetryFromNode={props.onRetryFromNode}
+      />
       <div className="run-facts run-node-facts">
         <RunFact label="Loop" value={props.nodeRun.node.id} />
         <RunFact label="Step" value={loopStep.step.id} />
@@ -587,6 +661,7 @@ function RunMapItemDetailSection(props: {
   retryPending: boolean;
   copiedRunField?: string;
   onRetryMapItems: (runId: string, mapNodeId: string) => void;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
   onOpenAgentSession: (agentSessionId: string) => void;
 }) {
@@ -639,6 +714,12 @@ function RunMapItemDetailSection(props: {
           </Button>
         </div>
       ) : null}
+      <RetryFromNodeAction
+        run={props.run}
+        node={props.nodeRun.node}
+        retryPending={props.retryPending}
+        onRetryFromNode={props.onRetryFromNode}
+      />
       <div className="run-facts run-node-facts">
         <RunFact label="Map" value={props.nodeRun.node.id} />
         <RunFact

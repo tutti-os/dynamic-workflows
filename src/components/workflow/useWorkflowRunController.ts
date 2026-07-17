@@ -64,6 +64,7 @@ export function useWorkflowRunController(input: {
   isCancellingRun: boolean;
   isLoadingRunDetail: boolean;
   retryingRunId: string | undefined;
+  runActionError: string | undefined;
   copiedRunField: string | undefined;
   appendEventLog: (message: string) => void;
   resetVersionRunState: () => void;
@@ -71,6 +72,7 @@ export function useWorkflowRunController(input: {
   submitRunInputDialog: () => void;
   retryRun: (runId: string) => Promise<void>;
   retryMapItems: (runId: string, mapNodeId: string) => Promise<void>;
+  retryFromNode: (runId: string, fromNodeId: string) => Promise<void>;
   resumeRun: (runId: string) => Promise<void>;
   cancelCurrentRun: () => void;
   cancelRun: (runId: string) => Promise<void>;
@@ -88,6 +90,7 @@ export function useWorkflowRunController(input: {
   const [isCancellingRun, setIsCancellingRun] = useState(false);
   const [isLoadingRunDetail, setIsLoadingRunDetail] = useState(false);
   const [retryingRunId, setRetryingRunId] = useState<string | undefined>();
+  const [runActionError, setRunActionError] = useState<string | undefined>();
   const [copiedRunField, setCopiedRunField] = useState<string | undefined>();
   const {
     selectedRun,
@@ -130,6 +133,7 @@ export function useWorkflowRunController(input: {
     if (runInput.retryRunId) {
       setRetryingRunId(runInput.retryRunId);
     }
+    setRunActionError(undefined);
     setIsRunning(true);
     setIsCancellingRun(false);
     input.setActiveTab(runInput.activeTab);
@@ -182,6 +186,11 @@ export function useWorkflowRunController(input: {
       } else {
         const apiError = readApiJsonError(error, "WORKFLOW_RUN_FAILED");
         appendEventLog(
+          `${runInput.failureLogPrefix ?? "run failed"}: ${apiError.message}`,
+        );
+        // The event log alone is invisible from the run detail panel; surface
+        // server rejections (e.g. retry preconditions) where the user acted.
+        setRunActionError(
           `${runInput.failureLogPrefix ?? "run failed"}: ${apiError.message}`,
         );
         if (runInput.propagateFailure) {
@@ -358,6 +367,53 @@ export function useWorkflowRunController(input: {
       },
       retryRunId: runId,
       failureLogPrefix: "map retry failed",
+    });
+  }
+
+  async function retryFromNode(runId: string, fromNodeId: string) {
+    if (!input.detail || isRunning) {
+      return;
+    }
+
+    const sourceRun = input.detail.runs.find((run) => run.id === runId);
+    if (!sourceRun) {
+      appendEventLog(`retry from node failed: run ${runId} not found`);
+      return;
+    }
+    const sourceVersion = input.detail.versions.find(
+      (version) => version.id === sourceRun.workflowVersionId,
+    );
+
+    if (sourceVersion && sourceVersion.id !== input.selectedVersion?.id) {
+      if (
+        input.isScriptDirty &&
+        !window.confirm("Discard unsaved changes and switch to this run version?")
+      ) {
+        return;
+      }
+      input.applyVersion(sourceVersion);
+    }
+
+    await executeRunJob({
+      endpoint: `/api/workflows/${input.workflowId}/runs/${runId}/retry`,
+      body: { fromNodeId },
+      initialLog: `retry from ${fromNodeId}: ${runId}`,
+      activeTab: "runs",
+      runContext: {
+        workflowVersionId: sourceRun.workflowVersionId,
+        executorKind: sourceRun.executorKind,
+        agent: sourceRun.agent ?? undefined,
+        model: sourceRun.model ?? undefined,
+        cwd: sourceRun.cwd ?? undefined,
+        input: compactWorkflowRunInput({
+          retryOfRunId: runId,
+          agent: sourceRun.agent ?? undefined,
+          model: sourceRun.model ?? undefined,
+          cwd: sourceRun.cwd ?? undefined,
+        }),
+      },
+      retryRunId: runId,
+      failureLogPrefix: "retry from node failed",
     });
   }
 
@@ -553,6 +609,7 @@ export function useWorkflowRunController(input: {
     isCancellingRun,
     isLoadingRunDetail,
     retryingRunId,
+    runActionError,
     copiedRunField,
     appendEventLog,
     resetVersionRunState,
@@ -560,6 +617,7 @@ export function useWorkflowRunController(input: {
     submitRunInputDialog,
     retryRun,
     retryMapItems,
+    retryFromNode,
     resumeRun,
     cancelCurrentRun,
     cancelRun,

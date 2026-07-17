@@ -50,6 +50,18 @@ export function workflowMapRetryInvalidError(message: string): AppError {
   return new AppError("WORKFLOW_MAP_RETRY_INVALID", message);
 }
 
+export function workflowRetryNodeInvalidError(message: string): AppError {
+  return new AppError("WORKFLOW_RETRY_NODE_INVALID", message);
+}
+
+export function workflowRetryFromNodeInvalidError(message: string): AppError {
+  return new AppError("WORKFLOW_RETRY_FROM_NODE_INVALID", message);
+}
+
+export function workflowRetryRequestInvalidError(message: string): AppError {
+  return new AppError("WORKFLOW_RETRY_REQUEST_INVALID", message);
+}
+
 export function workflowInputsInvalidError(error: unknown): AppError {
   return new AppError(
     "WORKFLOW_INPUTS_INVALID",

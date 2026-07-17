@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   prepareRetryWorkflowRun: vi.fn(),
   startWorkflowRunJob: vi.fn(),
   retryFailedMapItems: vi.fn(),
+  retryWorkflowRunFromNode: vi.fn(),
 }));
 
 vi.mock("@/lib/workflow/run-request", () => ({
@@ -17,6 +18,7 @@ vi.mock("@/lib/workflow/run-request", () => ({
 vi.mock("@/lib/workflow/run-jobs", () => ({
   startWorkflowRunJob: mocks.startWorkflowRunJob,
   retryFailedMapItems: mocks.retryFailedMapItems,
+  retryWorkflowRunFromNode: mocks.retryWorkflowRunFromNode,
 }));
 
 import { POST } from "./route";
@@ -65,6 +67,39 @@ describe("workflow run retry route", () => {
       runId: "run-1",
       mapNodeId: "migrated",
     });
+    expect(mocks.startWorkflowRunJob).not.toHaveBeenCalled();
+  });
+
+  it("retries from a node when a fromNodeId is provided", async () => {
+    mocks.retryWorkflowRunFromNode.mockResolvedValue({ id: "run-1" });
+
+    const response = await POST(retryRequest({ fromNodeId: "b" }), {
+      params,
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ run: { id: "run-1" } });
+    expect(mocks.retryWorkflowRunFromNode).toHaveBeenCalledWith({
+      workflowId: "workflow-1",
+      runId: "run-1",
+      fromNodeId: "b",
+    });
+    expect(mocks.retryFailedMapItems).not.toHaveBeenCalled();
+    expect(mocks.startWorkflowRunJob).not.toHaveBeenCalled();
+  });
+
+  it("rejects providing both mapNodeId and fromNodeId with 400", async () => {
+    const response = await POST(
+      retryRequest({ mapNodeId: "migrated", fromNodeId: "b" }),
+      { params },
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "WORKFLOW_RETRY_REQUEST_INVALID" },
+    });
+    expect(mocks.retryFailedMapItems).not.toHaveBeenCalled();
+    expect(mocks.retryWorkflowRunFromNode).not.toHaveBeenCalled();
     expect(mocks.startWorkflowRunJob).not.toHaveBeenCalled();
   });
 

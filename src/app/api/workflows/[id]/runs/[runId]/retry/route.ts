@@ -1,13 +1,20 @@
 import { prepareRetryWorkflowRun } from "@/lib/workflow/run-request";
 import {
   retryFailedMapItems,
+  retryWorkflowRunFromNode,
   startWorkflowRunJob,
 } from "@/lib/workflow/run-jobs";
+import { workflowRetryRequestInvalidError } from "@/lib/api/app-error";
 import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 
 type RetryRequestBody = {
   mapNodeId?: unknown;
+  fromNodeId?: unknown;
 };
+
+function readNodeId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 export async function POST(
   request: Request,
@@ -18,11 +25,29 @@ export async function POST(
     const body = (await request
       .json()
       .catch(() => ({}))) as RetryRequestBody;
-    if (typeof body?.mapNodeId === "string" && body.mapNodeId.trim()) {
+    const mapNodeId = readNodeId(body?.mapNodeId);
+    const fromNodeId = readNodeId(body?.fromNodeId);
+
+    if (mapNodeId && fromNodeId) {
+      throw workflowRetryRequestInvalidError(
+        "Provide either mapNodeId or fromNodeId, not both.",
+      );
+    }
+
+    if (mapNodeId) {
       const run = await retryFailedMapItems({
         workflowId: id,
         runId,
-        mapNodeId: body.mapNodeId,
+        mapNodeId,
+      });
+      return Response.json({ run });
+    }
+
+    if (fromNodeId) {
+      const run = await retryWorkflowRunFromNode({
+        workflowId: id,
+        runId,
+        fromNodeId,
       });
       return Response.json({ run });
     }

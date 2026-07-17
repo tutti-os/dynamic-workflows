@@ -180,6 +180,22 @@ Shipped as specified; no behavioral deviations. Notes for maintainers:
 - Executor with mock adapter: expansion, concurrency interleaving with sibling nodes, skip-vs-fail semantics, output shape, recovery mid-map.
 - Behavioral fixture (see improvement backlog item 2): a scripted mock run that discovers 3 items, fails 1, and synthesizes — asserting the failed item appears in the map output and downstream prompt.
 
+## Retry-from-node (approved 2026-07-17)
+
+Generalize batch B's machinery: re-run a terminal run from an arbitrary node. Failed-item retry stays as-is (it preserves completed items); retry-from-node is the fresh-re-execution variant.
+
+- **Semantics**: given `{ fromNodeId }` on a terminal run, reset node X plus its transitive dataflow dependents — statuses to queued, outputs and nodeSessions dropped (the stale-attach lesson), and the checkpoints of EVERY node in the reset set deleted (loop iterations and map expansions are stale once an upstream re-runs; a map downstream of X must re-resolve its source). Atomically claim the run back to running and resume through the normal execution path. Upstream nodes keep outputs, never re-run, and inherited session keys they established survive — a reset continuing-role node (e.g. rd_fix) correctly resumes the kept upstream session.
+- **Preconditions**: run terminal; X exists and is executable; every transitive upstream input source of X is `completed` in the reconstructed summary (otherwise the resume would stall on unresolved deps — 409).
+- **v1 restriction — human nodes**: if X is a human node, or the reset set contains one, reject with an explicit error naming the nodes. Re-running a human gate raises response-reuse questions (the old resolved task would satisfy the same executionKey instantly, approving content the human never saw). Superseding old tasks with a new revision is the designed follow-up, out of scope here.
+- **API**: the existing retry route gains `{ fromNodeId }`, mutually exclusive with `{ mapNodeId }` (both → 400). Codes mirror the map variant: 404 unknown run, 409 non-terminal/unmet preconditions, 400 invalid node.
+- **UI**: a "Retry from this node" action on the node detail section of a terminal run, using the same pending/disabled affordances; server-side rejections surface through the existing error path.
+
+### Implemented (2026-07-17) — no semantic deviations
+
+- **Shared core**: `retryFailedMapItems` and `retryWorkflowRunFromNode` are now two thin entries over one core in `run-jobs.ts`: `loadTerminalRunForRetry` (run/version/terminal/active validation), `reconstructTerminalRunSummary` (log + persisted result → summary, the source of truth), and `relaunchWorkflowRunFromReset` (reset summary → claim → per-entry checkpoint mutation → recovery snapshot → resume). Failed-item retry's checkpoint mutation REWRITES the map checkpoint keeping completed items; retry-from-node's DELETES the checkpoint of every reset node via the new `deleteWorkflowRunCheckpoint` DB helper. The stale-attach lesson (drop `nodeSessions` on reset nodes) lives in the shared `resetSummaryForRetry`.
+- **Error codes**: `WORKFLOW_RETRY_NODE_INVALID` (400, unknown/non-executable node), `WORKFLOW_RETRY_FROM_NODE_INVALID` (409, non-terminal / active / human-in-reset-set / upstream-incomplete), `WORKFLOW_RETRY_REQUEST_INVALID` (400, `mapNodeId` and `fromNodeId` both present).
+- **UI refinement**: the button is rendered only for executable node kinds (`agent`/`loop`/`map`) on a terminal run. This is a static `node.kind` gate, not a client-side precondition computation — the human-node, upstream-completed, and node-existence rejections still come from the server. Human nodes therefore never show the action.
+
 ## Open questions
 
 - Should the child agent receive the item as a labeled context block only (current proposal) or also as pre-bound individual inputs?

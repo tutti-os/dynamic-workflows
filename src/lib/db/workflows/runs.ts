@@ -568,6 +568,20 @@ export function getWorkflowRunCheckpoint(
   return row ? mapRunCheckpoint(row) : null;
 }
 
+export function deleteWorkflowRunCheckpoint(input: {
+  runId: string;
+  nodeId: string;
+}): void {
+  getDb()
+    .prepare(
+      `
+      DELETE FROM workflow_run_checkpoints
+      WHERE run_id = ? AND node_id = ?
+    `,
+    )
+    .run(input.runId, input.nodeId);
+}
+
 export function listWorkflowRunCheckpoints(
   runId: string,
 ): WorkflowRunCheckpointRecord[] {

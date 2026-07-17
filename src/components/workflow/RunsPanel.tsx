@@ -15,10 +15,12 @@ type RunsPanelProps = {
   isRunning: boolean;
   isLoadingRunDetail: boolean;
   retryingRunId?: string;
+  runActionError?: string;
   copiedRunField?: string;
   onSelectRun: (runId: string) => void;
   onRetryRun: (runId: string) => void;
   onRetryMapItems: (runId: string, mapNodeId: string) => void;
+  onRetryFromNode: (runId: string, fromNodeId: string) => void;
   onResumeRun: (runId: string) => void;
   onCancelRun: (runId: string) => void;
   onCopyRunText: (key: string, text: string) => void;
@@ -55,9 +57,11 @@ export function RunsPanel(props: RunsPanelProps) {
           versionLabelById={props.versionLabelById}
           isRunning={props.isRunning}
           retryingRunId={props.retryingRunId}
+          runActionError={props.runActionError}
           copiedRunField={props.copiedRunField}
           onRetryRun={props.onRetryRun}
           onRetryMapItems={props.onRetryMapItems}
+          onRetryFromNode={props.onRetryFromNode}
           onResumeRun={props.onResumeRun}
           onCancelRun={props.onCancelRun}
           onCopyRunText={props.onCopyRunText}
