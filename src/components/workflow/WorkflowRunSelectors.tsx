@@ -5,8 +5,14 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@tutti-os/ui-system";
-import { DEFAULT_MODEL_VALUE } from "@/components/workflow/useWorkflowRunSettings";
-import type { AgentTargetOption } from "@/lib/agents/types";
+import {
+  DEFAULT_MODEL_VALUE,
+  DEFAULT_PERMISSION_MODE_VALUE,
+} from "@/components/workflow/useWorkflowRunSettings";
+import type {
+  AgentPermissionModeOption,
+  AgentTargetOption,
+} from "@/lib/agents/types";
 
 export function WorkflowAgentSelect(props: {
   agents: AgentTargetOption[];
@@ -67,6 +73,42 @@ export function WorkflowModelSelect(props: {
         {props.models.map((item) => (
           <SelectItem key={item} value={item}>
             {item}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function WorkflowPermissionModeSelect(props: {
+  modes: AgentPermissionModeOption[];
+  value: string;
+  disabled?: boolean;
+  onValueChange: (value: string) => void;
+}) {
+  const selected = props.modes.find((mode) => mode.id === props.value);
+  return (
+    <Select
+      value={props.value || DEFAULT_PERMISSION_MODE_VALUE}
+      disabled={props.disabled}
+      onValueChange={(value) =>
+        props.onValueChange(
+          value === DEFAULT_PERMISSION_MODE_VALUE ? "" : value,
+        )
+      }
+    >
+      <SelectTrigger className="control-select">
+        <span className="select-display">
+          {selected?.label ?? "Default permissions"}
+        </span>
+      </SelectTrigger>
+      <SelectContent align="start" className="workflow-select-content">
+        <SelectItem value={DEFAULT_PERMISSION_MODE_VALUE}>
+          Default permissions
+        </SelectItem>
+        {props.modes.map((mode) => (
+          <SelectItem key={mode.id} value={mode.id}>
+            {mode.label}
           </SelectItem>
         ))}
       </SelectContent>

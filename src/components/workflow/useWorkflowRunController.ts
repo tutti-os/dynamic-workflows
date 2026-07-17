@@ -41,6 +41,7 @@ export function useWorkflowRunController(input: {
   isScriptDirty: boolean;
   effectiveAgent: string;
   model: string;
+  permissionMode: string;
   cwd: string;
   requiresCwd: boolean;
   workflowInputPayload: Record<string, WorkflowInputValue>;
@@ -240,6 +241,7 @@ export function useWorkflowRunController(input: {
       inputs: input.workflowInputPayload,
       agent: input.effectiveAgent,
       model: input.model || undefined,
+      permissionMode: input.permissionMode || undefined,
       cwd: input.cwd || undefined,
     };
     await executeRunJob({
@@ -259,6 +261,7 @@ export function useWorkflowRunController(input: {
           inputs: input.workflowInputPayload,
           agent: input.effectiveAgent,
           model: input.model || undefined,
+          permissionMode: input.permissionMode || undefined,
           cwd: input.cwd || undefined,
           autoSavedVersion: input.isScriptDirty,
           requestedVersionId: selectedVersionId,

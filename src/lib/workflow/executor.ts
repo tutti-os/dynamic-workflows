@@ -382,6 +382,11 @@ async function* runAgentNode(input: {
     input.request.model,
     input.request.inputs,
   );
+  const permissionMode = resolveRuntimeOption(
+    input.node.permissionMode,
+    input.request.permissionMode,
+    input.request.inputs,
+  );
   const cwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
   let prompt = renderPrompt(input.node, input.outputs, input.request.inputs, {
     cwd,
@@ -445,6 +450,7 @@ async function* runAgentNode(input: {
       prompt,
       title: input.node.label,
       model,
+      permissionMode,
       resumeSessionId,
       attachSessionId,
       signal: input.request.signal,
@@ -575,6 +581,11 @@ async function* runLoopNode(input: {
   const model = resolveRuntimeOption(
     input.node.model,
     input.request.model,
+    input.request.inputs,
+  );
+  const permissionMode = resolveRuntimeOption(
+    input.node.permissionMode,
+    input.request.permissionMode,
     input.request.inputs,
   );
   const loopCwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
@@ -802,6 +813,7 @@ async function* runLoopNode(input: {
                 : undefined,
               defaultAgent: agent,
               defaultModel: model,
+              defaultPermissionMode: permissionMode,
               defaultSession: loop.session,
               cwd: stepCwd,
               workflowInputs: input.request.inputs,
@@ -992,6 +1004,7 @@ async function* runLoopAgentStep(input: {
   appendPrompt?: string;
   defaultAgent: string;
   defaultModel?: string;
+  defaultPermissionMode?: string;
   defaultSession?: WorkflowSessionSpec;
   cwd: string;
   workflowInputs?: Record<string, WorkflowInputValue>;
@@ -1006,6 +1019,11 @@ async function* runLoopAgentStep(input: {
   const model = resolveRuntimeOption(
     input.step.model,
     input.defaultModel,
+    input.workflowInputs,
+  );
+  const permissionMode = resolveRuntimeOption(
+    input.step.permissionMode,
+    input.defaultPermissionMode,
     input.workflowInputs,
   );
   const runContext = resolveLoopStepRunContext({
@@ -1062,6 +1080,7 @@ async function* runLoopAgentStep(input: {
     prompt: runContext.prompt,
     title: input.step.label,
     model,
+    permissionMode,
     resumeSessionId: runContext.resumeSessionId,
     attachSessionId,
     signal: input.signal,
@@ -1135,6 +1154,11 @@ async function* runMapNode(input: {
   const model = resolveRuntimeOption(
     input.node.model,
     input.request.model,
+    input.request.inputs,
+  );
+  const permissionMode = resolveRuntimeOption(
+    input.node.permissionMode,
+    input.request.permissionMode,
     input.request.inputs,
   );
   const mapCwd = resolveEffectiveNodeCwd(input.request.cwd, input.node.cwd);
@@ -1316,6 +1340,7 @@ async function* runMapNode(input: {
                 item,
                 defaultAgent: agent,
                 defaultModel: model,
+                defaultPermissionMode: permissionMode,
                 mapCwd,
                 workflowOutputs: input.outputs,
                 request: input.request,
@@ -1391,6 +1416,7 @@ async function* runMapItem(input: {
   item: WorkflowValue;
   defaultAgent: string;
   defaultModel?: string;
+  defaultPermissionMode?: string;
   mapCwd: string;
   workflowOutputs: Record<string, WorkflowValue>;
   request: WorkflowRunRequest;
@@ -1419,6 +1445,11 @@ async function* runMapItem(input: {
     const model = resolveRuntimeOption(
       step.model,
       input.defaultModel,
+      input.request.inputs,
+    );
+    const permissionMode = resolveRuntimeOption(
+      step.permissionMode,
+      input.defaultPermissionMode,
       input.request.inputs,
     );
     // Inject pending operator notes before emitting the item's running state so
@@ -1461,6 +1492,7 @@ async function* runMapItem(input: {
         prompt,
         title: label,
         model,
+        permissionMode,
         signal: input.request.signal,
       })) {
         throwIfAborted(input.request.signal);

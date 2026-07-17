@@ -20,6 +20,7 @@ All commands support `--json` for machine-readable output.
 | Purpose | Command |
 | --- | --- |
 | Search blueprints | `tutti --json dynamic-workflows blueprints search --query "<keywords>"` |
+| Inspect agent models and permissions | `tutti agent composer-options --agent-id <agent-id> --json` |
 | List all blueprints | `tutti --json dynamic-workflows blueprints list` |
 | Read one blueprint script | `tutti --json dynamic-workflows blueprints get --blueprint-id <id> --include-script` |
 | Validate an authoring file | `tutti --json dynamic-workflows authoring validate --job-id <job-id> --file <path>` |
@@ -44,6 +45,7 @@ All commands support `--json` for machine-readable output.
 Before submitting, verify:
 
 - Every runtime value is declared in `inputs` or comes from a valid upstream reference.
+- Every explicit `permissionMode` uses an exact `permissionConfig.modes[].id` returned by `tutti agent composer-options` for the selected agent; omit it when the agent default is intended.
 - Every node has a clear role, sufficient context, explicit authority, concrete work, and an observable completion/output contract. Prompts demand the deliverable itself — downstream nodes and `until` matchers consume the final message as data, not as chat.
 - Dataflow is intentional: independent roles do not receive another role's narrative unless the workflow explicitly requires it, and no node lists an input its prompt never uses (false dependencies serialize parallel branches).
 - Reviewers that gate a loop or delivery are skeptics: prompted to refute, failing when uncertain, judging the actual artifact rather than a prior Human approval or an implementer's self-assessment.

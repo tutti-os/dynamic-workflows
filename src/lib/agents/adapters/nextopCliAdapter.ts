@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type {
+  AgentPermissionModeOption,
   AgentRunInput,
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
@@ -70,6 +71,7 @@ type NextopSessionSummaryOutput = {
 type NextopComposerOptionsOutput = {
   effectiveSettings?: unknown;
   modelConfig?: unknown;
+  permissionConfig?: unknown;
 };
 
 type NextopMessage = {
@@ -257,14 +259,21 @@ export function createNextopCliAgentAdapter(
 
     const targets = await Promise.all(
       loaded.catalog.targets.map(async (spec): Promise<AgentTargetOption> => {
+        const composerOptions = spec.supported
+          ? await readAgentComposerOptions(spec, runner, providerModelsTimeoutMs)
+          : { models: [], permissionModes: [] };
         return {
           id: spec.id,
           name: spec.name,
           provider: spec.provider,
           supported: spec.supported,
-          models: spec.supported
-            ? await readAgentModels(spec, runner, providerModelsTimeoutMs)
-            : [],
+          models: composerOptions.models,
+          ...(composerOptions.permissionModes.length > 0
+            ? { permissionModes: composerOptions.permissionModes }
+            : {}),
+          ...(composerOptions.defaultPermissionMode
+            ? { defaultPermissionMode: composerOptions.defaultPermissionMode }
+            : {}),
           isDefault: spec.isDefault,
           reason: spec.reason,
         };
@@ -475,6 +484,9 @@ export function createNextopCliAgentAdapter(
               ...startCommand(target),
               "--model",
               model,
+              ...(input.permissionMode
+                ? ["--permission-mode", input.permissionMode]
+                : []),
               "--prompt",
               input.prompt,
               ...(input.title ? ["--title", input.title] : []),
@@ -1227,19 +1239,60 @@ function runNextop(
   });
 }
 
-async function readAgentModels(
+async function readAgentComposerOptions(
   target: NextopAgentTargetSpec,
   runner: NextopCliRunner,
   timeoutMs: number,
-): Promise<string[]> {
+): Promise<{
+  models: string[];
+  permissionModes: AgentPermissionModeOption[];
+  defaultPermissionMode?: string;
+}> {
   try {
     const output = (await runner(composerOptionsCommand(target), {
       timeoutMs,
     })) as NextopComposerOptionsOutput;
-    return parseComposerModels(output);
+    return {
+      models: parseComposerModels(output),
+      ...parseComposerPermissions(output),
+    };
   } catch {
-    return [];
+    return { models: [], permissionModes: [] };
   }
+}
+
+function parseComposerPermissions(output: NextopComposerOptionsOutput): {
+  permissionModes: AgentPermissionModeOption[];
+  defaultPermissionMode?: string;
+} {
+  const permissionConfig = readRecord(output.permissionConfig);
+  const defaultPermissionMode = readOptionalString(
+    permissionConfig?.defaultValue,
+  );
+  const modes = Array.isArray(permissionConfig?.modes)
+    ? permissionConfig.modes
+    : [];
+  const permissionModes = modes.flatMap((mode): AgentPermissionModeOption[] => {
+    const record = readRecord(mode);
+    const id = readOptionalString(record?.id);
+    if (!id) {
+      return [];
+    }
+    const description = readOptionalString(record?.description);
+    const semantic = readOptionalString(record?.semantic);
+    return [
+      {
+        id,
+        label: readOptionalString(record?.label) ?? id,
+        ...(description ? { description } : {}),
+        ...(semantic ? { semantic } : {}),
+      },
+    ];
+  });
+  return {
+    permissionModes,
+    ...(defaultPermissionMode ? { defaultPermissionMode } : {}),
+  };
 }
 
 function parseComposerModels(output: NextopComposerOptionsOutput): string[] {

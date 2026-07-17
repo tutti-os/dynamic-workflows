@@ -93,14 +93,20 @@ export function useWorkflowRunEvents(input: UseWorkflowRunEventsInput): {
 
   const visibleRuns = useMemo(() => {
     const persistedRuns = input.detail?.runs ?? [];
-    if (!liveRun) {
-      return persistedRuns;
+    const latestById = new Map(
+      [selectedRun?.run, liveRun?.run]
+        .filter((run): run is WorkflowRunRecord => Boolean(run))
+        .map((run) => [run.id, run]),
+    );
+    const merged = persistedRuns.map((run) => latestById.get(run.id) ?? run);
+
+    // A newly-started live run may not be present in the workflow-detail
+    // snapshot yet. Keep it at the front until the next detail refresh lands.
+    if (liveRun && !persistedRuns.some((run) => run.id === liveRun.run.id)) {
+      merged.unshift(liveRun.run);
     }
-    return [
-      liveRun.run,
-      ...persistedRuns.filter((run) => run.id !== liveRun.run.id),
-    ];
-  }, [input.detail?.runs, liveRun]);
+    return merged;
+  }, [input.detail?.runs, liveRun, selectedRun]);
 
   const latestOutput = useMemo(() => {
     const entries = Object.entries(nodeOutputs);

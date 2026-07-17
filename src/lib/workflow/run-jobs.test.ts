@@ -34,6 +34,79 @@ afterEach(() => {
 });
 
 describe("workflow run jobs recovery", () => {
+  it("persists a failed terminal status before publishing it", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const parsed = assertWorkflowScriptValid(SCRIPT);
+    let releaseStart: (() => void) | undefined;
+    const allowStart = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    runWorkflowMock.mockImplementation(async function* (
+      request: WorkflowRunRequest,
+    ) {
+      const runId = request.runId ?? "run";
+      await allowStart;
+      yield { type: "run_started", runId, parsed };
+      yield {
+        type: "node_failed",
+        runId,
+        nodeId: "first",
+        error: "Node dependencies could not be resolved.",
+      };
+      yield {
+        type: "run_completed",
+        runId,
+        status: "failed",
+        outputs: {},
+        error: "Node dependencies could not be resolved.",
+      };
+    });
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { getWorkflowRun } = await import("@/lib/db/workflows/runs");
+    const {
+      isWorkflowRunJobActive,
+      startWorkflowRunJob,
+      subscribeWorkflowRunJob,
+    } = await import("@/lib/workflow/run-jobs");
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const run = startWorkflowRunJob({
+      workflowId: detail.workflow.id,
+      version,
+      cwd: process.cwd(),
+      executorKind: "mock",
+      inputs: {},
+      input: { inputs: {} },
+    });
+
+    let statusWhenTerminalPublished: string | undefined;
+    subscribeWorkflowRunJob(run.id, (event) => {
+      if (event.type === "run_completed") {
+        statusWhenTerminalPublished = getWorkflowRun(run.id)?.status;
+      }
+    });
+    releaseStart?.();
+    await waitUntil(() => !isWorkflowRunJobActive(run.id));
+
+    expect(statusWhenTerminalPublished).toBe("failed");
+    expect(getWorkflowRun(run.id)).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        finishedAt: expect.any(String),
+      }),
+    );
+  });
+
   it("stops publishing as soon as another runner owns the execution token", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
     process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
@@ -620,6 +693,70 @@ const afterFirst = await agent({ id: "after-first", prompt: "{{first.action}}" }
         nodeStatuses: { first: "completed" },
       }),
     );
+  });
+
+  it("reconciles a stale running run from a top-level node failure", async () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "dynamic-workflows-test-"));
+    process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { createWorkflowFromScript } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { createWorkflowRun, getWorkflowRun } = await import(
+      "@/lib/db/workflows/runs"
+    );
+    const { appendRunLogEvent, ensureRunLogDirectory } = await import(
+      "@/lib/workflow/run-log"
+    );
+    const { assertWorkflowScriptValid } = await import("@/lib/workflow/parser");
+    const { markWorkflowRunInterruptedIfStale } = await import(
+      "@/lib/workflow/run-jobs"
+    );
+
+    const detail = createWorkflowFromScript(SCRIPT);
+    const version = detail.currentVersion;
+    if (!version) {
+      throw new Error("version missing");
+    }
+    const parsed = assertWorkflowScriptValid(version.script);
+    const run = createWorkflowRun({
+      workflowId: detail.workflow.id,
+      workflowVersionId: version.id,
+      executorKind: "mock",
+      agent: "mock",
+      cwd: process.cwd(),
+      request: { inputs: {} },
+    });
+    ensureRunLogDirectory(run.logPath);
+    appendRunLogEvent(run.logPath, {
+      type: "run_started",
+      runId: run.id,
+      parsed,
+    });
+    appendRunLogEvent(run.logPath, {
+      type: "node_failed",
+      runId: run.id,
+      nodeId: "first",
+      error: "Node dependencies could not be resolved.",
+    });
+
+    const reconciled = await markWorkflowRunInterruptedIfStale(run);
+
+    expect(reconciled).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        finishedAt: expect.any(String),
+      }),
+    );
+    expect(reconciled.result).toEqual(
+      expect.objectContaining({
+        nodeStatuses: { first: "failed" },
+        error: "Node dependencies could not be resolved.",
+        errorCode: "WORKFLOW_RUN_FAILED",
+      }),
+    );
+    expect(getWorkflowRun(run.id)?.status).toBe("failed");
   });
 
   it("reserves a resume job before async recovery work", async () => {

@@ -66,6 +66,18 @@ describe("nextop cli adapter", () => {
           return {
             effectiveSettings: { model: "gpt-5.5" },
             modelConfig: { options: [] },
+            permissionConfig: {
+              defaultValue: "full-access",
+              modes: [
+                {
+                  id: "auto",
+                  label: "Auto",
+                  description: "Ask for risky operations.",
+                  semantic: "auto",
+                },
+                { id: "full-access", label: "Full access" },
+              ],
+            },
           };
         }
         throw new Error(`unexpected call: ${args.join(" ")}`);
@@ -79,6 +91,16 @@ describe("nextop cli adapter", () => {
         provider: "codex",
         supported: true,
         models: ["gpt-5.5"],
+        permissionModes: [
+          {
+            id: "auto",
+            label: "Auto",
+            description: "Ask for risky operations.",
+            semantic: "auto",
+          },
+          { id: "full-access", label: "Full access" },
+        ],
+        defaultPermissionMode: "full-access",
         isDefault: false,
         reason: undefined,
       },
@@ -88,6 +110,16 @@ describe("nextop cli adapter", () => {
         provider: "codex",
         supported: true,
         models: ["gpt-5.5"],
+        permissionModes: [
+          {
+            id: "auto",
+            label: "Auto",
+            description: "Ask for risky operations.",
+            semantic: "auto",
+          },
+          { id: "full-access", label: "Full access" },
+        ],
+        defaultPermissionMode: "full-access",
         isDefault: true,
         reason: undefined,
       },
@@ -698,6 +730,7 @@ describe("nextop cli adapter", () => {
       prompt: "scan",
       title: "Scan repository",
       model: "gpt-5",
+      permissionMode: "auto",
     })) {
       events.push(event);
     }
@@ -710,6 +743,8 @@ describe("nextop cli adapter", () => {
       "local:codex",
       "--model",
       "gpt-5",
+      "--permission-mode",
+      "auto",
       "--prompt",
       "scan",
       "--title",

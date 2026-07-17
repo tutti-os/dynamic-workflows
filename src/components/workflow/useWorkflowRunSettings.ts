@@ -9,6 +9,7 @@ import type {
 } from "@/lib/agents/types";
 
 export const DEFAULT_MODEL_VALUE = "__default__";
+export const DEFAULT_PERMISSION_MODE_VALUE = "__default_permission__";
 
 const FALLBACK_AGENTS: AgentTargetOption[] = [
   {
@@ -71,6 +72,8 @@ export function useWorkflowRunSettings(): {
   effectiveAgent: string;
   model: string;
   modelOptions: string[];
+  permissionMode: string;
+  permissionModeOptions: NonNullable<AgentTargetOption["permissionModes"]>;
   cwd: string;
   agentsLoading: boolean;
   agentsError?: string;
@@ -78,11 +81,13 @@ export function useWorkflowRunSettings(): {
   retryAgents: () => Promise<void>;
   setAgent: (value: string) => void;
   setModel: (value: string) => void;
+  setPermissionMode: (value: string) => void;
   setCwd: (value: string) => void;
 } {
   const [agents, setAgents] = useState<AgentTargetOption[]>(FALLBACK_AGENTS);
   const [agent, setAgentState] = useState("mock");
   const [model, setModel] = useState("");
+  const [permissionMode, setPermissionMode] = useState("");
   const [cwd, setCwd] = useState("");
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState<string | undefined>();
@@ -117,6 +122,7 @@ export function useWorkflowRunSettings(): {
               agentRef.current = nextAgent;
               setAgentState(nextAgent);
               setModel("");
+              setPermissionMode("");
             }
           }
           hasLoadedCatalogRef.current = true;
@@ -156,11 +162,16 @@ export function useWorkflowRunSettings(): {
     () => selectedAgent?.models ?? [],
     [selectedAgent?.models],
   );
+  const permissionModeOptions = useMemo(
+    () => selectedAgent?.permissionModes ?? [],
+    [selectedAgent?.permissionModes],
+  );
 
   function setAgent(value: string) {
     agentRef.current = value;
     setAgentState(value);
     setModel("");
+    setPermissionMode("");
   }
 
   return {
@@ -168,6 +179,8 @@ export function useWorkflowRunSettings(): {
     effectiveAgent,
     model,
     modelOptions,
+    permissionMode,
+    permissionModeOptions,
     cwd,
     agentsLoading,
     agentsError,
@@ -175,6 +188,7 @@ export function useWorkflowRunSettings(): {
     retryAgents: loadAgents,
     setAgent,
     setModel,
+    setPermissionMode,
     setCwd,
   };
 }

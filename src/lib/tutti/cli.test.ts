@@ -147,6 +147,7 @@ const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
       input: {
         "workflow-id": detail.workflow.id,
         agent: "mock",
+        "permission-mode": "auto",
         inputs: JSON.stringify({ requirement: "rename sessions" }),
       },
     });
@@ -161,6 +162,7 @@ const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
           input: {
             inputs: { requirement: "rename sessions" },
             agent: "mock",
+            permissionMode: "auto",
           },
         },
       },
@@ -311,5 +313,6 @@ const first = await agent({ id: "first", prompt: "Plan" })
       agent: "mock",
       cwd: process.cwd(),
     });
+    expect(body.value.run.input).not.toHaveProperty("permissionMode");
   });
 });

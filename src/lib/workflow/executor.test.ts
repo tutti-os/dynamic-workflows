@@ -622,6 +622,46 @@ const delivery = await loop({
     expect(calls.map((call) => call.title)).toEqual(["Implement", "Review"]);
   });
 
+  it("resolves node permission modes and leaves the runtime default unset", async () => {
+    const calls: AgentRunInput[] = [];
+    runAgentMock.mockImplementation(async function* (
+      input: AgentRunInput,
+    ): AsyncGenerator<AgentRuntimeEvent> {
+      calls.push(input);
+      yield { type: "text_delta", text: "done" };
+      yield { type: "done", status: "completed", reason: "completed" };
+    });
+
+    for await (const _event of runWorkflow({
+      script: `
+export const inputs = { reviewer_permission: { type: "string", required: false } }
+const inherited = agent({ id: "inherited", prompt: "default" })
+const explicit = agent({ id: "explicit", permissionMode: "{{reviewer_permission}}", prompt: "explicit" })
+`,
+      agent: "local:codex",
+      permissionMode: "auto",
+      inputs: { reviewer_permission: "full-access" },
+      cwd: process.cwd(),
+    })) {
+      // consume
+    }
+
+    expect(calls.map((call) => call.permissionMode)).toEqual([
+      "auto",
+      "full-access",
+    ]);
+
+    calls.length = 0;
+    for await (const _event of runWorkflow({
+      script: `agent({ id: "default", prompt: "default" })`,
+      agent: "local:codex",
+      cwd: process.cwd(),
+    })) {
+      // consume
+    }
+    expect(calls[0]?.permissionMode).toBeUndefined();
+  });
+
   it("captures the rendered prompt on a top-level node_started event", async () => {
     runAgentMock.mockImplementation(async function* (
       input: AgentRunInput,

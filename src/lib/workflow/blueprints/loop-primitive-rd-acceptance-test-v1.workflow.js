@@ -25,6 +25,12 @@ export const inputs = {
     label: "Reviewer model",
     description: "可选：验收 Reviewer 使用的模型，需与所选 agent 兼容。留空则使用 run 级 model。验收是质量门禁，值得配置更强的模型。",
   },
+  reviewer_permission_mode: {
+    type: "string",
+    required: false,
+    label: "Reviewer permission mode",
+    description: "可选：Reviewer 的权限模式 id。先用 tutti agent composer-options --agent-id <reviewer_agent> --json 查询 permissionConfig.modes；留空先继承 run 级权限，run 级也未设置时使用该 agent 的默认权限。",
+  },
   max_rounds: {
     type: "number",
     required: false,
@@ -91,6 +97,7 @@ const delivery_loop = loop({
       label: "验收 Reviewer",
       agent: "{{reviewer_agent}}",
       model: "{{reviewer_model}}",
+      permissionMode: "{{reviewer_permission_mode}}",
       session: { mode: "independent" },
       output: "json",
       prompt: `

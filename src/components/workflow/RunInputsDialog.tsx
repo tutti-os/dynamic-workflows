@@ -18,6 +18,7 @@ import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
 import {
   WorkflowAgentSelect,
   WorkflowModelSelect,
+  WorkflowPermissionModeSelect,
 } from "@/components/workflow/WorkflowRunSelectors";
 import { WorkflowProjectSelect } from "@/components/workflow/WorkflowProjectSelect";
 import type { AgentTargetOption } from "@/lib/agents/types";
@@ -33,6 +34,8 @@ type RunInputsDialogProps = {
   agent: string;
   model: string;
   modelOptions: string[];
+  permissionMode: string;
+  permissionModeOptions: NonNullable<AgentTargetOption["permissionModes"]>;
   cwd: string;
   agentsLoading: boolean;
   agentsError?: string;
@@ -48,6 +51,7 @@ type RunInputsDialogProps = {
   onOpenChange: (open: boolean) => void;
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onPermissionModeChange: (value: string) => void;
   onCwdChange: (value: string) => void;
   onRetryAgents: () => Promise<void>;
   onRunInputChange: (name: string, value: WorkflowInputValue) => void;
@@ -129,6 +133,15 @@ export function RunInputsDialog(props: RunInputsDialogProps) {
                   onChange={(event) => props.onModelChange(event.target.value)}
                 />
               )}
+            </label>
+            <label className="run-dialog-control-field">
+              <span>Permissions</span>
+              <WorkflowPermissionModeSelect
+                modes={props.permissionModeOptions}
+                value={props.permissionMode}
+                disabled={agentsBlocked}
+                onValueChange={props.onPermissionModeChange}
+              />
             </label>
             <label className="run-dialog-control-field run-dialog-control-field-wide">
               <span>

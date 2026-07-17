@@ -39,6 +39,32 @@ log("done")
 `;
 
 describe("parseWorkflowScript", () => {
+  it("parses permission modes and runtime permission overrides", () => {
+    const parsed = parseWorkflowScript(`
+export const inputs = {
+  reviewer_permission: { type: "string", required: false },
+}
+const top = agent({ id: "top", permissionMode: "auto", prompt: "Top" })
+const review = loop({
+  id: "review",
+  permissionMode: "full-access",
+  maxIterations: 1,
+  steps: [
+    agent({ id: "reviewer", permissionMode: "{{reviewer_permission}}", prompt: "Review" }),
+  ],
+  until: { source: "reviewer", finalStatus: "PASS" },
+})
+`);
+
+    expect(parsed.diagnostics.filter((item) => item.severity === "error")).toEqual([]);
+    expect(parsed.nodes.find((node) => node.id === "top")?.permissionMode).toBe("auto");
+    const loopNode = parsed.nodes.find((node) => node.id === "review");
+    expect(loopNode?.permissionMode).toBe("full-access");
+    expect(loopNode?.loop?.steps[0]).toEqual(
+      expect.objectContaining({ permissionMode: "{{reviewer_permission}}" }),
+    );
+  });
+
   it("parses top-level and loop human tasks with structured references", () => {
     const parsed = parseWorkflowScript(`
 const approval = await human({

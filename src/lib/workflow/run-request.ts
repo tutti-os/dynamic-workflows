@@ -20,7 +20,10 @@ import {
   readWorkflowInputsObject,
 } from "@/lib/workflow/input-schema";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
-import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
+import {
+  compactWorkflowRunInput,
+  readWorkflowRunInputString,
+} from "@/lib/workflow/run-input";
 import type { WorkflowRunJobOptions } from "@/lib/workflow/run-jobs";
 
 type PreparedWorkflowRun = WorkflowRunJobOptions;
@@ -30,6 +33,7 @@ type WorkflowRunRequestBody = {
   versionId?: string;
   agent?: string;
   model?: string;
+  permissionMode?: string;
   cwd?: string;
   inputs?: unknown;
   force?: boolean;
@@ -81,6 +85,7 @@ export async function prepareCurrentWorkflowRun(input: {
     executorKind: body.agent === "mock" ? "mock" : "local-agent",
     agent: body.agent,
     model: body.model,
+    permissionMode: body.permissionMode,
     cwd,
     force: body.force === true,
     inputs,
@@ -91,6 +96,7 @@ export async function prepareCurrentWorkflowRun(input: {
       requestedVersionId: requestedVersion.id,
       agent: body.agent,
       model: body.model,
+      permissionMode: body.permissionMode,
     }),
   };
 }
@@ -128,6 +134,10 @@ export function prepareRetryWorkflowRun(input: {
     executorKind: sourceRun.executorKind,
     agent: sourceRun.agent ?? undefined,
     model: sourceRun.model ?? undefined,
+    permissionMode: readWorkflowRunInputString(
+      sourceRun.input,
+      "permissionMode",
+    ),
     cwd,
     inputs,
     input: compactWorkflowRunInput({
@@ -135,6 +145,10 @@ export function prepareRetryWorkflowRun(input: {
       retryOfRunId: sourceRun.id,
       agent: sourceRun.agent ?? undefined,
       model: sourceRun.model ?? undefined,
+      permissionMode: readWorkflowRunInputString(
+        sourceRun.input,
+        "permissionMode",
+      ),
       cwd,
     }),
   };

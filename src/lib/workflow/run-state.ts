@@ -506,7 +506,18 @@ export function applyRunEventToDetail(
   return {
     run: {
       ...detail.run,
-      status: summary.status,
+      // The persisted run record is the source of truth for the overall
+      // lifecycle. A node failure is useful live graph state, but it is not the
+      // terminal transition itself: the runner still has to unwind the graph,
+      // emit run_completed, and persist the final result. Keeping the previous
+      // run status here prevents the UI from claiming the run is failed while
+      // the backend (and runs wait) still correctly reports it as running.
+      status:
+        event.type === "run_started" ||
+        event.type === "run_waiting" ||
+        event.type === "run_completed"
+          ? summary.status
+          : detail.run.status,
       pendingHumanTaskCount: humanTasks.filter(
         (task) => task.status === "pending",
       ).length,

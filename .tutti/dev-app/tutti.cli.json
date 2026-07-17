@@ -200,6 +200,10 @@
             "type": "string",
             "description": "Optional model override."
           },
+          "permission-mode": {
+            "type": "string",
+            "description": "Optional run-level permission mode id. Discover exact ids with tutti agent composer-options --agent-id <agent-id> --json. Omit to use the agent default."
+          },
           "cwd": {
             "type": "string",
             "description": "Optional working directory, resolved inside the configured workflow cwd root."

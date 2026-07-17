@@ -290,6 +290,7 @@ function addAgentNode(
     prompt,
     agent: readObjectString(options, "agent"),
     model: readObjectString(options, "model"),
+    permissionMode: readObjectString(options, "permissionMode"),
     cwd: readObjectString(options, "cwd"),
     ...(output ? { output } : {}),
     ...(session ? { session } : {}),
@@ -363,6 +364,7 @@ function addLoopNode(
     variableName,
     agent: readObjectString(options, "agent"),
     model: readObjectString(options, "model"),
+    permissionMode: readObjectString(options, "permissionMode"),
     cwd: readObjectString(options, "cwd"),
     ...(session ? { session } : {}),
     loop,
@@ -556,6 +558,7 @@ function addMapNode(
     variableName,
     agent: readObjectString(options, "agent"),
     model: readObjectString(options, "model"),
+    permissionMode: readObjectString(options, "permissionMode"),
     cwd: readObjectString(options, "cwd"),
     ...(map ? { map } : {}),
     inputs,
@@ -1323,6 +1326,7 @@ function readLoopAgentStep(
     ...(appendPrompt !== undefined ? { appendPrompt } : {}),
     agent: readObjectString(options, "agent"),
     model: readObjectString(options, "model"),
+    permissionMode: readObjectString(options, "permissionMode"),
     cwd: readObjectString(options, "cwd"),
     ...(output ? { output } : {}),
     ...(session ? { session } : {}),
@@ -1535,6 +1539,14 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
       disallowedInputNames: workflowNames,
       state,
     });
+    validateRuntimeOptionField({
+      value: node.permissionMode,
+      fieldName: "permissionMode",
+      ownerLabel: `node "${node.id}"`,
+      range: node.sourceRange,
+      disallowedInputNames: workflowNames,
+      state,
+    });
 
     if (node.map) {
       const mapStepNames = new Set(node.map.steps.map((step) => step.id));
@@ -1554,6 +1566,14 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
         validateRuntimeOptionField({
           value: step.model,
           fieldName: "model",
+          ownerLabel: `map step "${node.id}.${step.id}"`,
+          range: step.sourceRange,
+          disallowedInputNames,
+          state,
+        });
+        validateRuntimeOptionField({
+          value: step.permissionMode,
+          fieldName: "permissionMode",
           ownerLabel: `map step "${node.id}.${step.id}"`,
           range: step.sourceRange,
           disallowedInputNames,
@@ -1597,13 +1617,21 @@ function addRuntimeOptionDiagnostics(state: ParserState): void {
         disallowedInputNames,
         state,
       });
+      validateRuntimeOptionField({
+        value: step.permissionMode,
+        fieldName: "permissionMode",
+        ownerLabel: `loop step "${node.id}.${step.id}"`,
+        range: step.sourceRange,
+        disallowedInputNames,
+        state,
+      });
     }
   }
 }
 
 function validateRuntimeOptionField(input: {
   value: string | undefined;
-  fieldName: "agent" | "model" | "maxIterations";
+  fieldName: "agent" | "model" | "permissionMode" | "maxIterations";
   ownerLabel: string;
   range?: EditableRange;
   disallowedInputNames: Set<string>;
@@ -1672,7 +1700,7 @@ function addInputSchemaReferenceDiagnostics(
         message: `Runtime option input "${ref}" is not declared in export const inputs.`,
         path: workflowInputPath(ref),
         range: node.sourceRange,
-        hint: `Declare "${ref}" in export const inputs so agent/model templates can be resolved at run time.`,
+        hint: `Declare "${ref}" in export const inputs so agent/model/permissionMode templates can be resolved at run time.`,
       }));
     }
   }
@@ -2013,16 +2041,19 @@ function collectRuntimeOptionRefs(node: WorkflowNode): {
   const refs = [
     ...collectRuntimeOptionFieldRefs(node.agent),
     ...collectRuntimeOptionFieldRefs(node.model),
+    ...collectRuntimeOptionFieldRefs(node.permissionMode),
     ...(node.loop && typeof node.loop.maxIterations === "string"
       ? collectRuntimeOptionFieldRefs(node.loop.maxIterations)
       : []),
     ...(node.loop?.steps.flatMap((step) => [
       ...collectRuntimeOptionFieldRefs(step.agent),
       ...collectRuntimeOptionFieldRefs(step.model),
+      ...collectRuntimeOptionFieldRefs(step.permissionMode),
     ]) ?? []),
     ...(node.map?.steps.flatMap((step) => [
       ...collectRuntimeOptionFieldRefs(step.agent),
       ...collectRuntimeOptionFieldRefs(step.model),
+      ...collectRuntimeOptionFieldRefs(step.permissionMode),
     ]) ?? []),
   ];
   return {

@@ -49,6 +49,7 @@ export type WorkflowAgentLoopStep = {
   appendPrompt?: string;
   agent?: string;
   model?: string;
+  permissionMode?: string;
   cwd?: string;
   output?: WorkflowAgentOutputFormat;
   session?: WorkflowSessionSpec;
@@ -104,6 +105,7 @@ export type WorkflowHumanLoopStep = {
   appendPrompt?: undefined;
   agent?: undefined;
   model?: undefined;
+  permissionMode?: undefined;
   cwd?: undefined;
   output?: undefined;
   session?: undefined;
@@ -179,6 +181,7 @@ export type WorkflowNode = {
   message?: string;
   agent?: string;
   model?: string;
+  permissionMode?: string;
   cwd?: string;
   output?: WorkflowAgentOutputFormat;
   session?: WorkflowSessionSpec;
@@ -395,6 +398,7 @@ export type WorkflowRunRequest = {
   script: string;
   agent?: string;
   model?: string;
+  permissionMode?: string;
   cwd?: string;
   inputs?: Record<string, WorkflowInputValue>;
   recovery?: WorkflowRunRecoveryState;

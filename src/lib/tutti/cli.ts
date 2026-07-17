@@ -566,6 +566,10 @@ async function runCommand(input: CliInput) {
   const workflowId = readRequiredString(input, ["workflow-id", "workflowId"]);
   const agent = readOptionalString(input, ["agent"]) ?? "mock";
   const model = readOptionalString(input, ["model"]);
+  const permissionMode = readOptionalString(input, [
+    "permission-mode",
+    "permissionMode",
+  ]);
   const cwd = readOptionalString(input, ["cwd"]);
   const versionId = readOptionalString(input, ["version-id", "versionId"]);
   const force = readOptionalBoolean(input, ["force"]) ?? false;
@@ -575,6 +579,7 @@ async function runCommand(input: CliInput) {
     versionId,
     agent,
     model,
+    permissionMode,
     cwd,
     force,
     inputs,
@@ -938,6 +943,7 @@ async function runWorkflowForCli(input: {
   versionId?: string;
   agent: string;
   model?: string;
+  permissionMode?: string;
   cwd?: string;
   force: boolean;
   inputs: Record<string, WorkflowInputValue>;
@@ -979,6 +985,7 @@ async function runWorkflowForCli(input: {
       executorKind: input.agent === "mock" ? "mock" : "local-agent",
       agent: input.agent,
       model: input.model,
+      permissionMode: input.permissionMode,
       cwd,
       force: input.force,
       inputs,
@@ -986,6 +993,7 @@ async function runWorkflowForCli(input: {
         inputs,
         agent: input.agent,
         model: input.model,
+        permissionMode: input.permissionMode,
         cwd,
       }),
     });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { stringifyJsonObjectColumn } from "@/lib/db/workflows/json-schemas";
 import { parseWorkflowScript } from "./parser";
 import {
+  applyRunEventToDetail,
   applyWorkflowRunEvent,
   createInitialRunSummary,
   parseRunLogEvents,
@@ -29,6 +30,52 @@ const sampleNote: WorkflowRunNote = {
 };
 
 describe("workflow run state", () => {
+  it("keeps the live run running until the backend terminal event arrives", () => {
+    const detail = {
+      run: {
+        id: "run-1",
+        workflowId: "workflow-1",
+        workflowVersionId: "version-1",
+        executorKind: "mock",
+        externalRunId: null,
+        status: "running" as const,
+        agent: "mock",
+        model: null,
+        cwd: null,
+        input: {},
+        result: null,
+        logPath: null,
+        startedAt: new Date(0).toISOString(),
+        finishedAt: null,
+      },
+      log: "",
+    };
+
+    const afterNodeFailure = applyRunEventToDetail(detail, {
+      type: "node_failed",
+      runId: "run-1",
+      nodeId: "scan",
+      error: "Node dependencies could not be resolved.",
+    });
+    expect(afterNodeFailure.run.status).toBe("running");
+    expect(readRunResult(afterNodeFailure.run.result)).toEqual(
+      expect.objectContaining({
+        nodeStatuses: { scan: "failed" },
+        error: "Node dependencies could not be resolved.",
+      }),
+    );
+
+    const afterRunFailure = applyRunEventToDetail(afterNodeFailure, {
+      type: "run_completed",
+      runId: "run-1",
+      status: "failed",
+      outputs: {},
+      error: "Node dependencies could not be resolved.",
+    });
+    expect(afterRunFailure.run.status).toBe("failed");
+    expect(afterRunFailure.run.finishedAt).not.toBeNull();
+  });
+
   it("replays run_note events cleanly without altering the run result", () => {
     const events: WorkflowRunEvent[] = [
       { type: "run_started", runId: "run-1", parsed },

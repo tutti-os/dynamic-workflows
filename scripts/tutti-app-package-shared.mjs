@@ -157,6 +157,11 @@ export function cliManifest(options = {}) {
               type: "string",
               description: "Optional model override.",
             },
+            "permission-mode": {
+              type: "string",
+              description:
+                "Optional run-level permission mode id. Discover exact ids with tutti agent composer-options --agent-id <agent-id> --json. Omit to use the agent default.",
+            },
             cwd: {
               type: "string",
               description:
@@ -510,9 +515,9 @@ export function commandsMarkdown(options = {}) {
     "",
     "If you ever need a raw HTTP fallback, target the `baseUrl` returned by `status` (no need to discover the port from process tables).",
     "",
-    "`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe. `--cwd` must resolve inside the configured cwd root (`status`'s `cwdRoot`); a path outside it is rejected — create scratch dirs under `cwdRoot`.",
+    "`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe. `--permission-mode` is optional; omit it to use each selected agent's default. Before setting it, call `tutti agent composer-options --agent-id <agent-id> --json` and use an exact `permissionConfig.modes[].id` because ids differ by provider. `--cwd` must resolve inside the configured cwd root (`status`'s `cwdRoot`); a path outside it is rejected — create scratch dirs under `cwdRoot`.",
     "",
-    "Workflow scripts can make `agent` and `model` runtime-configurable by setting the whole field to `{{input_name}}` or `{{input_name:default_value}}`, for example `model: \"{{coder_model:gpt-5}}\"`. Runtime option inputs with defaults are optional but still surfaced by validation and run UIs for overrides. These templates resolve only run inputs, not upstream node outputs. Do not partially template these fields, and do not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names as runtime option input names.",
+    "Workflow scripts can make `agent`, `model`, and `permissionMode` runtime-configurable by setting the whole field to `{{input_name}}` or `{{input_name:default_value}}`, for example `permissionMode: \"{{reviewer_permission}}\"`. Runtime option inputs with defaults are optional but still surfaced by validation and run UIs for overrides. These templates resolve only run inputs, not upstream node outputs. Do not partially template these fields, and do not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names as runtime option input names.",
     "",
     "Example runtime model override:",
     "",
@@ -664,6 +669,7 @@ function agentJourneyGuide(scope) {
     `tutti --json ${scope} blueprints get --blueprint-id <id> --include-script  # exact match -> instantiate; else adapt + import`,
     `tutti --json ${scope} show --workflow-id wf_123             # inspect the chosen/created workflow's input contract`,
     `# 2. start (cwd must be under status.cwdRoot)`,
+    `# Optional permissions: tutti agent composer-options --agent-id local:codex --json`,
     `tutti --json ${scope} run --workflow-id wf_123 --agent local:codex --cwd repo/app \\`,
     `  --inputs '{"requirement":"Add rate limiting to /login; acceptance: 429 after 5 tries/min, covered by a test"}'`,
     `#    -> value.run.id = run_456`,

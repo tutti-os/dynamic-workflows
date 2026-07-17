@@ -36,4 +36,4 @@ Commands:
 - `blueprints list|search|get`: browse the built-in blueprint library used as authoring references.
 - `authoring submit`: save a script version for an authoring job (used by the authoring agent itself; validates and saves, or returns diagnostics with `accepted: false`). A session may submit multiple times; each accepted submit saves a new version.
 
-`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe.
+`run` accepts external workflow inputs through the `inputs` flag as a JSON object string. If `agent` is omitted, nodes without an explicit agent target run with `mock` so local smoke checks stay safe. `--permission-mode` is optional; omit it to use each selected agent's default. Before setting it, call `tutti agent composer-options --agent-id <agent-id> --json` and use an exact `permissionConfig.modes[].id` because ids differ by provider.

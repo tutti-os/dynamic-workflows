@@ -19,6 +19,8 @@ export function WorkflowWorkbenchDialogs(props: {
   agent: string;
   model: string;
   modelOptions: string[];
+  permissionMode: string;
+  permissionModeOptions: NonNullable<AgentTargetOption["permissionModes"]>;
   cwd: string;
   agentsLoading: boolean;
   agentsError?: string;
@@ -41,6 +43,7 @@ export function WorkflowWorkbenchDialogs(props: {
   onAgentEditOpenChange: (open: boolean) => void;
   onAgentChange: (value: string) => void;
   onModelChange: (value: string) => void;
+  onPermissionModeChange: (value: string) => void;
   onCwdChange: (value: string) => void;
   onRetryAgents: () => Promise<void>;
   onRunInputChange: (name: string, value: WorkflowInputValue) => void;
@@ -60,6 +63,8 @@ export function WorkflowWorkbenchDialogs(props: {
         agent={props.agent}
         model={props.model}
         modelOptions={props.modelOptions}
+        permissionMode={props.permissionMode}
+        permissionModeOptions={props.permissionModeOptions}
         cwd={props.cwd}
         agentsLoading={props.agentsLoading}
         agentsError={props.agentsError}
@@ -75,6 +80,7 @@ export function WorkflowWorkbenchDialogs(props: {
         onOpenChange={props.onRunInputsOpenChange}
         onAgentChange={props.onAgentChange}
         onModelChange={props.onModelChange}
+        onPermissionModeChange={props.onPermissionModeChange}
         onCwdChange={props.onCwdChange}
         onRetryAgents={props.onRetryAgents}
         onRunInputChange={props.onRunInputChange}

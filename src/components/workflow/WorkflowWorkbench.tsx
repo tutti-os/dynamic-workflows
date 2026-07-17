@@ -69,6 +69,8 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     effectiveAgent,
     model,
     modelOptions,
+    permissionMode,
+    permissionModeOptions,
     cwd,
     agentsLoading,
     agentsError,
@@ -76,6 +78,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     retryAgents,
     setAgent,
     setModel,
+    setPermissionMode,
     setCwd,
   } = useWorkflowRunSettings();
   const {
@@ -205,6 +208,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
     isScriptDirty: isDirty,
     effectiveAgent,
     model,
+    permissionMode,
     cwd,
     requiresCwd,
     workflowInputPayload,
@@ -356,6 +360,8 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         agent={effectiveAgent}
         model={model}
         modelOptions={modelOptions}
+        permissionMode={permissionMode}
+        permissionModeOptions={permissionModeOptions}
         cwd={cwd}
         agentsLoading={agentsLoading}
         agentsError={agentsError}
@@ -378,6 +384,7 @@ function WorkflowWorkbenchContent({ workflowId }: WorkflowWorkbenchProps) {
         onAgentEditOpenChange={setIsAgentEditDialogOpen}
         onAgentChange={setAgent}
         onModelChange={setModel}
+        onPermissionModeChange={setPermissionMode}
         onCwdChange={setCwd}
         onRetryAgents={retryAgents}
         onRunInputChange={setRunInputValue}

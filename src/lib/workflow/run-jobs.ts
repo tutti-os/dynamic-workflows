@@ -58,6 +58,7 @@ import {
   toWorkflowRunResult,
   type WorkflowRunSummary,
 } from "@/lib/workflow/run-state";
+import { readWorkflowRunInputString } from "@/lib/workflow/run-input";
 import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
 import { formatRunError, getRunErrorCode } from "@/lib/workflow/run-response";
 import {
@@ -79,6 +80,7 @@ export type WorkflowRunJobOptions = {
   version: WorkflowVersionRecord;
   agent?: string;
   model?: string;
+  permissionMode?: string;
   cwd: string;
   executorKind: string;
   inputs: Record<string, WorkflowInputValue>;
@@ -257,6 +259,10 @@ async function resumeWorkflowRunJobInternal(input: {
         version,
         agent: run.agent ?? undefined,
         model: run.model ?? undefined,
+        permissionMode: readWorkflowRunInputString(
+          run.input,
+          "permissionMode",
+        ),
         cwd: run.cwd ?? process.cwd(),
         executorKind: run.executorKind,
         inputs: readRunInputs(run.input),
@@ -576,6 +582,10 @@ async function relaunchWorkflowRunFromReset(input: {
         version,
         agent: run.agent ?? undefined,
         model: run.model ?? undefined,
+        permissionMode: readWorkflowRunInputString(
+          run.input,
+          "permissionMode",
+        ),
         cwd: run.cwd ?? process.cwd(),
         executorKind: run.executorKind,
         inputs: readRunInputs(run.input),
@@ -848,6 +858,9 @@ async function executeWorkflowRunJob(
     error: undefined,
     errorCode: undefined,
   };
+  let terminalEvent:
+    | Extract<WorkflowRunEvent, { type: "run_completed" }>
+    | undefined;
 
   try {
     while (true) {
@@ -859,6 +872,7 @@ async function executeWorkflowRunJob(
           script: executionOptions.version.script,
           agent: executionOptions.agent,
           model: executionOptions.model,
+          permissionMode: executionOptions.permissionMode,
           cwd: executionOptions.cwd,
           inputs: executionOptions.inputs,
           recovery: executionOptions.recovery,
@@ -906,6 +920,11 @@ async function executeWorkflowRunJob(
           summary = applyWorkflowRunEvent(summary, event);
           if (event.type === "run_waiting") {
             waitingEvent = event;
+          } else if (event.type === "run_completed") {
+            // Publish only after the matching terminal state has been
+            // persisted below. Otherwise the UI can observe `failed` while
+            // every durable reader still sees `running`.
+            terminalEvent = event;
           } else {
             appendAndPublish(run, job, event);
           }
@@ -920,8 +939,8 @@ async function executeWorkflowRunJob(
           error,
           canceled: job.abortController.signal.aborted,
         });
-        appendAndPublish(run, job, finalEvent);
         summary = applyWorkflowRunEvent(summary, finalEvent);
+        terminalEvent = finalEvent;
       }
 
       if (
@@ -934,8 +953,8 @@ async function executeWorkflowRunJob(
           summary,
           canceled: true,
         });
-        appendAndPublish(run, job, canceledEvent);
         summary = applyWorkflowRunEvent(summary, canceledEvent);
+        terminalEvent = canceledEvent;
       }
 
       if (summary.status !== "waiting_for_human" || !waitingEvent) {
@@ -981,11 +1000,16 @@ async function executeWorkflowRunJob(
       summary.status === "failed" ||
       summary.status === "canceled"
     ) {
-      finalizeWorkflowRunExecution({
-        runId: run.id,
-        executionToken: job.executionToken,
-        status: summary.status,
-        result: toWorkflowRunResult(summary),
+      if (!terminalEvent) {
+        throw new Error(
+          `Workflow run ${run.id} reached ${summary.status} without a terminal event.`,
+        );
+      }
+      persistAndPublishTerminalRun({
+        run,
+        job,
+        event: terminalEvent,
+        summary,
       });
     }
   } finally {
@@ -1072,6 +1096,11 @@ function createRunRecoveryState(input: {
   }
 
   const persisted = readRunResult(input.run.result);
+  // A top-level node_failed is itself an irreversible run failure in this
+  // executor. Older/crashed jobs may be missing the trailing run_completed;
+  // retain that event-derived error as an implicit terminal summary so stale
+  // reconciliation can repair both the status and its diagnostic payload.
+  terminalSummary ??= summary.status === "failed" ? summary : undefined;
   summary = mergePersistedRunResult(summary, persisted, {
     clearError: true,
   });
@@ -1299,9 +1328,45 @@ function appendAndPublish(
   event: WorkflowRunEvent,
 ) {
   const entry = appendRunLogEvent(run.logPath, event);
+  publishRunEvent(job, event, entry.id);
+}
+
+/**
+ * Make the durable terminal transition before any live subscriber can observe
+ * it. The log append comes first so a DB write failure is recoverable from the
+ * terminal log once the execution claim goes stale; publication comes last so
+ * the UI and CLI can never disagree because of normal operation ordering.
+ */
+function persistAndPublishTerminalRun(input: {
+  run: WorkflowRunRecord;
+  job: ActiveRunJob;
+  event: Extract<WorkflowRunEvent, { type: "run_completed" }>;
+  summary: WorkflowRunSummary;
+}): void {
+  const entry = appendRunLogEvent(input.run.logPath, input.event);
+  const transition = finalizeWorkflowRunExecution({
+    runId: input.run.id,
+    executionToken: input.job.executionToken,
+    status: input.event.status,
+    result: toWorkflowRunResult(input.summary),
+  });
+  if (!transition.transitioned) {
+    // Ownership changed or another terminal transition won the race. Do not
+    // publish a state this runner failed to persist. The terminal log remains
+    // available to stale-run reconciliation if the record is still running.
+    return;
+  }
+  publishRunEvent(input.job, input.event, entry.id);
+}
+
+function publishRunEvent(
+  job: ActiveRunJob,
+  event: WorkflowRunEvent,
+  entryId: string,
+): void {
   for (const subscriber of job.subscribers) {
     try {
-      subscriber(event, entry.id);
+      subscriber(event, entryId);
     } catch {
       // UI subscribers are observational; a broken stream must not fail the run.
     }

@@ -1,9 +1,18 @@
+export type AgentPermissionModeOption = {
+  id: string;
+  label: string;
+  description?: string;
+  semantic?: string;
+};
+
 export type AgentTargetOption = {
   id: string;
   name: string;
   provider: string;
   supported: boolean;
   models: string[];
+  permissionModes?: AgentPermissionModeOption[];
+  defaultPermissionMode?: string;
   isDefault?: boolean;
   reason?: string;
 };
@@ -22,6 +31,7 @@ export type AgentRunInput = {
   prompt: string;
   title?: string;
   model?: string;
+  permissionMode?: string;
   resumeSessionId?: string;
   attachSessionId?: string;
   signal?: AbortSignal;

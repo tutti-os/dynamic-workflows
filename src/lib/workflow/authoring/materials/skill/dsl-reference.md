@@ -85,9 +85,10 @@ agent({
 - An agent's final message is the node's output value: downstream prompts receive it verbatim and `until` matchers test it directly. Prompt for the deliverable itself, and when the output feeds a matcher, state the exact required token and position (for example "Put PASS or FAIL alone on the final non-empty line") in the prompt.
 - Put upstream values in `inputs` (for example `inputs: { inventory }`) and reference them in the prompt as `{{inventory}}`.
 - Use `{{workflow.cwd}}` when an agent needs the actual run cwd; never declare a normal `{{cwd}}` input for this. A workflow whose prompts reference `{{workflow.cwd}}` should also set `meta.requiresCwd: true` — without it, the reference renders as an empty string when the run provides no cwd.
-- Optional per-node fields: `agent`, `model`, `cwd`, `output`, `session`.
+- Optional per-node fields: `agent`, `model`, `permissionMode`, `cwd`, `output`, `session`.
 - `output: "json"` makes the node output a parsed JSON value instead of the raw text. The only accepted value is `"json"`; anything else is a validation error. The executor extracts JSON from the final message — the whole trimmed message, else the last fenced ```` ``` ```` block that parses, else the last balanced top-level `{...}`/`[...]` — and stores the parsed value. If nothing parses the node fails with the raw output attached. Downstream prompts then read fields with dotted paths (`{{review.verdict}}`) and structured `until` matchers compare the resolved value. Prompt contract: state the exact JSON shape in the prompt and end the message with only that JSON block (a bare object/array or a single fenced block), no trailing prose. Use this instead of `until.finalStatus` token-matching whenever the output is a verdict or a machine-readable list.
   - `agent` must be an exact agent target id discovered through `tutti --json agent list`; never derive it from provider metadata. `"local:codex"` is only an example and the available catalog is dynamic.
+  - `permissionMode` must be an exact mode id supported by the selected agent target. Discover it with `tutti agent composer-options --agent-id <agent-id> --json` and read `permissionConfig.modes[].id`; mode ids differ by provider, so never infer or translate them. Omit it at every level to use the agent's configured/default permission mode. The runtime only passes `--permission-mode` when the resolved value is non-empty.
   - `cwd: "relative/path"` runs the agent in a directory relative to the run cwd.
 - `appendPrompt` is only meaningful on loop steps (see below); it does nothing on a standalone agent node.
 
@@ -100,6 +101,7 @@ agent({
 - Never use legacy string session values.
 - Use `appendPrompt` on inherited loop steps when the first turn should initialize the role and later iterations should send only feedback or deltas. Apply this to every inherited loop step — a reviewer step repeating its full initial prompt each round wastes context and confuses the session.
 - If a step reuses a key established by an earlier node or loop, its first execution is already a continuation and therefore uses `appendPrompt`. Put the actionable delta in `appendPrompt`; treat `prompt` as the fallback for a genuinely new session.
+- A permission mode is applied only when a session is created. An inherited/resumed session keeps the permission mode it started with; setting a different `permissionMode` on a later step that reuses the same session cannot change that live session.
 
 ## human tasks
 
@@ -157,8 +159,8 @@ loop({
 - `maxIterations` must be an integer from 1 to 10, OR a whole-field runtime option template (`maxIterations: "{{max_rounds:3}}"`) whose referenced input is declared `type: "number"`. A literal default in the template must itself be an integer 1..10, and the value resolved from run inputs must be an integer 1..10 (a violation fails the loop node at run time). Declaring the input with `{ min: 1, max: 10 }` gives run-dialog-side validation for free. See "Runtime option templates" below.
 - `firstIteration: { startAt: "<step id>" }` optionally starts only the first iteration at a later step. Every subsequent iteration runs all steps in their declared order. The `until.source` step must not be skipped by this entry point. This is useful for `[repair, reviewer]`: review immediately, then repair and re-review only after a failure. `maxIterations` counts these evaluation cycles, including the initial review.
 - `onMaxIterations` decides what happens when the loop exhausts its iterations without the `until` status: `"fail"` (the default) fails the run, `"complete"` continues to the next node. Use `"complete"` only when downstream steps can safely run on unaccepted work.
-- Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `cwd`, and `session`.
-- A loop can set `agent`, `model`, and `cwd` as defaults for its steps; step values override loop values.
+- Steps may be `agent({...})` or `human({...})`. Agent steps can override `agent`, `model`, `permissionMode`, `cwd`, and `session`.
+- A loop can set `agent`, `model`, `permissionMode`, and `cwd` as defaults for its steps; step values override loop values.
 - Loop `session` scope: `"step"` derives per-step session keys; `"loop"` shares one loop-level session.
 - `until` may use the legacy text matcher `{ source: "<agent step>", finalStatus: "PASS" }` or an exact structured matcher such as `{ source: "review.action", equals: "pass" }`. The `source` is resolved with the same dotted-path mechanism as prompts, so a structured matcher reads a field of any structured step output: a human decision (`{ source: "review.action", equals: "pass" }`) or an agent step declared `output: "json"` (`{ source: "review.verdict", equals: "pass" }`). Prefer the structured matcher for both; the text matcher only works when an agent step pins the same token to the final non-empty line.
 - Inside loop step prompts, reference other step ids with `{{step_id}}` (most recent output) and use `{{iteration}}` for the current 1-based iteration number. A step may also reference its own id, which resolves to its previous-iteration output and renders as an empty string on the step's first run — this lets an independent-session step receive its own history through dataflow instead of session memory.
@@ -192,31 +194,31 @@ map({
 - `source` is either an upstream executable node (bound like `inputs`; a missing or unknown node is an error) or an inline array literal of plain JSON (`source: [{ env: "dev" }, { env: "prod" }]`). For a node source the output must resolve to an array at run time (a node with `output: "json"` returning a JSON array, or a string that parses as one); a non-array source fails the node. Inline literal items are used as-is — no templates are resolved inside them.
 - `maxItems` is an integer from 1 to 50. Required for node sources. Optional for inline literals, where it defaults to the literal's length; a literal longer than 50, or longer than an explicit `maxItems`, is a parse-time error. For node sources, a resolved array longer than `maxItems` fails the node — items are never silently truncated.
 - `onItemFailure`: `"skip"` (default) records the failure and continues the other items; `"fail"` fails the whole map node on the first item failure (in-flight items finish; no new items start).
-- `step: agent({...})` runs one agent per item. For a per-item pipeline use `steps: [agent({...}), ...]` (1..N agent steps); `step` is sugar for a single-entry `steps`, and declaring both is an error. No `human`, `loop`, `map`, or array steps. Each step may set `agent`, `model` (including runtime option templates), `cwd`, and `output: "json"`. Children always run independent sessions; `session: { mode: "inherit" }` is an error, `{ mode: "independent" }` is allowed and redundant.
+- `step: agent({...})` runs one agent per item. For a per-item pipeline use `steps: [agent({...}), ...]` (1..N agent steps); `step` is sugar for a single-entry `steps`, and declaring both is an error. No `human`, `loop`, `map`, or array steps. Each step may set `agent`, `model`, `permissionMode` (including runtime option templates), `cwd`, and `output: "json"`. Children always run independent sessions; `session: { mode: "inherit" }` is an error, `{ mode: "independent" }` is allowed and redundant.
 - Steps of one item run sequentially in declared order; across items there is NO barrier — item 3 may be on its verify step while item 7 is still on its first. Step ids are unique within the map. A later step's prompt may reference EARLIER step ids of the same item (`{{migrate_one}}` / `{{migrate_one.<path>}}`); referencing a later step or itself is an error. The first failing step fails that item and skips its remaining steps; the LAST step's output is the item's `output`.
 - Inside a step prompt, item refs need no declaration: `{{item}}` (the whole item, stringified), `{{item.<path>}}` (a dotted path into the item), and `{{item_index}}` (1-based). The prompt may also reference declared workflow inputs, `{{workflow.cwd}}`, earlier step ids (above), and — like a loop step — upstream node outputs, which auto-bind as map inputs.
 - Children run with an internal concurrency pool (up to 4 at a time).
 - The map output is a record you reference downstream like any node output: `{ items: [{ index, item, status: "completed", output }...], failed: [{ index, item, step, error }...], total }`. Each failure's `step` is the id of the step that failed. Failures stay visible in `failed`; a synthesizer reading `{{migrate_all}}` sees the full record.
 
-## Runtime option templates for agent / model / maxIterations
+## Runtime option templates for agent / model / permissionMode / maxIterations
 
-`agent`, `model`, and a loop's `maxIterations` may be run-configurable, but only as the entire field value:
+`agent`, `model`, `permissionMode`, and a loop's `maxIterations` may be run-configurable, but only as the entire field value:
 
 ```js
-agent({ id: "coder", agent: "{{coder_agent:local:codex}}", model: "{{coder_model:gpt-5}}", prompt: "..." })
+agent({ id: "coder", agent: "{{coder_agent:local:codex}}", model: "{{coder_model:gpt-5}}", permissionMode: "{{coder_permission}}", prompt: "..." })
 loop({ id: "review", maxIterations: "{{max_rounds:3}}", steps: [/* ... */], until: { source: "acceptance.verdict", equals: "PASS" } })
 ```
 
 - Allowed forms: `"{{input_name}}"` or `"{{input_name:default_value}}"`. The referenced input must be declared in `export const inputs`; whether it is required at run time follows that declaration (`required: true` with no `default` means required).
 - `maxIterations` templates additionally require the referenced input to be `type: "number"`, and enforce the integer 1..10 bound at both times: a literal default is checked at parse time, and the value resolved from run inputs is checked at loop start (out of bounds fails the loop node). An omitted optional input falls back to the template default.
-- A declared optional input left empty at run time makes the field fall back to the run-level `agent`/`model` value. Declaring `reviewer_model: { type: "string", required: false, ... }` and setting `model: "{{reviewer_model}}"` is therefore the way to offer a per-role override without forcing a value or baking in a provider-specific default.
+- A declared optional input left empty at run time makes the field fall back to the run-level `agent`/`model`/`permissionMode` value. Declaring `reviewer_permission: { type: "string", required: false, ... }` and setting `permissionMode: "{{reviewer_permission}}"` offers a per-role override without forcing a value or baking in a provider-specific default.
 - Partial or multiple templates are invalid: never `model: "gpt-{{m}}"` or `model: "{{a}}{{b}}"`.
 - Templates resolve run inputs only, never upstream node or loop step outputs.
 - Runtime option input names must not reuse workflow node ids, variable names, loop step ids, `iteration`, or `workflow.*` names. Multiple roles may intentionally share one input, such as `{{review_model:gpt-5}}`.
 
-## Resolution order for agent / model / maxIterations
+## Resolution order for agent / model / permissionMode / maxIterations
 
-1. Loop step `agent` / `model`
-2. Loop or normal node `agent` / `model`
-3. Run-level `agent` / `model`
-4. Runtime fallback (`mock` when nothing is provided)
+1. Loop or map step `agent` / `model` / `permissionMode`
+2. Loop, map, or normal node `agent` / `model` / `permissionMode`
+3. Run-level `agent` / `model` / `permissionMode`
+4. Runtime defaults (`agent` falls back to `mock`; omitted `model` and `permissionMode` stay unspecified so the selected agent supplies its defaults)
