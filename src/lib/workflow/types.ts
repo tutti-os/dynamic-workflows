@@ -417,6 +417,13 @@ export type WorkflowRunRequest = {
     nodeId: string;
     executionKey: string;
   }) => WorkflowRunNote[] | Promise<WorkflowRunNote[]>;
+  /**
+   * Backoff (ms) the executor waits before its single in-session continuation
+   * after a transient agent-turn failure. Defaults to ~10s (or the
+   * WORKFLOW_TRANSIENT_RETRY_BACKOFF_MS env var); tests inject a tiny value to
+   * stay fast. 0 disables the wait entirely.
+   */
+  transientRetryBackoffMs?: number;
   signal?: AbortSignal;
 };
 

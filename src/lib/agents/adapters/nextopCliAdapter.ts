@@ -550,6 +550,26 @@ export function createNextopCliAgentAdapter(
           });
 
           if (reason === "completed" || reason === "waiting_input") {
+            // A stop with pending interactions is NOT completion: the agent is
+            // blocked on user input (a provider quota prompt, an approval
+            // request, a question). Inside a workflow nobody answers it, and
+            // harvesting the interaction prompt as the node output would feed
+            // provider error prose ("Upgrade your plan to continue") into
+            // downstream prompts as if it were a deliverable.
+            const pendingInteraction = readFirstPendingInteraction(waitOutput);
+            if (pendingInteraction !== undefined) {
+              yield {
+                type: "error",
+                code: "AGENT_WAITING_FOR_USER_INPUT",
+                message:
+                  "Agent session is waiting for user input and cannot finish inside a workflow" +
+                  (pendingInteraction ? `: ${pendingInteraction}` : "") +
+                  ". Resolve the interaction in the agent session (or the underlying provider issue), then retry the node.",
+                retryable: false,
+              };
+              yield { type: "done", status: "failed", reason: "error" };
+              return;
+            }
             const finalText =
               (await readLatestAssistantTextFromTail(
                 agentSessionId,
@@ -1039,6 +1059,43 @@ function assertSessionMatchesAgentTarget(
 export function readWaitReason(waitOutput: unknown): string | undefined {
   const output = readRecord(waitOutput);
   return readOptionalString(output?.reason);
+}
+
+/**
+ * A non-empty pendingInteractions on the waited session means the agent is
+ * blocked on user input (quota prompt, approval request, question) rather than
+ * finished. Returns undefined when there is no pending interaction, and a
+ * best-effort one-line description (possibly "") when there is one — the
+ * interaction shape varies by provider, so extraction is defensive.
+ */
+export function readFirstPendingInteraction(
+  waitOutput: unknown,
+): string | undefined {
+  const output = readRecord(waitOutput);
+  const session = readRecord(output?.session);
+  const interactions = session?.pendingInteractions;
+  if (!Array.isArray(interactions) || interactions.length === 0) {
+    return undefined;
+  }
+  const first = interactions[0];
+  if (typeof first === "string") {
+    return first;
+  }
+  const record = readRecord(first);
+  const described =
+    readOptionalString(record?.title) ??
+    readOptionalString(record?.prompt) ??
+    readOptionalString(record?.message) ??
+    readOptionalString(record?.text) ??
+    readOptionalString(record?.kind);
+  if (described) {
+    return described;
+  }
+  try {
+    return JSON.stringify(first).slice(0, 200);
+  } catch {
+    return "";
+  }
 }
 
 function readRawNonSuccessTerminalStatus(

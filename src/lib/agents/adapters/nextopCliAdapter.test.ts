@@ -769,6 +769,80 @@ describe("nextop cli adapter", () => {
     });
   });
 
+  it("fails the run when the session stops with a pending interaction", async () => {
+    // A quota prompt / approval request / question blocks the agent on user
+    // input; harvesting the interaction prose as the node output would feed it
+    // downstream as a deliverable. The adapter must fail loudly instead.
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      waitTimeoutMs: 1_000,
+      runner: async (args) => {
+        if (isAgentListCall(args)) return currentAgentCatalog();
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "waiting_input",
+            timedOut: false,
+            hasMore: false,
+            latestVersion: 2,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "waiting_input",
+              pendingInteractions: [
+                { kind: "input", prompt: "Upgrade your plan to continue" },
+              ],
+            },
+            messages: [
+              {
+                role: "assistant",
+                kind: "text",
+                text: "Upgrade your plan to continue",
+                version: 2,
+              },
+            ],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:review",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "review",
+      title: "Review",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    const errorEvent = events.find(
+      (event) => event.type === "error",
+    ) as { type: string; code?: string; message?: string } | undefined;
+    expect(errorEvent?.code).toBe("AGENT_WAITING_FOR_USER_INPUT");
+    expect(errorEvent?.message).toContain("waiting for user input");
+    expect(errorEvent?.message).toContain("Upgrade your plan to continue");
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "failed",
+      reason: "error",
+    });
+    // The interaction prose must never be emitted as harvested output text.
+    expect(events.some((event) => event.type === "text_delta")).toBe(false);
+  });
+
   it("completes on wait reason completed while session status stays created", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({

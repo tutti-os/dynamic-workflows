@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { runAgent } from "@/lib/agents/runtime";
+import type { AgentRuntimeEvent } from "@/lib/agents/types";
 import { resolveWorkflowCwd, resolveWorkflowCwdFrom } from "./cwd";
 import { createWorkflowExecutionPlan } from "./execution-plan";
 import { normalizeWorkflowInputsForSchema } from "./input-schema";
@@ -46,6 +47,39 @@ import type {
 // Language-neutral label so operator notes read the same regardless of the
 // prompt's authored language (prompts are user-authored in either language).
 const OPERATOR_NOTE_LABEL = "Operator note (injected):";
+
+// Our own structured error code for a deterministic user-input block. This is
+// the ONE downstream signal we compare against by string — and only because it
+// is OUR code, emitted by our adapter, never provider prose.
+const AGENT_WAITING_FOR_USER_INPUT_CODE = "AGENT_WAITING_FOR_USER_INPUT";
+
+// Default backoff before the single in-session continuation after a transient
+// turn failure. Injectable via WorkflowRunRequest.transientRetryBackoffMs (tests
+// use ~10ms) so this never waits on the wall clock in tests.
+const DEFAULT_TRANSIENT_RETRY_BACKOFF_MS = 10_000;
+
+// System continuation/repair prompts. Kept as authored (either language is fine
+// — node prompts are user-authored in either language); these are OUR system
+// messages, not user content.
+export const TRANSIENT_CONTINUATION_PROMPT =
+  "上一轮执行因临时错误中断。请从中断处继续完成原任务，不要重做已完成的工作；完成后按原输出契约输出。";
+export const JSON_CONTRACT_REPAIR_PROMPT =
+  "你上一条消息违反了输出契约。不要重做任何工作，只重新发送一条消息：其中只包含符合原 prompt 中约定形状的 JSON，其后无任何文字。";
+
+/**
+ * A failed agent execution, carrying our structural error code so the retry
+ * wrapper can EXCLUDE the deterministic user-input block (AGENT_WAITING_FOR_USER
+ * _INPUT) without ever inspecting provider prose. The executor previously
+ * converted error events to plain `Error`, losing the code; this preserves it.
+ */
+class AgentExecutionError extends Error {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "AgentExecutionError";
+    this.code = code;
+  }
+}
 
 /**
  * Claim any pending next-step operator notes this execution should consume and
@@ -405,7 +439,6 @@ async function* runAgentNode(input: {
     ? input.sessionIdsByKey[sessionKey]
     : undefined;
   const attachSessionId = input.attachSessionIdsByNodeId[input.node.id];
-  let output = "";
 
   yield {
     type: "node_started",
@@ -443,7 +476,7 @@ async function* runAgentNode(input: {
       };
     }
 
-    for await (const event of runAgent({
+    const nodeOutput = yield* runAgentWithRecovery({
       runId: nodeRunId,
       agent,
       cwd,
@@ -454,33 +487,30 @@ async function* runAgentNode(input: {
       resumeSessionId,
       attachSessionId,
       signal: input.request.signal,
-    })) {
-      throwIfAborted(input.request.signal);
-
-      if (event.type === "text_delta") {
-        output += event.text;
-      }
-      if (event.type === "error") {
-        throw new Error(event.message);
-      }
-      if (event.type === "done" && event.status === "canceled") {
-        throw new WorkflowRunCanceledError();
-      }
-      if (event.type === "done" && event.status === "failed") {
-        throw new Error(event.reason ?? "Agent run failed");
-      }
-      yield {
+      outputMode: input.node.output === "json" ? "json" : "text",
+      retryBackoffMs: resolveTransientRetryBackoffMs(input.request),
+      onEvent: (event) => [
+        {
+          type: "node_event",
+          runId: input.runId,
+          nodeId: input.node.id,
+          event,
+        },
+      ],
+      statusEvent: (message) => ({
         type: "node_event",
         runId: input.runId,
         nodeId: input.node.id,
-        event,
-      };
-    }
+        event: {
+          type: "status",
+          status: "running",
+          stage: "running",
+          message,
+        },
+      }),
+    });
 
     throwIfAborted(input.request.signal);
-
-    const nodeOutput =
-      input.node.output === "json" ? extractAgentJsonOutput(output) : output;
 
     yield {
       type: "node_completed",
@@ -817,6 +847,7 @@ async function* runLoopNode(input: {
               defaultSession: loop.session,
               cwd: stepCwd,
               workflowInputs: input.request.inputs,
+              retryBackoffMs: resolveTransientRetryBackoffMs(input.request),
               signal: input.request.signal,
               sessionIdsByKey: input.sessionIdsByKey,
               sessionCwdsByKey: input.sessionCwdsByKey,
@@ -1008,6 +1039,7 @@ async function* runLoopAgentStep(input: {
   defaultSession?: WorkflowSessionSpec;
   cwd: string;
   workflowInputs?: Record<string, WorkflowInputValue>;
+  retryBackoffMs: number;
   signal?: AbortSignal;
   sessionIdsByKey: Record<string, string>;
   sessionCwdsByKey: Record<string, string>;
@@ -1036,7 +1068,6 @@ async function* runLoopAgentStep(input: {
   });
   const sessionNodeId = createLoopStepSessionNodeId(input.nodeId, input.step.id);
   const attachSessionId = input.attachSessionIdsByNodeId[sessionNodeId];
-  let output = "";
 
   yield loopStepStateEvent({
     runId: input.runId,
@@ -1073,7 +1104,10 @@ async function* runLoopAgentStep(input: {
     });
   }
 
-  for await (const event of runAgent({
+  // Extract before signaling completion so a parse failure fails the step. The
+  // recovery matrix (one continuation, one repair) runs INSIDE here, so the
+  // loop's checkpoint only ever records the final outcome.
+  const stepOutput = yield* runAgentWithRecovery({
     runId: `${input.runId}:${input.syntheticId}`,
     agent,
     cwd: input.cwd,
@@ -1084,49 +1118,41 @@ async function* runLoopAgentStep(input: {
     resumeSessionId: runContext.resumeSessionId,
     attachSessionId,
     signal: input.signal,
-  })) {
-    throwIfAborted(input.signal);
+    outputMode: input.step.output === "json" ? "json" : "text",
+    retryBackoffMs: input.retryBackoffMs,
+    onEvent: function* (event) {
+      const agentSessionId = readAgentSessionId(event);
+      yield {
+        type: "node_event",
+        runId: input.runId,
+        nodeId:
+          agentSessionId && runContext.sessionKey ? sessionNodeId : input.nodeId,
+        loopStep: input.loopStep,
+        event,
+      };
 
-    if (event.type === "text_delta") {
-      output += event.text;
-    }
-    if (event.type === "error") {
-      throw new Error(event.message);
-    }
-    if (event.type === "done" && event.status === "canceled") {
-      throw new WorkflowRunCanceledError();
-    }
-    if (event.type === "done" && event.status === "failed") {
-      throw new Error(event.reason ?? "Agent run failed");
-    }
-    const agentSessionId = readAgentSessionId(event);
-    yield {
-      type: "node_event",
-      runId: input.runId,
-      nodeId: agentSessionId && runContext.sessionKey ? sessionNodeId : input.nodeId,
-      loopStep: input.loopStep,
-      event,
-    };
-
-    if (runContext.sessionKey && agentSessionId) {
-      const previousSessionId = input.sessionIdsByKey[runContext.sessionKey];
-      input.sessionIdsByKey[runContext.sessionKey] = agentSessionId;
-      if (previousSessionId !== agentSessionId) {
-        yield createWorkflowSessionStatusEvent({
-          runId: input.runId,
-          nodeId: sessionNodeId,
-          sessionKey: runContext.sessionKey,
-          agentSessionId,
-          previousSessionId,
-          context: input.syntheticId,
-        });
+      if (runContext.sessionKey && agentSessionId) {
+        const previousSessionId = input.sessionIdsByKey[runContext.sessionKey];
+        input.sessionIdsByKey[runContext.sessionKey] = agentSessionId;
+        if (previousSessionId !== agentSessionId) {
+          yield createWorkflowSessionStatusEvent({
+            runId: input.runId,
+            nodeId: sessionNodeId,
+            sessionKey: runContext.sessionKey,
+            agentSessionId,
+            previousSessionId,
+            context: input.syntheticId,
+          });
+        }
       }
-    }
-  }
-
-  // Extract before signaling completion so a parse failure fails the step.
-  const stepOutput =
-    input.step.output === "json" ? extractAgentJsonOutput(output) : output;
+    },
+    statusEvent: (message) =>
+      loopStatusEvent({
+        runId: input.runId,
+        nodeId: input.nodeId,
+        message,
+      }),
+  });
 
   yield loopStatusEvent({
     runId: input.runId,
@@ -1466,7 +1492,6 @@ async function* runMapItem(input: {
       renderMapItemText(step.prompt, context),
       operatorNotes,
     );
-    let output = "";
 
     yield mapItemStateEvent({
       runId: input.runId,
@@ -1485,7 +1510,10 @@ async function* runMapItem(input: {
     });
 
     try {
-      for await (const event of runAgent({
+      // Extract before signaling completion so a parse failure fails the step.
+      // The recovery matrix (one continuation, one repair) runs INSIDE here, so
+      // the map records only this item's final outcome — no double-counting.
+      const stepOutput = yield* runAgentWithRecovery({
         runId: `${input.runId}:${syntheticId}`,
         agent,
         cwd: stepCwd,
@@ -1494,33 +1522,24 @@ async function* runMapItem(input: {
         model,
         permissionMode,
         signal: input.request.signal,
-      })) {
-        throwIfAborted(input.request.signal);
-
-        if (event.type === "text_delta") {
-          output += event.text;
-        }
-        if (event.type === "error") {
-          throw new Error(event.message);
-        }
-        if (event.type === "done" && event.status === "canceled") {
-          throw new WorkflowRunCanceledError();
-        }
-        if (event.type === "done" && event.status === "failed") {
-          throw new Error(event.reason ?? "Agent run failed");
-        }
-        yield {
-          type: "node_event",
-          runId: input.runId,
-          nodeId: input.node.id,
-          mapItem,
-          event,
-        };
-      }
-
-      // Extract before signaling completion so a parse failure fails the step.
-      const stepOutput =
-        step.output === "json" ? extractAgentJsonOutput(output) : output;
+        outputMode: step.output === "json" ? "json" : "text",
+        retryBackoffMs: resolveTransientRetryBackoffMs(input.request),
+        onEvent: (event) => [
+          {
+            type: "node_event",
+            runId: input.runId,
+            nodeId: input.node.id,
+            mapItem,
+            event,
+          },
+        ],
+        statusEvent: (message) =>
+          loopStatusEvent({
+            runId: input.runId,
+            nodeId: input.node.id,
+            message,
+          }),
+      });
 
       yield mapItemStateEvent({
         runId: input.runId,
@@ -2434,6 +2453,262 @@ function toRunErrorMessage(error: unknown): string {
     return "Run canceled.";
   }
   return error instanceof Error ? error.message : "Unknown agent error";
+}
+
+function resolveTransientRetryBackoffMs(request: WorkflowRunRequest): number {
+  if (
+    typeof request.transientRetryBackoffMs === "number" &&
+    Number.isFinite(request.transientRetryBackoffMs) &&
+    request.transientRetryBackoffMs >= 0
+  ) {
+    return request.transientRetryBackoffMs;
+  }
+  const raw = process.env.WORKFLOW_TRANSIENT_RETRY_BACKOFF_MS;
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_TRANSIENT_RETRY_BACKOFF_MS;
+}
+
+function executorDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    throwIfAborted(signal);
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    if (isSignalAborted(signal)) {
+      reject(new WorkflowRunCanceledError());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new WorkflowRunCanceledError());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function plainErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown agent error";
+}
+
+function excerptForError(raw: string): string {
+  const collapsed = raw.trim().replace(/\s+/g, " ");
+  if (collapsed.length <= 200) {
+    return collapsed || "(empty)";
+  }
+  return `${collapsed.slice(0, 200)}…`;
+}
+
+/**
+ * Consume one agent execution (one runAgent invocation), accumulating assistant
+ * text and forwarding every non-terminal event through `onEvent` (which does the
+ * path-specific wrapping and any session-capture side effects). The latest
+ * captured agent session id is written to `sessionRef.current` so the caller can
+ * resume the SAME session on a continuation/repair even when this attempt threw.
+ *
+ * Terminal handling mirrors the pre-existing inline loops, except an error event
+ * is rethrown as an AgentExecutionError that PRESERVES our structural error code
+ * (previously the code was dropped when converting to a plain Error).
+ */
+async function* streamAgentRun(input: {
+  runId: string;
+  agent: string;
+  cwd: string;
+  prompt: string;
+  title?: string;
+  model?: string;
+  permissionMode?: string;
+  resumeSessionId?: string;
+  attachSessionId?: string;
+  signal?: AbortSignal;
+  sessionRef: { current?: string };
+  onEvent: (event: AgentRuntimeEvent) => Iterable<WorkflowRunEvent>;
+}): AsyncGenerator<WorkflowRunEvent, string> {
+  let output = "";
+  for await (const event of runAgent({
+    runId: input.runId,
+    agent: input.agent,
+    cwd: input.cwd,
+    prompt: input.prompt,
+    title: input.title,
+    model: input.model,
+    permissionMode: input.permissionMode,
+    resumeSessionId: input.resumeSessionId,
+    attachSessionId: input.attachSessionId,
+    signal: input.signal,
+  })) {
+    throwIfAborted(input.signal);
+
+    const agentSessionId = readAgentSessionId(event);
+    if (agentSessionId) {
+      input.sessionRef.current = agentSessionId;
+    }
+    if (event.type === "text_delta") {
+      output += event.text;
+    }
+    if (event.type === "error") {
+      throw new AgentExecutionError(event.message, event.code);
+    }
+    if (event.type === "done" && event.status === "canceled") {
+      throw new WorkflowRunCanceledError();
+    }
+    if (event.type === "done" && event.status === "failed") {
+      throw new AgentExecutionError(event.reason ?? "Agent run failed");
+    }
+    yield* input.onEvent(event);
+  }
+  return output;
+}
+
+/**
+ * The agent-execution failure-handling matrix, shared by the three agent paths
+ * (top-level node, loop step, map item). It runs the execution and applies at
+ * most ONE in-session continuation and ONE contract-repair probe (they may
+ * chain), then returns the final node output (JSON-parsed when outputMode is
+ * "json"). All extra attempts are surfaced through `statusEvent` so they show in
+ * the run log; retries happen INSIDE here, so checkpoints/recovery/map
+ * completions only ever observe the final outcome.
+ */
+async function* runAgentWithRecovery(input: {
+  runId: string;
+  agent: string;
+  cwd: string;
+  prompt: string;
+  title?: string;
+  model?: string;
+  permissionMode?: string;
+  resumeSessionId?: string;
+  attachSessionId?: string;
+  signal?: AbortSignal;
+  outputMode: "json" | "text";
+  retryBackoffMs: number;
+  onEvent: (event: AgentRuntimeEvent) => Iterable<WorkflowRunEvent>;
+  statusEvent: (message: string) => WorkflowRunEvent;
+}): AsyncGenerator<WorkflowRunEvent, WorkflowValue> {
+  // Seed with any session we are already resuming/attaching so a failure before
+  // the first session_ref still continues the SAME session rather than rerunning.
+  const sessionRef: { current?: string } = {
+    current: input.resumeSessionId ?? input.attachSessionId,
+  };
+  const base = {
+    runId: input.runId,
+    agent: input.agent,
+    cwd: input.cwd,
+    title: input.title,
+    model: input.model,
+    permissionMode: input.permissionMode,
+    signal: input.signal,
+    sessionRef,
+    onEvent: input.onEvent,
+  };
+
+  let raw: string;
+  try {
+    raw = yield* streamAgentRun({
+      ...base,
+      prompt: input.prompt,
+      resumeSessionId: input.resumeSessionId,
+      attachSessionId: input.attachSessionId,
+    });
+  } catch (error) {
+    if (isCancellationError(error)) {
+      throw error;
+    }
+    // Deterministic user-input block: never retried. We branch on OUR structural
+    // code, never on provider prose.
+    if (
+      error instanceof AgentExecutionError &&
+      error.code === AGENT_WAITING_FOR_USER_INPUT_CODE
+    ) {
+      throw error;
+    }
+
+    // Transient turn failure -> ONE in-session continuation ("keep going").
+    // Continuation, not rerun: the turn may have died mid-work, and the session
+    // remembers what it did (incremental), so we ask it to resume from where it
+    // stopped. Deterministic downstream failures reject the continuation fast, so
+    // the wasted cost is small.
+    const firstMessage = plainErrorMessage(error);
+    await executorDelay(input.retryBackoffMs, input.signal);
+    yield input.statusEvent(
+      "attempt 2: in-session continuation after transient failure",
+    );
+    const continuationSession = sessionRef.current;
+    try {
+      raw = yield* streamAgentRun({
+        ...base,
+        // Session captured -> resume it with the continuation prompt. Nothing
+        // captured (failure before session creation) -> rerun the original prompt.
+        prompt: continuationSession
+          ? TRANSIENT_CONTINUATION_PROMPT
+          : input.prompt,
+        resumeSessionId: continuationSession,
+        attachSessionId: continuationSession ? undefined : input.attachSessionId,
+      });
+    } catch (secondError) {
+      if (isCancellationError(secondError)) {
+        throw secondError;
+      }
+      throw new Error(
+        `Agent execution failed after an in-session continuation. First error: ${firstMessage} | Second error: ${plainErrorMessage(secondError)}`,
+      );
+    }
+  }
+
+  if (input.outputMode !== "json") {
+    return raw;
+  }
+
+  try {
+    return extractAgentJsonOutput(raw);
+  } catch (jsonError) {
+    const repairSession = sessionRef.current;
+    // No session captured -> cannot repair; fail exactly as before.
+    if (!repairSession) {
+      throw jsonError;
+    }
+
+    // Contract violation -> ONE in-session format-repair probe.
+    yield input.statusEvent("attempt 2: format repair probe");
+    let repairRaw: string;
+    try {
+      repairRaw = yield* streamAgentRun({
+        ...base,
+        prompt: JSON_CONTRACT_REPAIR_PROMPT,
+        resumeSessionId: repairSession,
+      });
+    } catch (repairError) {
+      if (isCancellationError(repairError)) {
+        throw repairError;
+      }
+      throw new Error(
+        `Agent output violated the JSON output contract and the repair probe failed. Original output excerpt: ${excerptForError(raw)} | Repair error: ${plainErrorMessage(repairError)}`,
+      );
+    }
+
+    try {
+      return extractAgentJsonOutput(repairRaw);
+    } catch {
+      // Byte-equality fingerprint (a behavioral signal, NOT prose matching): an
+      // identical repair response means the downstream returned a canned answer.
+      const identical = repairRaw.trim() === raw.trim();
+      throw new Error(
+        `Agent output violated the JSON output contract and the repair probe did not fix it.${
+          identical
+            ? " The downstream returned a byte-identical canned response (deterministic gate)."
+            : ""
+        } Original excerpt: ${excerptForError(raw)} | Repair excerpt: ${excerptForError(repairRaw)}`,
+      );
+    }
+  }
 }
 
 export function summarizeWorkflow(parsed: ParsedWorkflow): string {

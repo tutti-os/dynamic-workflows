@@ -110,8 +110,11 @@ describe("map failed-item retry", () => {
       }
       if (title === "Migrate b.ts") {
         migrateBCalls += 1;
-        // Transient failure the first time; succeeds on retry.
-        return migrateBCalls === 1
+        // A hard failure in the first run: BOTH the initial turn and the
+        // executor's one in-session continuation fail (calls 1 and 2), so the
+        // item stays failed and the operator retry (retryFailedMapItems) is what
+        // actually heals it on call 3.
+        return migrateBCalls <= 2
           ? { text: "boom on b.ts", fail: true }
           : { text: "migrated b.ts" };
       }
@@ -158,7 +161,9 @@ describe("map failed-item retry", () => {
       calls.filter((call) => (call.title ?? "") === title).length;
     expect(countTitle("Discover")).toBe(1);
     expect(countTitle("Migrate a.ts")).toBe(1);
-    expect(countTitle("Migrate b.ts")).toBe(1);
+    // b.ts ran twice in the first run: the initial turn plus one in-session
+    // continuation, both of which failed.
+    expect(countTitle("Migrate b.ts")).toBe(2);
     expect(countTitle("Migrate c.ts")).toBe(1);
     expect(countTitle("Synthesize")).toBe(1);
 
@@ -175,7 +180,9 @@ describe("map failed-item retry", () => {
     // not; the downstream synthesis re-ran on the corrected map output.
     expect(countTitle("Discover")).toBe(1);
     expect(countTitle("Migrate a.ts")).toBe(1);
-    expect(countTitle("Migrate b.ts")).toBe(2);
+    // Two failing first-run attempts (turn + continuation) plus the one healthy
+    // operator-retry attempt.
+    expect(countTitle("Migrate b.ts")).toBe(3);
     expect(countTitle("Migrate c.ts")).toBe(1);
     expect(countTitle("Synthesize")).toBe(2);
 
