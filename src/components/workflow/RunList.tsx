@@ -23,6 +23,7 @@ import {
   runStatusBadge,
   runStatusTone,
 } from "@/components/workflow/runPanelUtils";
+import { hasNotAcceptedDelivery } from "@/lib/workflow/run-detail";
 
 export function RunList(props: {
   runs: WorkflowRunRecord[];
@@ -78,6 +79,8 @@ function RunListItem(props: {
   onResumeRun: (runId: string) => void;
 }) {
   const { run } = props;
+  const continuesDelivery =
+    run.status === "completed" && hasNotAcceptedDelivery(run.result);
 
   return (
     <div className={clsx("run-row", props.selected && "active")}>
@@ -131,16 +134,27 @@ function RunListItem(props: {
           size="sm"
           variant="outline"
           type="button"
-          aria-label={`Retry run ${run.id}`}
+          aria-label={
+            continuesDelivery
+              ? `Continue delivery from run ${run.id}`
+              : `Retry run ${run.id}`
+          }
           disabled={props.isRunning}
+          title={
+            continuesDelivery
+              ? "This run ended not_accepted after exhausting its round budget. The workspace keeps all progress, so a new run with the same inputs and working directory continues the delivery loop from the current state."
+              : undefined
+          }
           onClick={() => props.onRetryRun(run.id)}
         >
           {props.retrying ? (
             <Spinner size={14} />
+          ) : continuesDelivery ? (
+            <PlayIcon data-icon="inline-start" />
           ) : (
             <RefreshIcon data-icon="inline-start" />
           )}
-          Retry
+          {continuesDelivery ? "Continue delivery" : "Retry"}
         </Button>
       ) : null}
     </div>
