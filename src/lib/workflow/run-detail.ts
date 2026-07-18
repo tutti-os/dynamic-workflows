@@ -181,6 +181,20 @@ function isLoopStepRunEvent(
     event.loopStep?.executionKey === executionKey;
 }
 
+// A delivery-style run that finished with a not_accepted report is a designed
+// checkpoint, not a failure: the workspace keeps every round's progress, so a
+// re-run on the same cwd continues the loop from the current state. The UI uses
+// this to present the retry action as an explicit continuation.
+export function hasNotAcceptedDelivery(result: unknown): boolean {
+  return Object.values(readRunResult(result).outputs).some(
+    (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      (value as { result?: unknown }).result === "not_accepted",
+  );
+}
+
 export function readRunParsed(log: string): ParsedWorkflow | undefined {
   const startedEvent = parseRunLogEvents(log).find(
     (event): event is Extract<WorkflowRunEvent, { type: "run_started" }> =>

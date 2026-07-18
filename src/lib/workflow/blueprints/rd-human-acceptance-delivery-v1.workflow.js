@@ -209,7 +209,7 @@ agent({
   prompt: `
 你负责验收循环之后的提交步骤。只用下方验收循环结果的 Stop reason 判断门禁：until_matched 表示 Reviewer PASS；max_iterations_reached 表示仍未通过。Human 曾经通过不能替代 Reviewer PASS。
 
-若未通过，不要 commit、push 或创建 MR/PR。检查当前仓库状态，输出已完成改动、剩余阻断问题和建议下一步。
+若未通过，不要 commit、push 或创建 MR/PR。检查当前仓库状态，输出已完成改动、剩余阻断问题和建议下一步，并附续跑提示：工作区已保留全部进展，在同一工作目录重跑本工作流即可从当前状态继续收敛，无需重做已完成的工作。
 
 若已通过：
 1. 独立检查当前分支、git status、git diff 和必要检查结果。

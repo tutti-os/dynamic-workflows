@@ -14,11 +14,12 @@ import {
 import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
-import type {
-  RunDetail,
-  RunLoopStepAttemptDetail,
-  RunMapItemAttemptDetail,
-  RunNodeDetail,
+import {
+  hasNotAcceptedDelivery,
+  type RunDetail,
+  type RunLoopStepAttemptDetail,
+  type RunMapItemAttemptDetail,
+  type RunNodeDetail,
 } from "@/lib/workflow/run-detail";
 import {
   canRetryRun,
@@ -529,20 +530,38 @@ function RunDetailHeader(props: {
           </Button>
         ) : null}
         {canRetryRun(run.status) ? (
-          <Button
-            size="sm"
-            variant="outline"
-            type="button"
-            disabled={props.isRunning}
-            onClick={() => props.onRetryRun(run.id)}
-          >
-            {props.retrying ? (
-              <Spinner size={14} />
-            ) : (
-              <RefreshIcon data-icon="inline-start" />
-            )}
-            Retry
-          </Button>
+          run.status === "completed" && hasNotAcceptedDelivery(run.result) ? (
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={props.isRunning}
+              title="This run ended not_accepted after exhausting its round budget. The workspace keeps all progress, so a new run with the same inputs and working directory continues the delivery loop from the current state."
+              onClick={() => props.onRetryRun(run.id)}
+            >
+              {props.retrying ? (
+                <Spinner size={14} />
+              ) : (
+                <PlayIcon data-icon="inline-start" />
+              )}
+              Continue delivery
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={props.isRunning}
+              onClick={() => props.onRetryRun(run.id)}
+            >
+              {props.retrying ? (
+                <Spinner size={14} />
+              ) : (
+                <RefreshIcon data-icon="inline-start" />
+              )}
+              Retry
+            </Button>
+          )
         ) : null}
       </div>
     </div>
