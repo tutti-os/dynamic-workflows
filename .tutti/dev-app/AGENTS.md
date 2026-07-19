@@ -21,6 +21,6 @@ Source hot reload:
 Data and integration:
 
 - Workflow data uses `DYNAMIC_WORKFLOWS_DATA_DIR`, defaulting to `TUTTI_APP_DATA_DIR` and then `.data` only outside the Tutti runtime.
-- Workflow cwd validation uses `DYNAMIC_WORKFLOWS_CWD_ROOT`, defaulting to `TUTTI_WORKSPACE_ROOT` and then the project root.
+- In Tutti, workflow cwd inputs must resolve to existing directories staged under `TUTTI_APP_DATA_DIR` or `TUTTI_APP_RUNTIME_DIR`; relative values resolve from the runtime directory, and nested node cwd values cannot escape either directory. Direct local development falls back to the source checkout as its boundary.
 - CLI command handlers are declared in `tutti.cli.json` and served by the source app under `/tutti/cli/*`.
 - Agent target discovery should use `TUTTI_CLI`; `bootstrap.sh` also sets `NEXTOP_CLI_PATH` from it for existing adapter compatibility.

@@ -24,7 +24,7 @@ import {
 import type {
   WorkflowRunRecord,
 } from "@/lib/db/workflows/types";
-import { getWorkflowCwdRoot, resolveWorkflowCwd } from "@/lib/workflow/cwd";
+import { resolveWorkflowCwd } from "@/lib/workflow/cwd";
 import { createPendingWorkflowGeneration } from "@/lib/db/workflows/generations";
 import {
   ensureWorkflowGenerationStarted,
@@ -260,7 +260,6 @@ async function statusCommand(request?: Request) {
     ok: true,
     app: {
       scope: "dynamic-workflows",
-      cwdRoot: getWorkflowCwdRoot(),
       // The app's HTTP origin, derived from the incoming request, so a caller
       // never has to discover the port from process listening tables. Any HTTP
       // fallback (if ever needed) targets this.
