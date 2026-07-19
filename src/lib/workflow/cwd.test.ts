@@ -8,46 +8,96 @@ import {
   WorkflowCwdError,
 } from "./cwd";
 
-const previousRoot = process.env.DYNAMIC_WORKFLOWS_CWD_ROOT;
+const previousDataDir = process.env.TUTTI_APP_DATA_DIR;
+const previousRuntimeDir = process.env.TUTTI_APP_RUNTIME_DIR;
 let tempRoot: string;
 
 beforeEach(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dw-cwd-"));
-  fs.mkdirSync(path.join(tempRoot, "project", "packages"), {
+  fs.mkdirSync(path.join(tempRoot, "data", "project", "packages"), {
     recursive: true,
   });
-  process.env.DYNAMIC_WORKFLOWS_CWD_ROOT = tempRoot;
+  fs.mkdirSync(path.join(tempRoot, "runtime", "project"), { recursive: true });
+  fs.mkdirSync(path.join(tempRoot, "external"), { recursive: true });
+  process.env.TUTTI_APP_DATA_DIR = path.join(tempRoot, "data");
+  process.env.TUTTI_APP_RUNTIME_DIR = path.join(tempRoot, "runtime");
 });
 
 afterEach(() => {
-  if (previousRoot === undefined) {
-    delete process.env.DYNAMIC_WORKFLOWS_CWD_ROOT;
-  } else {
-    process.env.DYNAMIC_WORKFLOWS_CWD_ROOT = previousRoot;
-  }
+  if (previousDataDir === undefined) delete process.env.TUTTI_APP_DATA_DIR;
+  else process.env.TUTTI_APP_DATA_DIR = previousDataDir;
+  if (previousRuntimeDir === undefined) delete process.env.TUTTI_APP_RUNTIME_DIR;
+  else process.env.TUTTI_APP_RUNTIME_DIR = previousRuntimeDir;
   fs.rmSync(tempRoot, { force: true, recursive: true });
 });
 
 describe("workflow cwd resolution", () => {
-  it("resolves relative cwd from the configured root", () => {
-    expect(resolveWorkflowCwd("project")).toBe(
-      fs.realpathSync(path.join(tempRoot, "project")),
+  it("accepts app data/runtime directories and defaults to runtime", () => {
+    expect(resolveWorkflowCwd(path.join(tempRoot, "data", "project"))).toBe(
+      fs.realpathSync(path.join(tempRoot, "data", "project")),
     );
+    expect(resolveWorkflowCwd(path.join(tempRoot, "runtime", "project"))).toBe(
+      fs.realpathSync(path.join(tempRoot, "runtime", "project")),
+    );
+    expect(resolveWorkflowCwd()).toBe(fs.realpathSync(path.join(tempRoot, "runtime")));
   });
 
   it("resolves nested cwd relative to an effective base cwd", () => {
-    const projectCwd = resolveWorkflowCwd("project");
+    const projectCwd = resolveWorkflowCwd(
+      path.join(tempRoot, "data", "project"),
+    );
 
     expect(resolveWorkflowCwdFrom(projectCwd, "packages")).toBe(
-      fs.realpathSync(path.join(tempRoot, "project", "packages")),
+      fs.realpathSync(path.join(tempRoot, "data", "project", "packages")),
     );
   });
 
-  it("keeps cwd overrides inside the configured root", () => {
-    const projectCwd = resolveWorkflowCwd("project");
+  it("rejects top-level and nested cwd escapes", () => {
+    const projectCwd = path.join(tempRoot, "data", "project");
 
+    expect(() => resolveWorkflowCwd(path.join(tempRoot, "external"))).toThrow(
+      WorkflowCwdError,
+    );
     expect(() =>
-      resolveWorkflowCwdFrom(projectCwd, path.dirname(tempRoot)),
+      resolveWorkflowCwdFrom(projectCwd, path.join(tempRoot, "external")),
     ).toThrow(WorkflowCwdError);
+    expect(() => resolveWorkflowCwdFrom(projectCwd, "../../external")).toThrow(
+      WorkflowCwdError,
+    );
+    expect(() => resolveWorkflowCwd("../external")).toThrow(WorkflowCwdError);
+  });
+
+  it("resolves a top-level relative cwd from the managed runtime directory", () => {
+    expect(resolveWorkflowCwd("project")).toBe(
+      fs.realpathSync(path.join(tempRoot, "runtime", "project")),
+    );
+  });
+
+  it("rejects symlinks that resolve outside app data/runtime directories", () => {
+    const link = path.join(tempRoot, "runtime", "external-link");
+    fs.symlinkSync(path.join(tempRoot, "external"), link, "dir");
+
+    expect(() => resolveWorkflowCwd(link)).toThrow(WorkflowCwdError);
+    expect(() =>
+      resolveWorkflowCwdFrom(path.join(tempRoot, "runtime"), "external-link"),
+    ).toThrow(WorkflowCwdError);
+  });
+
+  it("fails closed when the managed app directory contract is incomplete", () => {
+    delete process.env.TUTTI_APP_RUNTIME_DIR;
+
+    expect(() => resolveWorkflowCwd()).toThrow(
+      /TUTTI_APP_DATA_DIR and TUTTI_APP_RUNTIME_DIR are both required/,
+    );
+  });
+
+  it("uses the process cwd only outside the managed app runtime", () => {
+    delete process.env.TUTTI_APP_DATA_DIR;
+    delete process.env.TUTTI_APP_RUNTIME_DIR;
+
+    expect(resolveWorkflowCwd()).toBe(fs.realpathSync(process.cwd()));
+    expect(() => resolveWorkflowCwd(path.dirname(process.cwd()))).toThrow(
+      WorkflowCwdError,
+    );
   });
 });

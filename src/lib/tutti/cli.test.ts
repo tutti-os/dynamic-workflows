@@ -190,7 +190,7 @@ const first = await agent({ id: "first", prompt: "Plan {{requirement}}" })
 
     expect(response.status).toBe(200);
     expect(body.value.app.baseUrl).toBe("http://127.0.0.1:4123");
-    expect(typeof body.value.app.cwdRoot).toBe("string");
+    expect(body.value.app).not.toHaveProperty("cwdRoot");
   });
 
   it("imports a workflow script string as a saved workflow", async () => {
