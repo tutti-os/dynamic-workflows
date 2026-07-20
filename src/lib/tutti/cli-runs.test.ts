@@ -179,6 +179,23 @@ describe("dynamic workflows CLI runs get", () => {
 });
 
 describe("dynamic workflows CLI runs wait", () => {
+  it("returns a domain error without continuation for an unknown run", async () => {
+    useDataDir();
+
+    const { handleDynamicWorkflowsCliRequest } = await import("@/lib/tutti/cli");
+    const response = await handleDynamicWorkflowsCliRequest(["runs", "wait"], {
+      input: { "run-id": "does-not-exist" },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.value).toMatchObject({
+      ok: false,
+      error: { code: "run_not_found", status: 404 },
+    });
+    expect(body.continuation).toBeUndefined();
+  });
+
   it("returns immediately with the terminal reason for a finished run", async () => {
     useDataDir();
 
@@ -217,17 +234,17 @@ describe("dynamic workflows CLI runs wait", () => {
     await waitUntil(() => !isWorkflowRunJobActive(run.id));
 
     const response = await handleDynamicWorkflowsCliRequest(["runs", "wait"], {
-      input: { "run-id": run.id, "timeout-ms": 5000 },
+      input: { "run-id": run.id },
     });
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(body.value.reason).toBe("completed");
-    expect(body.value.timedOut).toBe(false);
     expect(body.value.run.id).toBe(run.id);
+    expect(body.continuation).toBeUndefined();
   });
 
-  it("returns timeout with timedOut true while a run keeps running", async () => {
+  it("returns a one-minute pending continuation while a run keeps running", async () => {
     useDataDir();
 
     let releaseRun: (() => void) | undefined;
@@ -268,16 +285,19 @@ describe("dynamic workflows CLI runs wait", () => {
     });
 
     const response = await handleDynamicWorkflowsCliRequest(["runs", "wait"], {
-      input: { "run-id": run.id, "timeout-ms": 40 },
+      input: { "run-id": run.id },
     });
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body.value.reason).toBe("timeout");
-    expect(body.value.timedOut).toBe(true);
+    expect(body.value.ok).toBe(true);
     expect(body.value.run.status).toBe("running");
-    // Timeout is not a stop point: the payload is a compact fingerprint, not
-    // the full detail — no result/report/humanTasks content to poll on.
+    expect(body.continuation).toEqual({
+      state: "pending",
+      retryAfterMs: 60_000,
+    });
+    // Pending state is compact and internal to the CLI continuation loop: no
+    // result/report/humanTasks content is exposed before a stop point.
     expect(body.value.result).toBeUndefined();
     expect(body.value.report).toBeUndefined();
     expect(body.value.humanTasks).toBeUndefined();
@@ -343,16 +363,16 @@ describe("dynamic workflows CLI runs wait", () => {
     await waitUntil(() => !isWorkflowRunJobActive(run.id));
 
     const response = await handleDynamicWorkflowsCliRequest(["runs", "wait"], {
-      input: { "run-id": run.id, "timeout-ms": 5000 },
+      input: { "run-id": run.id },
     });
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(body.value.reason).toBe("waiting_human");
-    expect(body.value.timedOut).toBe(false);
     expect(body.value.run.status).toBe("waiting_for_human");
     expect(body.value.humanTasks).toHaveLength(1);
     expect(body.value.humanTasks[0].nodeId).toBe("first");
+    expect(body.continuation).toBeUndefined();
   });
 });
 

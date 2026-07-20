@@ -676,11 +676,11 @@ describe("nextop cli adapter", () => {
 
   it("streams session refs and final text from waiting", async () => {
     const calls: string[][] = [];
+    const waitTimeouts: Array<number | undefined> = [];
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
-      runner: async (args) => {
+      runner: async (args, options) => {
         calls.push(args);
         if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
@@ -705,6 +705,7 @@ describe("nextop cli adapter", () => {
           };
         }
         if (args.includes("wait")) {
+          waitTimeouts.push(options?.timeoutMs);
           return {
             reason: "completed",
             timedOut: false,
@@ -762,6 +763,10 @@ describe("nextop cli adapter", () => {
       },
     });
     expect(events).toContainEqual({ type: "text_delta", text: "done" });
+    expect(waitTimeouts).toEqual([0]);
+    expect(calls.find((args) => args.includes("wait"))).not.toContain(
+      "--timeout-ms",
+    );
     expect(events.at(-1)).toEqual({
       type: "done",
       status: "completed",
@@ -776,7 +781,6 @@ describe("nextop cli adapter", () => {
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
       runner: async (args) => {
         if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
@@ -848,7 +852,6 @@ describe("nextop cli adapter", () => {
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
         if (isAgentListCall(args)) return currentAgentCatalog();
@@ -918,8 +921,6 @@ describe("nextop cli adapter", () => {
       "session-1",
       "--after-version",
       "0",
-      "--timeout-ms",
-      "1000",
     ]);
     expect(events).toContainEqual({
       type: "session_ref",
@@ -956,7 +957,6 @@ describe("nextop cli adapter", () => {
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
         if (isAgentListCall(args)) return currentAgentCatalog();
@@ -1037,7 +1037,6 @@ describe("nextop cli adapter", () => {
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
       runner: async (args) => {
         if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
@@ -1146,7 +1145,6 @@ describe("nextop cli adapter", () => {
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
       runner: async (args) => {
         if (isAgentListCall(args)) return currentAgentCatalog();
         if (args.includes("start")) {
@@ -1251,7 +1249,6 @@ describe("nextop cli adapter", () => {
     const adapter = createNextopCliAgentAdapter({
       includeMockTarget: false,
       pollIntervalMs: 1,
-      waitTimeoutMs: 1_000,
       runner: async (args) => {
         calls.push(args);
         if (isAgentListCall(args)) return currentAgentCatalog();
@@ -1329,8 +1326,6 @@ describe("nextop cli adapter", () => {
       "session-1",
       "--after-version",
       "0",
-      "--timeout-ms",
-      "1000",
     ]);
     expect(calls).toContainEqual([
       "--json",
@@ -1340,8 +1335,6 @@ describe("nextop cli adapter", () => {
       "session-1",
       "--after-version",
       "12",
-      "--timeout-ms",
-      "1000",
     ]);
     expect(waitCount).toBe(2);
     expect(events).toContainEqual({ type: "text_delta", text: "done" });
@@ -1458,8 +1451,6 @@ describe("nextop cli adapter", () => {
       "session-1",
       "--after-version",
       "4",
-      "--timeout-ms",
-      "30000",
     ]);
     expect(events).toContainEqual({ type: "text_delta", text: "second done" });
     expect(events.at(-1)).toEqual({

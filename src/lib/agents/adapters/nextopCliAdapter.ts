@@ -17,7 +17,6 @@ type NextopCliAdapterOptions = {
   includeMockTarget?: boolean;
   cliPath?: string;
   pollIntervalMs?: number;
-  waitTimeoutMs?: number;
   providerDetectionTimeoutMs?: number;
   providerDetectionOverallTimeoutMs?: number;
   providerDetectionRetries?: number;
@@ -111,7 +110,6 @@ const DEFAULT_PROVIDER_DETECTION_RETRY_BACKOFF_MS = 100;
 const DEFAULT_PROVIDER_MODELS_TIMEOUT_MS = 1_500;
 const DEFAULT_CATALOG_TTL_MS = 30_000;
 const DEFAULT_CATALOG_MAX_STALE_AGE_MS = 300_000;
-const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const CLI_TERMINATION_GRACE_MS = 250;
 const TAIL_SUMMARY_LIMIT = 50;
 
@@ -152,10 +150,6 @@ export function createNextopCliAgentAdapter(
     options.pollIntervalMs ??
     readPositiveIntegerEnv("NEXTOP_POLL_INTERVAL_MS") ??
     DEFAULT_POLL_INTERVAL_MS;
-  const waitTimeoutMs =
-    options.waitTimeoutMs ??
-    readPositiveIntegerEnv("NEXTOP_WAIT_TIMEOUT_MS") ??
-    DEFAULT_WAIT_TIMEOUT_MS;
   const providerDetectionTimeoutMs =
     options.providerDetectionTimeoutMs ??
     readPositiveIntegerEnv("NEXTOP_PROVIDER_DETECTION_TIMEOUT_MS") ??
@@ -529,10 +523,14 @@ export function createNextopCliAgentAdapter(
               agentSessionId,
               "--after-version",
               String(latestVersion),
-              "--timeout-ms",
-              String(waitTimeoutMs),
             ],
-            { signal: input.signal },
+            {
+              signal: input.signal,
+              // Durable waits end only at an agent stop point or caller abort.
+              // The CLI owns internal continuations, so the adapter's generic
+              // six-minute subprocess budget must not terminate this command.
+              timeoutMs: 0,
+            },
           );
           const wait = parseSessionSummary(waitOutput, initialSession);
           const reason = readWaitReason(waitOutput);
@@ -603,10 +601,10 @@ export function createNextopCliAgentAdapter(
             return;
           }
 
-          // ready / timeout / waiting / waiting_approval: the turn is still in
-          // flight (or blocked on an in-GUI approval); keep waiting. `agent
-          // wait` blocks server-side, so no extra delay is needed when it
-          // returned with fresh messages.
+          // Older Tutti versions may still return ready / timeout / waiting /
+          // waiting_approval observation results. Current Tutti owns internal
+          // continuations and normally returns only at a stop point. Keep this
+          // loop for backward compatibility without imposing a local deadline.
           if (reason !== "ready" && !wait.hasMore) {
             await delay(pollIntervalMs, input.signal);
           }
