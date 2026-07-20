@@ -86,6 +86,10 @@ type CliOutput =
   | {
       kind: "json";
       value: unknown;
+      continuation?: {
+        state: "pending";
+        retryAfterMs: number;
+      };
     }
   | {
       kind: "table";
@@ -168,7 +172,7 @@ export async function handleDynamicWorkflowsCliRequest(
       case "runs/get":
         return envelope(() => runsGetCommand(input));
       case "runs/wait":
-        return envelope(() => runsWaitCommand(input));
+        return waitEnvelope(() => runsWaitCommand(input));
       case "runs/respond":
         return envelope(() => runsRespondCommand(input));
       case "runs/note":
@@ -213,9 +217,31 @@ export async function handleDynamicWorkflowsCliRequest(
 async function envelope(
   run: () => Record<string, unknown> | Promise<Record<string, unknown>>,
 ): Promise<NextResponse<CliOutput>> {
-  let value: Record<string, unknown>;
+  return domainEnvelope(run, (value) => cliJson({ ok: true, ...value }));
+}
+
+type WaitCommandResult = {
+  value: Record<string, unknown>;
+  continuation?: {
+    state: "pending";
+    retryAfterMs: number;
+  };
+};
+
+async function waitEnvelope(
+  run: () => WaitCommandResult | Promise<WaitCommandResult>,
+): Promise<NextResponse<CliOutput>> {
+  return domainEnvelope(run, (result) =>
+    cliJson({ ok: true, ...result.value }, result.continuation),
+  );
+}
+
+async function domainEnvelope<T>(
+  run: () => T | Promise<T>,
+  success: (value: T) => NextResponse<CliOutput>,
+): Promise<NextResponse<CliOutput>> {
   try {
-    value = await run();
+    return success(await run());
   } catch (error) {
     const domain = readDomainError(error);
     if (domain) {
@@ -223,7 +249,6 @@ async function envelope(
     }
     throw error;
   }
-  return cliJson({ ok: true, ...value });
 }
 
 function readDomainError(error: unknown):
@@ -601,15 +626,10 @@ async function resumeCommand(input: CliInput) {
   };
 }
 
-// A wait caller loops on bounded waits; keep the server-side hold well under
-// the daemon CLI proxy's own budget. In production the app-CLI handler cuts the
-// request at ~16s (app_cli_handler_timeout), so a longer hold dies with a proxy
-// error instead of returning a clean timedOut. Default AND cap to 10s — safely
-// under that budget — and let callers re-issue `runs wait` until they see a
-// terminal or waiting reason.
-const RUNS_WAIT_DEFAULT_TIMEOUT_MS = 10_000;
-const RUNS_WAIT_MAX_TIMEOUT_MS = 10_000;
-const RUNS_WAIT_POLL_INTERVAL_MS = 500;
+// The terminal CLI owns the durable wait loop. A pending response is compact
+// and asks it to check again after the protocol's longest supported delay,
+// keeping long-running workflows cheap while hiding retries from callers.
+const RUNS_WAIT_CONTINUATION_RETRY_MS = 60_000;
 
 async function runsGetCommand(input: CliInput) {
   const runId = readRequiredString(input, ["run-id", "runId"]);
@@ -623,45 +643,24 @@ async function runsGetCommand(input: CliInput) {
 
 async function runsWaitCommand(input: CliInput) {
   const runId = readRequiredString(input, ["run-id", "runId"]);
-  const timeoutMs = clampInteger(
-    readOptionalInteger(input, ["timeout-ms", "timeoutMs"]) ??
-      RUNS_WAIT_DEFAULT_TIMEOUT_MS,
-    0,
-    RUNS_WAIT_MAX_TIMEOUT_MS,
-  );
-  if (!getWorkflowRun(runId)) {
+  const existing = getWorkflowRun(runId);
+  if (!existing) {
     throw new CliHttpError("run_not_found", "Run not found.", 404);
   }
-
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const existing = getWorkflowRun(runId);
-    if (!existing) {
-      throw new CliHttpError("run_not_found", "Run not found.", 404);
-    }
-    // Reconcile first so a crashed "running" zombie resolves to `interrupted`
-    // (a real stop point) instead of spinning until the deadline.
-    const run = await markWorkflowRunInterruptedIfStale(existing);
-    const reason = runStopReason(run);
-    if (reason) {
-      return { reason, timedOut: false, ...buildRunDetail(run) };
-    }
-    if (Date.now() >= deadline) {
-      // Timeout is NOT a stop point: return a compact progress fingerprint,
-      // not the full detail. Between stop points nothing is actionable for an
-      // orchestrator, and feeding it full snapshots on every bounded wait
-      // invites progress-polling that pollutes its context. Full detail
-      // arrives only with a real stop reason.
-      return {
-        reason: "timeout" as const,
-        timedOut: true,
-        ...buildRunProgressFingerprint(run),
-      };
-    }
-    await delay(
-      Math.min(RUNS_WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())),
-    );
+  // Reconcile first so a crashed "running" zombie resolves to `interrupted`
+  // (a real stop point) instead of producing another pending continuation.
+  const run = await markWorkflowRunInterruptedIfStale(existing);
+  const reason = runStopReason(run);
+  if (reason) {
+    return { value: { reason, ...buildRunDetail(run) } };
   }
+  return {
+    value: buildRunProgressFingerprint(run),
+    continuation: {
+      state: "pending" as const,
+      retryAfterMs: RUNS_WAIT_CONTINUATION_RETRY_MS,
+    },
+  };
 }
 
 /**
@@ -851,10 +850,9 @@ function buildRunDetail(run: WorkflowRunRecord) {
 }
 
 /**
- * Compact payload for non-stop-point wait returns (timeout): just enough for a
- * caller to detect stuckness across waits without any run content. `logBytes`
- * grows with every run event, so an unchanged fingerprint across several waits
- * means the run has made no progress at all.
+ * Compact payload for an internal pending continuation. The terminal CLI
+ * suppresses it during a normal durable wait, but may expose it as lastResult
+ * when its optional total wait deadline expires.
  */
 function buildRunProgressFingerprint(run: WorkflowRunRecord) {
   let logBytes = 0;
@@ -1221,10 +1219,14 @@ function clampInteger(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function cliJson(value: unknown) {
+function cliJson(
+  value: unknown,
+  continuation?: { state: "pending"; retryAfterMs: number },
+) {
   return NextResponse.json({
     kind: "json",
     value,
+    ...(continuation ? { continuation } : {}),
   } satisfies CliOutput);
 }
 
