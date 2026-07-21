@@ -29,6 +29,30 @@ export function getAuthoringWorkspaceDir(jobId: string): string {
   return path.join(getDataDir(), "authoring", jobId);
 }
 
+export function prepareSemanticReviewWorkspace(input: {
+  jobId: string;
+  reviewId: string;
+}): string {
+  const dir = path.join(
+    getDataDir(),
+    "authoring-reviews",
+    input.jobId,
+    input.reviewId,
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  const instructions = [
+    "# Workflow Design Reviewer",
+    "",
+    "Review only the workflow supplied in the task prompt.",
+    "Do not edit files, execute the workflow, submit it, or start another agent.",
+    "Return exactly the requested review result.",
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(dir, "AGENTS.md"), instructions);
+  fs.writeFileSync(path.join(dir, "CLAUDE.md"), instructions);
+  return dir;
+}
+
 export function prepareAuthoringWorkspace(input: {
   jobId: string;
   currentScript?: string;

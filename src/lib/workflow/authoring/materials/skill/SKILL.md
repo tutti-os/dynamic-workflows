@@ -23,22 +23,26 @@ All commands support `--json` for machine-readable output.
 | Inspect agent models and permissions | `tutti agent composer-options --agent-id <agent-id> --json` |
 | List all blueprints | `tutti --json dynamic-workflows blueprints list` |
 | Read one blueprint script | `tutti --json dynamic-workflows blueprints get --blueprint-id <id> --include-script` |
-| Validate an authoring file | `tutti --json dynamic-workflows authoring validate --job-id <job-id> --file <path>` |
+| Validate only | `tutti --json dynamic-workflows authoring validate --job-id <job-id> --file <path> --review-mode none` |
+| Validate and start review | `tutti --json dynamic-workflows authoring validate --job-id <job-id> --file <path> --review-mode agent` |
+| Wait for review | `tutti --json dynamic-workflows authoring review wait --job-id <job-id>` |
 | List saved workflows | `tutti --json dynamic-workflows list` |
 | Inspect a saved workflow | `tutti --json dynamic-workflows show --workflow-id <id> --include-script` |
 | Submit the finished script | `tutti --json dynamic-workflows authoring submit --job-id <job-id> --file <path>` |
+| Explicitly waive review | `tutti --json dynamic-workflows authoring submit --job-id <job-id> --file <path> --skip-semantic-review --reason "<why>"` |
 
 ## Working loop
 
 1. Read the task prompt and `dsl-reference.md`. Identify the job id, create-or-edit mode, requested behavior, target file, runtime cwd needs, role boundaries, first-versus-later loop behavior, conversation continuity, side effects, and completion condition.
 2. For edit jobs, read the complete `current.workflow.js` before deciding what to change. Preserve behavior outside the edit instruction.
 3. Resolve small gaps with conservative, reversible assumptions. Ask the user only when a missing choice would materially alter scope, authority, graph structure, or acceptance behavior and local context cannot answer it.
-4. Design the graph before writing prompts: phases, roles, which branches are independent (they run concurrently), loop entry and later-iteration order, acceptance contract, and human gates. Choose structures from `patterns.md` and scale them to the request — a quick check gets the simplest linear graph, a thorough audit gets diverse review fan-out with adversarial gating.
+4. Design the graph before writing prompts. Trace every user-visible goal to an artifact, owner, reviewer, and terminal result. For each phase define editable scope, acceptance criteria, downstream exclusions, and failure behavior; then choose branches, loop order, session continuity, and Human gates from `patterns.md`.
 5. Search the blueprint library with one focused query. If a close pattern exists, fetch its script and adapt it. Try at most one refined query before drafting directly from `dsl-reference.md`.
 6. Write one complete, coherent script to the target file. Do not deliver a plan, partial snippet, or chat-only script.
-7. Validate the file. Read every diagnostic, fix the underlying issue, and validate again until no error diagnostics remain. Warnings are review prompts — fix them unless the flagged pattern is deliberate, and never suppress a warning by weakening the workflow.
-8. Submit using the exact job id and target file. If `accepted: false`, repair the returned diagnostics and resubmit until `accepted: true`.
-9. On follow-up requests, revise the last accepted script and repeat validation and submission with the same job id.
+7. Validate with `--review-mode agent`. Fix DSL diagnostics before any reviewer starts.
+8. Wait for the one-shot independent review. Use its verdict, paths, and suggestions as advice; decide whether to revise, ask the user, review a new candidate, or submit. Do not auto-repair or auto-review.
+9. Submit a current PASS. For a clearly small local edit, you may instead explicitly waive review with a reason; the system never makes this judgment automatically. If submission is blocked, use the returned status and next action.
+10. On follow-up requests, revise the last accepted script and repeat validation, review-or-explicit-waiver, and submission with the same job id.
 
 ## Quality checklist
 
@@ -47,6 +51,12 @@ Before submitting, verify:
 - Every runtime value is declared in `inputs` or comes from a valid upstream reference.
 - Every explicit `permissionMode` uses an exact `permissionConfig.modes[].id` returned by `tutti agent composer-options` for the selected agent; omit it when the agent default is intended.
 - Every node has a clear role, sufficient context, explicit authority, concrete work, and an observable completion/output contract. Prompts demand the deliverable itself — downstream nodes and `until` matchers consume the final message as data, not as chat.
+- Every user-visible goal maps to a produced artifact, an authorized owner, a phase-local reviewer, and an honest terminal result. A workflow named or reported as delivered does not defer a required goal outside the graph.
+- Every gating criterion concerns work available before that gate. A phase reviewer does not derive blockers from downstream artifacts, and global requirements are narrowed into an explicit phase acceptance contract before review.
+- Every `CONTINUE` blocker can be changed by the next repair step within its editable scope. A repeated, downstream, read-only, or new-authority blocker exits honestly instead of consuming more iterations.
+- Success, each gate rejection, loop exhaustion, malformed output, and unavailable downstream work all have truthful terminal paths. Technical `completed`/`SKIPPED` states cannot be mistaken for business acceptance.
+- The graph has a bounded call/output budget. Avoid prompt-level skip cascades and recursive injection of full prior loop records; pass compact criteria, blockers, fingerprints, and evidence references instead.
+- Submission has a current independent semantic-review PASS, or a deliberate waiver with a concrete reason for a clearly small local change. Review findings remain advice to the main author, not an automatic repair loop or a substitute for user decisions.
 - Dataflow is intentional: independent roles do not receive another role's narrative unless the workflow explicitly requires it, and no node lists an input its prompt never uses (false dependencies serialize parallel branches).
 - Reviewers that gate a loop or delivery are skeptics: prompted to refute, failing when uncertain, judging the actual artifact rather than a prior Human approval or an implementer's self-assessment.
 - Any step that bounds its coverage (top-N, sampling, skip-on-error) reports what it excluded.

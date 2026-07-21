@@ -29,6 +29,8 @@ Choose by behavior, not vocabulary. Compare:
 
 If these do not substantially match the request, start from the DSL rather than forcing the nearest blueprint.
 
+A single-repository acceptance blueprint is not a close match for a staged cross-repository delivery merely because both use worker/reviewer loops. When repositories, editable authority, acceptance owners, or integration costs differ by phase, prefer checkpointed workflows or explicit phase contracts. Never let an upstream reviewer derive blockers from the full global requirement when those artifacts are owned by a downstream stage.
+
 ## Adaptation
 
 1. Use the selected script as a skeleton, then rewrite `meta`, `inputs`, phases, node ids, labels, prompts, roles, and output contracts for the actual request.
@@ -42,6 +44,8 @@ For a Human-approved implementation followed by independent acceptance, search f
 For the contrasting sessionless-reviewer shape, see `loop-primitive-rd-acceptance-test-v1`: the RD keeps one inherited session with `appendPrompt` deltas, while the reviewer runs each round as a fresh independent session emitting `output: "json"` (a verdict/criteria/blockers/suggestions contract). The loop exits on `until { source: "acceptance.verdict", equals: "PASS" }`, and cross-round injection is precise and dotted — the reviewer reuses its own `{{acceptance.criteria}}` and re-checks `{{acceptance.blockers}}` (empty on the first round), and the RD receives `{{acceptance.blockers}}` + `{{acceptance.suggestions}}` rather than the whole record. The round budget is run-configurable via a `max_rounds` number input (default 3). Choose it when the reviewer should re-judge from scratch every iteration.
 
 When adapting an acceptance-delivery blueprint, preserve its exhausted-loop handoff: the terminal submit report uses structured `result: "not_accepted"` and includes a same-cwd continuation hint so the next run can build on the retained workspace instead of redoing accepted work.
+
+Also preserve loop repairability: every blocking criterion must be changeable by the next worker in that loop. A downstream, read-only, repeated, or new-authority blocker ends the stage honestly; increasing the round budget is not a repair.
 
 For loop-free multi-perspective review, search for `parallel review synthesis`. The `parallel-review-synthesis-v1` pattern fans one inventory out to lens reviewers that are blind to each other, then synthesizes with explicit coverage reporting; its shared optional `review_model` and `review_permission_mode` inputs demonstrate the fall-back-to-run-level runtime override mechanism (permission modes let read-only roles be enforced at the permission layer, not just requested in the prompt).
 

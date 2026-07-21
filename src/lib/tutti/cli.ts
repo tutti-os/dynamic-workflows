@@ -49,6 +49,9 @@ import {
   validateAuthoringScript,
 } from "@/lib/workflow/authoring/submit";
 import {
+  refreshAuthoringSemanticReview,
+} from "@/lib/workflow/authoring/semantic-review";
+import {
   assertWorkflowScriptValid,
   parseWorkflowScript,
   WorkflowScriptSyntaxError,
@@ -138,6 +141,8 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "blueprints/get",
   "blueprints/instantiate",
   "authoring/validate",
+  "authoring/review/get",
+  "authoring/review/wait",
   "authoring/submit",
   "resume",
 ] as const;
@@ -188,9 +193,13 @@ export async function handleDynamicWorkflowsCliRequest(
       case "blueprints/instantiate":
         return envelope(() => instantiateCommand(input));
       case "authoring/validate":
-        return cliJson(authoringValidateCommand(input));
+        return envelope(() => authoringValidateCommand(input));
+      case "authoring/review/get":
+        return envelope(() => authoringReviewGetCommand(input));
+      case "authoring/review/wait":
+        return waitEnvelope(() => authoringReviewWaitCommand(input));
       case "authoring/submit":
-        return cliJson(authoringSubmitCommand(input));
+        return envelope(() => authoringSubmitCommand(input));
       default:
         throw new CliHttpError(
           "unknown_command",
@@ -557,13 +566,25 @@ function importCommand(input: CliInput) {
   };
 }
 
-function authoringSubmitCommand(input: CliInput) {
+async function authoringSubmitCommand(input: CliInput) {
   const jobId = readRequiredString(input, ["job-id", "jobId"]);
   const file = readOptionalString(input, ["file"]);
   const script = readOptionalString(input, ["script"]);
+  const skipSemanticReview =
+    readOptionalBoolean(input, [
+      "skip-semantic-review",
+      "skipSemanticReview",
+    ]) ?? false;
+  const reason = readOptionalString(input, ["reason"]);
 
   try {
-    return submitAuthoringScript({ jobId, file, script });
+    return await submitAuthoringScript({
+      jobId,
+      file,
+      script,
+      skipSemanticReview,
+      reason,
+    });
   } catch (error) {
     if (error instanceof AuthoringSubmitError) {
       throw new CliHttpError(error.code, error.message, error.status);
@@ -572,18 +593,67 @@ function authoringSubmitCommand(input: CliInput) {
   }
 }
 
-function authoringValidateCommand(input: CliInput) {
+async function authoringValidateCommand(input: CliInput) {
   const jobId = readRequiredString(input, ["job-id", "jobId"]);
   const file = readRequiredString(input, ["file"]);
+  const reviewMode = readOptionalString(input, ["review-mode", "reviewMode"]);
+  const reviewerAgent = readOptionalString(input, [
+    "reviewer-agent",
+    "reviewerAgent",
+  ]);
+  const reviewerModel = readOptionalString(input, [
+    "reviewer-model",
+    "reviewerModel",
+  ]);
+  if (reviewMode !== undefined && reviewMode !== "none" && reviewMode !== "agent") {
+    throw new CliHttpError(
+      "invalid_input",
+      'review-mode must be "none" or "agent".',
+      400,
+    );
+  }
 
   try {
-    return validateAuthoringScript({ jobId, file });
+    return await validateAuthoringScript({
+      jobId,
+      file,
+      reviewMode: reviewMode ?? "none",
+      reviewerAgent,
+      reviewerModel,
+    });
   } catch (error) {
     if (error instanceof AuthoringSubmitError) {
       throw new CliHttpError(error.code, error.message, error.status);
     }
     throw error;
   }
+}
+
+async function authoringReviewGetCommand(input: CliInput) {
+  const jobId = readRequiredString(input, ["job-id", "jobId"]);
+  return { review: await refreshAuthoringSemanticReview(jobId) };
+}
+
+async function authoringReviewWaitCommand(input: CliInput) {
+  const jobId = readRequiredString(input, ["job-id", "jobId"]);
+  const review = await refreshAuthoringSemanticReview(jobId);
+  if (!review) {
+    throw new CliHttpError(
+      "semantic_review_not_found",
+      "No semantic review exists for this authoring job.",
+      404,
+    );
+  }
+  if (review.status === "running") {
+    return {
+      value: { review },
+      continuation: {
+        state: "pending" as const,
+        retryAfterMs: RUNS_WAIT_CONTINUATION_RETRY_MS,
+      },
+    };
+  }
+  return { value: { review } };
 }
 
 async function runCommand(input: CliInput) {

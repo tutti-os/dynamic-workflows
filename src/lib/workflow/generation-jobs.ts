@@ -16,6 +16,10 @@ import { WorkflowCwdError } from "@/lib/workflow/cwd";
 import { buildCreateAuthoringPrompt } from "@/lib/workflow/authoring/prompts";
 import { prepareAuthoringWorkspace } from "@/lib/workflow/authoring/workspace";
 import {
+  createWaivedSemanticReview,
+  hashAuthoringScript,
+} from "@/lib/workflow/authoring/semantic-review";
+import {
   assertWorkflowScriptValid,
   WorkflowScriptSyntaxError,
 } from "@/lib/workflow/parser";
@@ -97,6 +101,11 @@ async function launchGenerationSession(generationId: string) {
         generationId,
         script,
         generation: { source: "sample" },
+        semanticReview: createWaivedSemanticReview({
+          intentHash: hashAuthoringScript(generation.prompt),
+          scriptHash: hashAuthoringScript(script),
+          reason: "Built-in mock authoring path.",
+        }),
       });
       return;
     }

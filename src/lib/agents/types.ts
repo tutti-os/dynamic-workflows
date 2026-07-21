@@ -126,6 +126,12 @@ export type AgentSessionStartInput = {
   prompt: string;
 };
 
+export type AgentConversationMessage = {
+  role: "user" | "assistant";
+  text: string;
+  version?: number;
+};
+
 export type AgentRuntimeAdapter = {
   id: string;
   label: string;
@@ -133,6 +139,9 @@ export type AgentRuntimeAdapter = {
   listTargetCatalog?(): Promise<AgentTargetCatalogResult>;
   run(input: AgentRunInput): AsyncGenerator<AgentRuntimeEvent>;
   startSession?(input: AgentSessionStartInput): Promise<AgentSessionRef>;
+  getSessionConversation?(
+    agentSessionId: string,
+  ): Promise<AgentConversationMessage[]>;
   cancel?(runId: string): Promise<void>;
   cancelSession?(agentSessionId: string): Promise<void>;
   openSession?(agentSessionId: string): Promise<void>;

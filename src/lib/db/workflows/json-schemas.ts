@@ -6,6 +6,7 @@ import type {
   WorkflowRunCheckpointState,
 } from "@/lib/workflow/types";
 import type {
+  AuthoringSemanticReview,
   WorkflowEditJobError,
   WorkflowGenerationError,
 } from "./types";
@@ -30,6 +31,13 @@ export function parseWorkflowMetaColumn(
   context: JsonColumnContext,
 ): WorkflowMeta {
   return parseJsonColumn(value, context, isWorkflowMeta);
+}
+
+export function parseAuthoringSemanticReviewColumn(
+  value: string,
+  context: JsonColumnContext,
+): AuthoringSemanticReview {
+  return parseJsonColumn(value, context, isAuthoringSemanticReview);
 }
 
 export function parseJsonObjectColumn(
@@ -87,6 +95,64 @@ export function stringifyWorkflowMetaColumn(
   context: JsonColumnContext,
 ): string {
   return stringifyJsonColumn(value, context, isWorkflowMeta);
+}
+
+export function stringifyAuthoringSemanticReviewColumn(
+  value: unknown,
+  context: JsonColumnContext,
+): string {
+  return stringifyJsonColumn(value, context, isAuthoringSemanticReview);
+}
+
+export function isAuthoringSemanticReview(
+  value: unknown,
+): value is AuthoringSemanticReview {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const statuses = new Set([
+    "running",
+    "passed",
+    "failed",
+    "stale",
+    "unavailable",
+    "invalid_output",
+    "canceled",
+    "waived",
+  ]);
+  if (
+    typeof value.reviewId !== "string" ||
+    !statuses.has(String(value.status)) ||
+    typeof value.intentHash !== "string" ||
+    typeof value.scriptHash !== "string" ||
+    (value.reviewerAgent !== null && typeof value.reviewerAgent !== "string") ||
+    (value.reviewerModel !== null && typeof value.reviewerModel !== "string") ||
+    (value.reviewerSessionId !== null &&
+      typeof value.reviewerSessionId !== "string") ||
+    typeof value.summary !== "string" ||
+    typeof value.startedAt !== "string" ||
+    (value.completedAt !== null && typeof value.completedAt !== "string")
+  ) {
+    return false;
+  }
+  if (
+    (value.waiverReason !== undefined &&
+      typeof value.waiverReason !== "string") ||
+    (value.error !== undefined && typeof value.error !== "string")
+  ) {
+    return false;
+  }
+  return (
+    Array.isArray(value.findings) &&
+    value.findings.every(
+      (finding) =>
+        isJsonObject(finding) &&
+        typeof finding.reason === "string" &&
+        Array.isArray(finding.nodePath) &&
+        finding.nodePath.every((node) => typeof node === "string") &&
+        typeof finding.suggestion === "string",
+    )
+  );
 }
 
 export function stringifyJsonObjectColumn(

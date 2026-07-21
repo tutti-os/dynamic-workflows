@@ -9,6 +9,7 @@ import { createWorkflowVersion, getWorkflowVersion } from "./versions";
 import { getWorkflowDetail } from "./workflow-repository";
 import { mapEditJob, type EditJobRow } from "./mappers";
 import type {
+  AuthoringSemanticReview,
   WorkflowEditJobError,
   WorkflowEditJobRecord,
 } from "./types";
@@ -151,6 +152,7 @@ export function completeWorkflowEditJob(input: {
   editId: string;
   script: string;
   result: unknown;
+  semanticReview: AuthoringSemanticReview;
 }): WorkflowEditJobRecord {
   const edit = getWorkflowEditJob(input.editId);
   if (!edit) {
@@ -167,6 +169,7 @@ export function completeWorkflowEditJob(input: {
     source: "agent_edit",
     baseVersionId: edit.baseVersionId,
     note: edit.instruction,
+    semanticReview: input.semanticReview,
   });
 
   const now = new Date().toISOString();

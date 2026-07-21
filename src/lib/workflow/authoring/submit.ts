@@ -7,10 +7,12 @@ import {
   completeWorkflowEditJob,
   getWorkflowEditJob,
 } from "@/lib/db/workflows/edit-jobs";
+import type { AuthoringSemanticReview } from "@/lib/db/workflows/types";
 import type {
   WorkflowDiagnostic,
   WorkflowDiagnosticSummary,
 } from "@/lib/workflow/types";
+import { setAuthoringSemanticReview } from "@/lib/db/workflows/semantic-reviews";
 import { parseWorkflowScript } from "@/lib/workflow/parser";
 import {
   hasWorkflowDiagnosticErrors,
@@ -20,6 +22,14 @@ import {
   AuthoringWorkspaceError,
   resolveAuthoringScriptFile,
 } from "./workspace";
+import {
+  createWaivedSemanticReview,
+  getCurrentAuthoringSemanticReview,
+  getCurrentIntentHash,
+  hashAuthoringScript,
+  markReviewStale,
+  startAuthoringSemanticReview,
+} from "./semantic-review";
 
 const MAX_SCRIPT_BYTES = 512 * 1024;
 
@@ -27,6 +37,8 @@ export type AuthoringSubmitInput = {
   jobId: string;
   file?: string;
   script?: string;
+  skipSemanticReview?: boolean;
+  reason?: string;
 };
 
 export type AuthoringSubmitResult =
@@ -50,6 +62,7 @@ export type AuthoringValidateResult = {
   jobType: "generation" | "edit";
   diagnosticSummary: WorkflowDiagnosticSummary;
   diagnostics: WorkflowDiagnostic[];
+  review: AuthoringSemanticReview | null;
 };
 
 export class AuthoringSubmitError extends Error {
@@ -64,9 +77,9 @@ export class AuthoringSubmitError extends Error {
   }
 }
 
-export function submitAuthoringScript(
+export async function submitAuthoringScript(
   input: AuthoringSubmitInput,
-): AuthoringSubmitResult {
+): Promise<AuthoringSubmitResult> {
   const { jobId, job, script, parsed } = inspectAuthoringScript(input);
   if (hasWorkflowDiagnosticErrors(parsed.diagnostics)) {
     return {
@@ -77,11 +90,20 @@ export function submitAuthoringScript(
     };
   }
 
+  const semanticReview = await requireSemanticReview({
+    jobId,
+    script,
+    skip: input.skipSemanticReview ?? false,
+    reason: input.reason,
+    fallbackIntent: job.intent,
+  });
+
   if (job.type === "generation") {
     const detail = completeWorkflowGeneration({
       generationId: jobId,
       script,
       generation: { submittedVia: "authoring_submit" },
+      semanticReview,
     });
     return {
       accepted: true,
@@ -97,6 +119,7 @@ export function submitAuthoringScript(
     editId: jobId,
     script,
     result: { submittedVia: "authoring_submit" },
+    semanticReview,
   });
   if (completed.status !== "completed") {
     throw new AuthoringSubmitError(
@@ -115,15 +138,32 @@ export function submitAuthoringScript(
   };
 }
 
-export function validateAuthoringScript(
-  input: AuthoringSubmitInput,
-): AuthoringValidateResult {
-  const { job, parsed } = inspectAuthoringScript(input);
+export async function validateAuthoringScript(
+  input: AuthoringSubmitInput & {
+    reviewMode?: "none" | "agent";
+    reviewerAgent?: string;
+    reviewerModel?: string;
+  },
+): Promise<AuthoringValidateResult> {
+  const { jobId, job, script, parsed } = inspectAuthoringScript(input);
+  const valid = !hasWorkflowDiagnosticErrors(parsed.diagnostics);
+  let review = getCurrentAuthoringSemanticReview(jobId);
+  if (valid && input.reviewMode === "agent") {
+    review = await startAuthoringSemanticReview({
+      jobId,
+      script,
+      reviewerAgent: input.reviewerAgent,
+      reviewerModel: input.reviewerModel,
+    });
+  } else if (review && review.scriptHash !== hashAuthoringScript(script)) {
+    review = markReviewStale(jobId, review);
+  }
   return {
-    valid: !hasWorkflowDiagnosticErrors(parsed.diagnostics),
+    valid,
     jobType: job.type,
     diagnosticSummary: summarizeWorkflowDiagnostics(parsed.diagnostics),
     diagnostics: parsed.diagnostics,
+    review,
   };
 }
 
@@ -145,7 +185,7 @@ function inspectAuthoringScript(input: AuthoringSubmitInput) {
 // jobs whose session never launched (failed) or was canceled reject submits.
 function locateAuthoringJob(
   jobId: string,
-): { type: "generation" | "edit" } {
+): { type: "generation" | "edit"; intent: string } {
   const generation = getWorkflowGeneration(jobId);
   if (generation) {
     if (generation.status === "failed") {
@@ -155,7 +195,7 @@ function locateAuthoringJob(
         409,
       );
     }
-    return { type: "generation" };
+    return { type: "generation", intent: generation.prompt };
   }
 
   const edit = getWorkflowEditJob(jobId);
@@ -167,7 +207,7 @@ function locateAuthoringJob(
         409,
       );
     }
-    return { type: "edit" };
+    return { type: "edit", intent: edit.instruction };
   }
 
   throw new AuthoringSubmitError(
@@ -175,6 +215,78 @@ function locateAuthoringJob(
     "No authoring job found for this job-id.",
     404,
   );
+}
+
+async function requireSemanticReview(input: {
+  jobId: string;
+  script: string;
+  skip: boolean;
+  reason?: string;
+  fallbackIntent: string;
+}): Promise<AuthoringSemanticReview> {
+  const scriptHash = hashAuthoringScript(input.script);
+  let intentHash: string;
+  try {
+    intentHash = await getCurrentIntentHash(input.jobId);
+  } catch {
+    // The explicit waiver remains usable when the reviewer/session service is
+    // unavailable. Normal PASS submission still blocks below.
+    intentHash = hashAuthoringScript(input.fallbackIntent);
+  }
+
+  if (input.skip) {
+    const reason = input.reason?.trim();
+    if (!reason) {
+      throw new AuthoringSubmitError(
+        "semantic_review_waiver_reason_required",
+        "--skip-semantic-review requires a non-empty --reason.",
+        400,
+      );
+    }
+    const waived = createWaivedSemanticReview({ intentHash, scriptHash, reason });
+    setAuthoringSemanticReview(input.jobId, waived);
+    return waived;
+  }
+
+  const review = getCurrentAuthoringSemanticReview(input.jobId);
+  if (!review) {
+    throw reviewBlocked(
+      "No semantic review exists for this candidate. Run authoring validate with --review-mode agent, then wait for its result.",
+    );
+  }
+  if (review.intentHash !== intentHash || review.scriptHash !== scriptHash) {
+    markReviewStale(input.jobId, review);
+    throw reviewBlocked(
+      "The semantic review is stale because the user intent or script changed. Review the current candidate again, or explicitly waive review with a reason.",
+    );
+  }
+  if (review.status !== "passed") {
+    throw reviewBlocked(reviewNextAction(review));
+  }
+  return review;
+}
+
+function reviewBlocked(message: string): AuthoringSubmitError {
+  return new AuthoringSubmitError("semantic_review_required", message, 409);
+}
+
+function reviewNextAction(review: AuthoringSemanticReview): string {
+  switch (review.status) {
+    case "running":
+      return "Semantic review is still running. Wait for it before submitting.";
+    case "failed":
+      return "Semantic review failed the design. Use its findings to revise or ask the user, then review again; alternatively waive review with a reason.";
+    case "stale":
+      return "Semantic review is stale. Review the current candidate again, or waive review with a reason.";
+    case "unavailable":
+    case "invalid_output":
+    case "canceled":
+      return `Semantic review is ${review.status}. Retry review, or waive it with a reason.`;
+    case "waived":
+      return "The stored waiver does not match this submission. Waive the current candidate again with a reason.";
+    case "passed":
+      return "Semantic review must pass before submission.";
+  }
 }
 
 function readSubmittedScript(

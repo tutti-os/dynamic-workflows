@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type {
   AgentPermissionModeOption,
+  AgentConversationMessage,
   AgentRunInput,
   AgentRuntimeAdapter,
   AgentRuntimeEvent,
@@ -664,9 +665,84 @@ export function createNextopCliAgentAdapter(
         ...(options?.guidance ? ["--guidance"] : []),
       ]);
     },
+    async getSessionConversation(
+      agentSessionId: string,
+    ): Promise<AgentConversationMessage[]> {
+      const trimmed = agentSessionId.trim();
+      if (!trimmed) {
+        throw new Error("agentSessionId is required");
+      }
+      return readVisibleConversation(trimmed, runner);
+    },
   };
 
   return adapter;
+}
+
+async function readVisibleConversation(
+  agentSessionId: string,
+  runner: NextopCliRunner,
+): Promise<AgentConversationMessage[]> {
+  const collected: NextopMessage[] = [];
+  let beforeVersion: number | undefined;
+  const fallback: RequiredSessionRef = {
+    agentSessionId,
+    agent: "unknown",
+    status: "running",
+  };
+
+  while (true) {
+    const args = [
+      "--json",
+      "agent",
+      "session-summary",
+      "--session-id",
+      agentSessionId,
+      "--order",
+      "desc",
+      "--limit",
+      String(TAIL_SUMMARY_LIMIT),
+    ];
+    if (beforeVersion !== undefined) {
+      args.push("--before-version", String(beforeVersion));
+    }
+    const page = parseSessionSummary(await runner(args), fallback);
+    collected.push(...page.messages);
+    if (!page.hasMore) {
+      break;
+    }
+    const nextBefore = oldestMessageVersion(page.messages);
+    if (
+      nextBefore === undefined ||
+      (beforeVersion !== undefined && nextBefore >= beforeVersion)
+    ) {
+      throw new Error(
+        "Nextop CLI session-summary did not provide a usable conversation cursor.",
+      );
+    }
+    beforeVersion = nextBefore;
+  }
+
+  return collected
+    .flatMap((message): AgentConversationMessage[] => {
+      if (!isTextMessage(message)) {
+        return [];
+      }
+      const rawRole = readOptionalString(message.role);
+      const role =
+        rawRole === "user"
+          ? "user"
+          : rawRole === "assistant" || rawRole === "agent"
+            ? "assistant"
+            : undefined;
+      const text = readOptionalString(message.text);
+      if (!role || !text) {
+        return [];
+      }
+      const version = readNumber(message.version);
+      return [{ role, text, ...(version === undefined ? {} : { version }) }];
+    })
+    .sort((left, right) => (left.version ?? 0) - (right.version ?? 0));
 }
 
 export function resolveNextopCliPath(

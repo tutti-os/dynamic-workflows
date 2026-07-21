@@ -16,6 +16,38 @@ export type WorkflowRecord = {
   updatedAt: string;
 };
 
+export type AuthoringSemanticReviewStatus =
+  | "running"
+  | "passed"
+  | "failed"
+  | "stale"
+  | "unavailable"
+  | "invalid_output"
+  | "canceled"
+  | "waived";
+
+export type AuthoringSemanticReviewFinding = {
+  reason: string;
+  nodePath: string[];
+  suggestion: string;
+};
+
+export type AuthoringSemanticReview = {
+  reviewId: string;
+  status: AuthoringSemanticReviewStatus;
+  intentHash: string;
+  scriptHash: string;
+  reviewerAgent: string | null;
+  reviewerModel: string | null;
+  reviewerSessionId: string | null;
+  summary: string;
+  findings: AuthoringSemanticReviewFinding[];
+  waiverReason?: string;
+  error?: string;
+  startedAt: string;
+  completedAt: string | null;
+};
+
 export type WorkflowVersionRecord = {
   id: string;
   workflowId: string;
@@ -25,6 +57,7 @@ export type WorkflowVersionRecord = {
   source: string | null;
   baseVersionId: string | null;
   note: string | null;
+  semanticReview: AuthoringSemanticReview | null;
   createdAt: string;
 };
 
@@ -56,6 +89,7 @@ export type WorkflowGenerationRecord = {
   model: string | null;
   cwd: string | null;
   agentSessionId: string | null;
+  semanticReview: AuthoringSemanticReview | null;
   status: WorkflowGenerationStatus;
   generation: unknown;
   error: WorkflowGenerationError | null;
@@ -87,6 +121,7 @@ export type WorkflowEditJobRecord = {
   model: string | null;
   cwd: string | null;
   agentSessionId: string | null;
+  semanticReview: AuthoringSemanticReview | null;
   status: WorkflowEditJobStatus;
   result: unknown;
   error: WorkflowEditJobError | null;

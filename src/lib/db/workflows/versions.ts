@@ -6,10 +6,17 @@ import {
 import { assertWorkflowScriptValid, parseWorkflowScript } from "@/lib/workflow/parser";
 import type { ParsedWorkflow } from "@/lib/workflow/types";
 import { getDb } from "../client";
-import { stringifyWorkflowMetaColumn } from "./json-schemas";
+import {
+  stringifyAuthoringSemanticReviewColumn,
+  stringifyWorkflowMetaColumn,
+} from "./json-schemas";
 import { getWorkflow, getWorkflowDetail } from "./workflow-repository";
 import { mapVersion, type VersionRow } from "./mappers";
-import type { WorkflowDetail, WorkflowVersionRecord } from "./types";
+import type {
+  AuthoringSemanticReview,
+  WorkflowDetail,
+  WorkflowVersionRecord,
+} from "./types";
 
 export function createWorkflowVersion(input: {
   workflowId: string;
@@ -18,6 +25,7 @@ export function createWorkflowVersion(input: {
   source?: string;
   baseVersionId?: string;
   note?: string;
+  semanticReview?: AuthoringSemanticReview;
 }): WorkflowVersionRecord {
   const database = getDb();
   const parsed = assertWorkflowScriptValid(input.script);
@@ -42,8 +50,8 @@ export function createWorkflowVersion(input: {
           `
           INSERT INTO workflow_versions (
             id, workflow_id, version, script, meta_json, source,
-            base_version_id, note, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            base_version_id, note, semantic_review_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
         .run(
@@ -59,6 +67,13 @@ export function createWorkflowVersion(input: {
           input.source ?? null,
           input.baseVersionId ?? null,
           input.note ?? null,
+          input.semanticReview
+            ? stringifyAuthoringSemanticReviewColumn(input.semanticReview, {
+                table: "workflow_versions",
+                column: "semantic_review_json",
+                id: versionId,
+              })
+            : null,
           now,
         );
 

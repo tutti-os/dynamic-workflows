@@ -1,6 +1,7 @@
 import { createNextopCliAgentAdapter } from "./adapters/nextopCliAdapter";
 import type {
   AgentRuntimeAdapter,
+  AgentConversationMessage,
   AgentSessionStartInput,
   AgentTargetCatalogResult,
 } from "./types";
@@ -47,6 +48,16 @@ export async function startAgentSession(input: AgentSessionStartInput) {
     throw new Error("Agent session start is not supported by this adapter.");
   }
   return adapter.startSession(input);
+}
+
+export async function getAgentSessionConversation(
+  agentSessionId: string,
+): Promise<AgentConversationMessage[]> {
+  const adapter = getAgentRuntimeAdapter();
+  if (!adapter.getSessionConversation) {
+    throw new Error("Agent session conversation reading is not supported by this adapter.");
+  }
+  return adapter.getSessionConversation(agentSessionId);
 }
 
 export async function cancelAgentSession(agentSessionId: string) {

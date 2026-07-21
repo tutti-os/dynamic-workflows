@@ -80,6 +80,18 @@ describe("authoring workspace", () => {
       expect(materializedDsl).toContain(
         "its first execution is already a continuation and therefore uses `appendPrompt`",
       );
+      expect(
+        readFileSync(
+          path.join(workspace.dir, root, "workflow-authoring", "patterns.md"),
+          "utf8",
+        ),
+      ).toContain("## Semantic closure review");
+      expect(
+        readFileSync(
+          path.join(workspace.dir, root, "workflow-authoring", "SKILL.md"),
+          "utf8",
+        ),
+      ).toContain("Validate and start review");
     }
     expect(
       readFileSync(path.join(workspace.dir, "current.workflow.js"), "utf8"),
@@ -124,9 +136,11 @@ describe("authoring submit", () => {
     const workspace = prepareAuthoringWorkspace({ jobId: generationId });
     writeFileSync(path.join(workspace.dir, "draft.workflow.js"), VALID_SCRIPT);
 
-    const result = submitAuthoringScript({
+    const result = await submitAuthoringScript({
       jobId: generationId,
       file: "draft.workflow.js",
+      skipSemanticReview: true,
+      reason: "Small test fixture.",
     });
 
     expect(result.accepted).toBe(true);
@@ -138,6 +152,7 @@ describe("authoring submit", () => {
     expect(getWorkflowGeneration(generationId)?.status).toBe("completed");
     const detail = getWorkflowDetail(pending.workflow.id);
     expect(detail?.currentVersion?.script).toBe(VALID_SCRIPT);
+    expect(detail?.currentVersion?.semanticReview?.status).toBe("waived");
     expect(detail?.workflow.name).toBe("authored_workflow");
   });
 
@@ -150,7 +165,7 @@ describe("authoring submit", () => {
     const pending = createPendingWorkflowGeneration({ prompt: "Make a workflow" });
     const generationId = pending.generation!.id;
 
-    const result = submitAuthoringScript({
+    const result = await submitAuthoringScript({
       jobId: generationId,
       script: INVALID_SCRIPT,
     });
@@ -179,9 +194,11 @@ describe("authoring submit", () => {
       agent: "local:codex",
     });
 
-    const result = submitAuthoringScript({
+    const result = await submitAuthoringScript({
       jobId: edit.id,
       script: VALID_SCRIPT,
+      skipSemanticReview: true,
+      reason: "Small test fixture.",
     });
 
     expect(result.accepted).toBe(true);
@@ -230,15 +247,22 @@ describe("authoring submit", () => {
 
     const pending = createPendingWorkflowGeneration({ prompt: "Make a workflow" });
     const generationId = pending.generation!.id;
-    submitAuthoringScript({ jobId: generationId, script: VALID_SCRIPT });
+    await submitAuthoringScript({
+      jobId: generationId,
+      script: VALID_SCRIPT,
+      skipSemanticReview: true,
+      reason: "First test fixture.",
+    });
 
     const revised = VALID_SCRIPT.replace(
       "Authored workflow",
       "Authored workflow v2",
     );
-    const second = submitAuthoringScript({
+    const second = await submitAuthoringScript({
       jobId: generationId,
       script: revised,
+      skipSemanticReview: true,
+      reason: "Second test fixture.",
     });
 
     expect(second.accepted).toBe(true);
@@ -262,11 +286,35 @@ describe("authoring submit", () => {
       error: { message: "launch failed" },
     });
 
-    expect(() =>
+    await expect(
       submitAuthoringScript({ jobId: generationId, script: VALID_SCRIPT }),
-    ).toThrowError(AuthoringSubmitError);
-    expect(() =>
+    ).rejects.toBeInstanceOf(AuthoringSubmitError);
+    await expect(
       submitAuthoringScript({ jobId: "missing-job", script: VALID_SCRIPT }),
-    ).toThrowError(/No authoring job found/);
+    ).rejects.toThrowError(/No authoring job found/);
+  });
+
+  it("requires review by default and a reason for an explicit waiver", async () => {
+    initTestDataDir();
+    const { createPendingWorkflowGeneration } = await import(
+      "@/lib/db/workflows/generations"
+    );
+    const { submitAuthoringScript } = await import("./submit");
+
+    const pending = createPendingWorkflowGeneration({ prompt: "Make a workflow" });
+    const jobId = pending.generation!.id;
+
+    await expect(
+      submitAuthoringScript({ jobId, script: VALID_SCRIPT }),
+    ).rejects.toMatchObject({ code: "semantic_review_required" });
+    await expect(
+      submitAuthoringScript({
+        jobId,
+        script: VALID_SCRIPT,
+        skipSemanticReview: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "semantic_review_waiver_reason_required",
+    });
   });
 });

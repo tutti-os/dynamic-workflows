@@ -4,12 +4,14 @@ import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
 import { getDb } from "../client";
 import { getWorkflowDetail } from "./workflow-repository";
 import {
+  stringifyAuthoringSemanticReviewColumn,
   stringifyJsonValueColumn,
   stringifyWorkflowGenerationErrorColumn,
   stringifyWorkflowMetaColumn,
 } from "./json-schemas";
 import { mapGeneration, type GenerationRow } from "./mappers";
 import type {
+  AuthoringSemanticReview,
   WorkflowDetail,
   WorkflowGenerationError,
   WorkflowGenerationRecord,
@@ -207,6 +209,7 @@ export function completeWorkflowGeneration(input: {
   generationId: string;
   script: string;
   generation: unknown;
+  semanticReview: AuthoringSemanticReview;
 }): WorkflowDetail {
   const generation = getWorkflowGeneration(input.generationId);
   if (!generation) {
@@ -234,8 +237,8 @@ export function completeWorkflowGeneration(input: {
           `
           INSERT INTO workflow_versions (
             id, workflow_id, version, script, meta_json, source,
-            base_version_id, note, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            base_version_id, note, semantic_review_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         )
         .run(
@@ -251,6 +254,11 @@ export function completeWorkflowGeneration(input: {
           "generation",
           null,
           null,
+          stringifyAuthoringSemanticReviewColumn(input.semanticReview, {
+            table: "workflow_versions",
+            column: "semantic_review_json",
+            id: versionId,
+          }),
           now,
         );
 

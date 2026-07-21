@@ -19,6 +19,10 @@ import { WorkflowCwdError } from "@/lib/workflow/cwd";
 import { buildEditAuthoringPrompt } from "@/lib/workflow/authoring/prompts";
 import { prepareAuthoringWorkspace } from "@/lib/workflow/authoring/workspace";
 import { WorkflowScriptSyntaxError } from "@/lib/workflow/parser";
+import {
+  createWaivedSemanticReview,
+  hashAuthoringScript,
+} from "@/lib/workflow/authoring/semantic-review";
 
 const activeEditJobs = new Map<string, Promise<void>>();
 
@@ -87,6 +91,11 @@ async function launchEditSession(editId: string) {
         editId,
         script: baseVersion.script,
         result: { source: "unchanged-mock" },
+        semanticReview: createWaivedSemanticReview({
+          intentHash: hashAuthoringScript(edit.instruction),
+          scriptHash: hashAuthoringScript(baseVersion.script),
+          reason: "Built-in mock authoring path.",
+        }),
       });
       return;
     }

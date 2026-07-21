@@ -16,6 +16,7 @@ export type VersionRow = {
   source: string | null;
   base_version_id: string | null;
   note: string | null;
+  semantic_review_json: string | null;
   created_at: string;
 };
 
@@ -47,6 +48,7 @@ export type GenerationRow = {
   model: string | null;
   cwd: string | null;
   agent_session_id: string | null;
+  semantic_review_json: string | null;
   status: WorkflowGenerationStatus;
   generation_json: string | null;
   error_json: string | null;
@@ -65,6 +67,7 @@ export type EditJobRow = {
   model: string | null;
   cwd: string | null;
   agent_session_id: string | null;
+  semantic_review_json: string | null;
   status: WorkflowEditJobStatus;
   result_json: string | null;
   error_json: string | null;
@@ -81,6 +84,7 @@ export type RunCheckpointRow = {
 };
 
 import {
+  parseAuthoringSemanticReviewColumn,
   parseJsonObjectColumn,
   parseJsonValueColumn,
   parseWorkflowEditJobErrorColumn,
@@ -127,6 +131,13 @@ export function mapVersion(row: VersionRow): WorkflowVersionRecord {
     source: row.source,
     baseVersionId: row.base_version_id,
     note: row.note,
+    semanticReview: row.semantic_review_json
+      ? parseAuthoringSemanticReviewColumn(row.semantic_review_json, {
+          table: "workflow_versions",
+          column: "semantic_review_json",
+          id: row.id,
+        })
+      : null,
     createdAt: row.created_at,
   };
 }
@@ -170,6 +181,13 @@ export function mapGeneration(row: GenerationRow): WorkflowGenerationRecord {
     model: row.model,
     cwd: row.cwd,
     agentSessionId: row.agent_session_id,
+    semanticReview: row.semantic_review_json
+      ? parseAuthoringSemanticReviewColumn(row.semantic_review_json, {
+          table: "workflow_generations",
+          column: "semantic_review_json",
+          id: row.id,
+        })
+      : null,
     status: row.status,
     generation: row.generation_json
       ? parseJsonValueColumn(row.generation_json, {
@@ -215,6 +233,13 @@ export function mapEditJob(row: EditJobRow): WorkflowEditJobRecord {
     model: row.model,
     cwd: row.cwd,
     agentSessionId: row.agent_session_id,
+    semanticReview: row.semantic_review_json
+      ? parseAuthoringSemanticReviewColumn(row.semantic_review_json, {
+          table: "workflow_edit_jobs",
+          column: "semantic_review_json",
+          id: row.id,
+        })
+      : null,
     status: row.status,
     result: row.result_json
       ? parseJsonValueColumn(row.result_json, {

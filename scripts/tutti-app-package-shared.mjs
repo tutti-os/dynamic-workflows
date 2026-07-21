@@ -389,11 +389,61 @@ export function cliManifest(options = {}) {
               description:
                 "Script file path inside the authoring workspace.",
             },
+            "review-mode": {
+              type: "string",
+              enum: ["none", "agent"],
+              description:
+                "none runs DSL validation only; agent also starts one independent semantic design review.",
+            },
+            "reviewer-agent": {
+              type: "string",
+              description:
+                "Optional independent reviewer agent target; defaults to the authoring agent target.",
+            },
+            "reviewer-model": {
+              type: "string",
+              description:
+                "Optional reviewer model; defaults to the authoring model.",
+            },
           },
           ["job-id", "file"],
         ),
         output: jsonOutput(),
         handler: httpHandler("/tutti/cli/authoring/validate"),
+      },
+      {
+        path: ["authoring", "review", "get"],
+        summary: "Get the current authoring semantic review",
+        description:
+          "Return the latest review status and findings for the current authoring candidate.",
+        inputSchema: objectSchema(
+          {
+            "job-id": {
+              type: "string",
+              description: "Authoring job id.",
+            },
+          },
+          ["job-id"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/authoring/review/get"),
+      },
+      {
+        path: ["authoring", "review", "wait"],
+        summary: "Wait for the current authoring semantic review",
+        description:
+          "Wait through CLI continuations until the current review reaches a stop status.",
+        inputSchema: objectSchema(
+          {
+            "job-id": {
+              type: "string",
+              description: "Authoring job id.",
+            },
+          },
+          ["job-id"],
+        ),
+        output: jsonOutput(),
+        handler: httpHandler("/tutti/cli/authoring/review/wait"),
       },
       {
         path: ["authoring", "submit"],
@@ -415,6 +465,15 @@ export function cliManifest(options = {}) {
             script: {
               type: "string",
               description: "Inline workflow script; alternative to file.",
+            },
+            "skip-semantic-review": {
+              type: "boolean",
+              description:
+                "Explicitly waive semantic review for this submission; requires reason.",
+            },
+            reason: {
+              type: "string",
+              description: "Audit reason for explicitly waiving semantic review.",
             },
           },
           ["job-id"],
@@ -478,7 +537,9 @@ export function commandsMarkdown(options = {}) {
     `tutti --json ${scope} blueprints search --query 'acceptance loop' --category coding`,
     `tutti --json ${scope} blueprints get --blueprint-id <id> --include-script`,
     `tutti --json ${scope} blueprints instantiate --blueprint-id <id> --name 'My workflow'`,
-    `tutti --json ${scope} authoring validate --job-id <job-id> --file draft.workflow.js`,
+    `tutti --json ${scope} authoring validate --job-id <job-id> --file draft.workflow.js --review-mode agent`,
+    `tutti --json ${scope} authoring review get --job-id <job-id>`,
+    `tutti --json ${scope} authoring review wait --job-id <job-id>`,
     `tutti --json ${scope} authoring submit --job-id <job-id> --file draft.workflow.js`,
     "```",
     "",
@@ -499,7 +560,7 @@ export function commandsMarkdown(options = {}) {
     "- `resume`: continue an interrupted workflow run by reattaching to persisted agent sessions.",
     "- `blueprints list|search|get`: browse the built-in workflow blueprint library.",
     "- `blueprints instantiate`: instantiate a blueprint as-is into a saved workflow (only when it matches the requirement exactly). Returns the created workflow and current version.",
-    "- `authoring validate|submit`: validate and save scripts produced by authoring sessions.",
+    "- `authoring validate|review get|review wait|submit`: validate, independently review, inspect, and save scripts produced by authoring sessions. Submit requires a current PASS by default; `--skip-semantic-review --reason ...` is the explicit escape hatch.",
     "",
     "### Error envelope (run / import / instantiate / runs \\*)",
     "",

@@ -2093,6 +2093,47 @@ a {
   text-align: right;
 }
 
+.authoring-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.authoring-action-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 12px;
+}
+
+.authoring-review-detail {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.authoring-review-detail summary {
+  cursor: pointer;
+}
+
+.authoring-review-detail p {
+  margin: 6px 0 0;
+}
+
+.authoring-action-result {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.authoring-action-result.failed {
+  color: var(--destructive);
+}
+
+.authoring-action-result p {
+  margin: 4px 0 0;
+}
+
 .run-node-detail {
   display: grid;
   gap: 10px;

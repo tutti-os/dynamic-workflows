@@ -4,6 +4,7 @@ import {
   type ApiErrorCode,
 } from "@/lib/api/errors";
 import type {
+  AuthoringSemanticReview,
   WorkflowDetail,
   WorkflowEditJobRecord,
   WorkflowListItem,
@@ -11,6 +12,10 @@ import type {
   WorkflowVersionRecord,
 } from "@/lib/db/workflows/types";
 import type { RunDetail } from "@/lib/workflow/run-detail";
+import type {
+  AuthoringSubmitResult,
+  AuthoringValidateResult,
+} from "@/lib/workflow/authoring/submit";
 import type {
   ParsedWorkflow,
   WorkflowHumanTask,
@@ -393,6 +398,7 @@ export type WorkflowAuthoringSessionItem = {
   createdVersionId: string | null;
   errorMessage: string | null;
   createdAt: string;
+  semanticReview: AuthoringSemanticReview | null;
 };
 
 export async function listWorkflowAuthoringSessions(
@@ -404,6 +410,33 @@ export async function listWorkflowAuthoringSessions(
     "WORKFLOW_EDIT_FAILED",
   );
   return data.sessions ?? [];
+}
+
+export async function runWorkflowAuthoringAction(input: {
+  workflowId: string;
+  jobId: string;
+  action: "check" | "review" | "submit" | "skip";
+  reason?: string;
+}): Promise<AuthoringSubmitResult | AuthoringValidateResult> {
+  const data = await apiJson<{
+    result?: AuthoringSubmitResult | AuthoringValidateResult;
+  }>(
+    `/api/workflows/${input.workflowId}/authoring-sessions`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jobId: input.jobId,
+        action: input.action,
+        reason: input.reason,
+      }),
+    },
+    "WORKFLOW_EDIT_FAILED",
+  );
+  if (!data.result) {
+    throw new Error("Authoring action returned no result.");
+  }
+  return data.result;
 }
 
 export async function listWorkflowAgentEdits(

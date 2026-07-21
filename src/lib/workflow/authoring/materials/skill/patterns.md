@@ -56,6 +56,28 @@ A reviewer asked "is this good?" tends to agree. Prompt the reviewer to REFUTE �
 - The independent reviewer inspects the actual artifact (repository state, produced file), never the implementer's self-assessment; a prior Human approval is not acceptance evidence either.
 - Pair with a machine-checkable verdict contract (see above) so the loop gate cannot be satisfied by success-shaped prose.
 
+## Semantic closure review
+
+DSL validation proves that a script can execute; it does not prove that the graph can satisfy the user's goal. The authoring pipeline can review the validated script once in a fresh independent agent context. A small, clearly local edit may use the explicit review-waiver path when the main author judges that review adds little value; the system does not classify changes automatically.
+
+First make two compact authoring records:
+
+- **Goal trace:** each user-visible goal → artifact → owner node → reviewer → terminal result.
+- **Phase contract:** editable scope, produced artifact, blocking criteria, downstream exclusions, and failure result for each phase.
+
+A phase gate may block only on work produced before that gate and changeable by its preceding repair role. A loop is valid only when every possible `CONTINUE` blocker can be changed in the next iteration. If a blocker belongs to a downstream phase, read-only scope, missing authority, or unchanged external state, exit honestly instead of retrying. Do not increase `maxIterations` to compensate for a blocker the loop cannot repair.
+
+The built-in reviewer receives the visible authoring conversation through the latest user message, the current script, and the DSL execution semantics. Its contract is concise:
+
+```text
+Review graph semantics against the user's goal. Do not edit, execute, repair, submit, or ask questions. Check end-to-end closure, gate locality, loop repairability, dependency order, truthful termination/status, session boundaries, and side-effect timing. For every failure, give one concrete node path proving it. Pass only if all checks close; uncertainty fails.
+
+Return only JSON:
+{"verdict":"pass|fail","summary":"...","findings":[{"reason":"...","nodePath":["node ids in order"],"suggestion":"..."}]}
+```
+
+The reviewer stops after this single result. It does not repair, re-run, or start a review loop. The main author decides whether to revise the workflow, ask the user, review a new candidate, submit a PASS, or explicitly waive review with a reason.
+
 ## Perspective-diverse review
 
 When work can fail in more than one way, run parallel reviewers with distinct lenses (correctness, security, regressions, requirements coverage) instead of one generalist or N identical copies — diversity catches failure modes redundancy cannot. Fan the verdicts into a synthesizer or a Human gate.
@@ -71,6 +93,8 @@ The core delivery shape: `[worker, reviewer]` with `until` on the reviewer and a
 - Evaluate-first variant: order steps `[fix, reviewer]` and set `firstIteration.startAt: "reviewer"` so the existing state is judged before any repair runs.
 - Keep `onMaxIterations: "fail"` unless downstream steps can genuinely run on unaccepted work.
 - A continuing role keeps one inherited session key across iterations and sends only the delta via `appendPrompt`; repeating the full initial prompt each round wastes context and confuses the session.
+- Freeze the phase criteria after the first review. Later rounds may add only regressions caused by the repair; downstream requirements and new optional concerns become risks or suggestions, not new loop blockers.
+- Normalize repeated blockers. If the same blocker appears twice while the responsible scope is unchanged, stop with an orchestration/external blocker instead of spending the remaining iteration budget.
 
 ## Long-running roles
 
@@ -97,5 +121,7 @@ Match structure to stakes; more graph is not more quality.
 - "Quick check", "draft", "summarize" → the simplest linear graph, at most one reviewer.
 - "Deliver until accepted" → one acceptance loop.
 - "Thorough audit", "be comprehensive", "production-critical" → perspective-diverse fan-out, adversarial gating, a synthesizer, possibly a completeness critic.
+
+Do not interpret end-to-end ownership as one monolithic graph. Split a delivery into checkpointed workflows when phases have different editable repositories, side-effect authority, acceptance owners, or expensive integration evidence. Pass stable commits, fingerprints, and compact gate records between runs. If a failed gate would cause several downstream agents to launch only to return `SKIPPED`, split the workflow or use a native conditional primitive when available instead of simulating branching in prompts.
 
 When unsure, lean thorough for review/audit/research requests and lean minimal for everything else.

@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 10;
+export const CURRENT_SCHEMA_VERSION = 11;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -56,6 +56,10 @@ export function migrateDb(database: Database.Database): void {
       if (currentVersion < 10) {
         applySchemaV10(database);
         recordSchemaMigration(database, 10);
+      }
+      if (currentVersion < 11) {
+        applySchemaV11(database);
+        recordSchemaMigration(database, 11);
       }
     })();
 }
@@ -289,5 +293,13 @@ function applySchemaV10(database: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_workflow_run_notes_run_status
       ON workflow_run_notes(run_id, status, created_at);
+  `);
+}
+
+function applySchemaV11(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_generations ADD COLUMN semantic_review_json TEXT;
+    ALTER TABLE workflow_edit_jobs ADD COLUMN semantic_review_json TEXT;
+    ALTER TABLE workflow_versions ADD COLUMN semantic_review_json TEXT;
   `);
 }
