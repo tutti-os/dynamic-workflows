@@ -44,6 +44,7 @@ import {
   setFlowV1NodeProgress,
 } from "./graph-state";
 import { parseFlowV1Bundle } from "./parser";
+import { createFlowV1ReviewWorkspace } from "./review-workspace";
 import { resolveFlowV1ExecutionConfig } from "./runtime-config";
 import {
   applyFlowV1MemoryUpdates,
@@ -213,6 +214,7 @@ export async function runFlowV1Tick(input: {
       typeof compareAndSetFlowV1CycleCheckpoint
     >[0]["cycleStatus"],
     currentNodeId?: string | null,
+    cycleOutcome?: string | null,
   ) => {
     const result = compareAndSetFlowV1CycleCheckpoint({
       cycleId: cycle.id,
@@ -220,6 +222,7 @@ export async function runFlowV1Tick(input: {
       state: toJsonObject(next),
       cycleStatus: status,
       ...(currentNodeId !== undefined ? { currentNodeId } : {}),
+      ...(cycleOutcome !== undefined ? { cycleOutcome } : {}),
       runId: run.id,
       ownerToken: token,
     });
@@ -331,7 +334,12 @@ export async function runFlowV1Tick(input: {
         checkpointRevision: revision,
       };
     }
-    persist(checkpoint, "canceled", cycle.currentNodeId);
+    persist(
+      checkpoint,
+      "canceled",
+      cycle.currentNodeId,
+      "canceled_by_user",
+    );
     finishOwnedTick(
       run.id,
       token,
@@ -533,12 +541,13 @@ export async function runFlowV1Tick(input: {
               cycle: { id: cycle.id, sequence: cycle.sequence },
             }
           : resolveNodeInput(flow, checkpoint, node, cycle);
-      const agentPrompt =
+      const baseAgentPrompt =
         node.kind === "agent"
           ? renderAgentPrompt(flow, checkpoint, node, nodeInput, cycle)
           : undefined;
       let result: FlowV1NodeResult;
       let nodeAttempt = 0;
+      let validationError: string | undefined;
       do {
         nodeAttempt += 1;
         const attempt = startFlowV1NodeAttempt({
@@ -562,7 +571,13 @@ export async function runFlowV1Tick(input: {
           defaultAgent: input.defaultAgent,
           defaultModel: input.defaultModel,
           defaultPermissionMode: input.defaultPermissionMode,
-          agentPrompt,
+          agentPrompt:
+            baseAgentPrompt && validationError
+              ? appendStructuredOutputCorrection(
+                  baseAgentPrompt,
+                  validationError,
+                )
+              : baseAgentPrompt,
           nodeProgress: checkpoint.nodes[node.id]?.progress,
           onNodeProgress: (progress) => {
             checkpoint = setFlowV1NodeProgress(
@@ -595,18 +610,25 @@ export async function runFlowV1Tick(input: {
         });
         executions += 1;
         if (
-          !shouldRetryScriptNode(node, result, nodeAttempt) ||
+          !shouldRetryNode(node, result, nodeAttempt) ||
           executions >= flow.runtime.maxNodeExecutionsPerTick ||
           executionSignal.aborted
         ) {
           break;
         }
+        validationError =
+          node.kind === "agent" && result.status === "failed"
+            ? result.error.message
+            : undefined;
         checkpoint = incrementFlowV1NodeAttemptCount(
           checkpoint,
           node.id,
         );
         persist(checkpoint, "running", node.id);
-        await waitForRetry(node.retry!.backoffMs, executionSignal);
+        await waitForRetry(
+          node.kind === "script" ? node.retry!.backoffMs : 0,
+          executionSignal,
+        );
       } while (true);
       checkpoint = applyFlowV1NodeResult(
         flow,
@@ -682,7 +704,12 @@ export async function runFlowV1Tick(input: {
             };
           }
           if (completedTerminal) {
-            persist(checkpoint, "completed", completedTerminal.id);
+            persist(
+              checkpoint,
+              "completed",
+              completedTerminal.id,
+              completedTerminal.terminalOutcome ?? "completed",
+            );
             finishOwnedTick(
               run.id,
               token,
@@ -720,7 +747,12 @@ export async function runFlowV1Tick(input: {
             };
           }
           if (canceledTerminal) {
-            persist(checkpoint, "canceled", canceledTerminal.id);
+            persist(
+              checkpoint,
+              "canceled",
+              canceledTerminal.id,
+              canceledTerminal.terminalOutcome ?? "canceled",
+            );
             finishOwnedTick(
               run.id,
               token,
@@ -780,7 +812,12 @@ export async function runFlowV1Tick(input: {
             checkpointRevision: revision,
           };
         }
-        persist(checkpoint, "completed", node.id);
+        persist(
+          checkpoint,
+          "completed",
+          node.id,
+          result.outcome ?? node.terminalOutcome ?? "completed",
+        );
         finishOwnedTick(
           run.id,
           token,
@@ -835,7 +872,12 @@ export async function runFlowV1Tick(input: {
             checkpointRevision: revision,
           };
         }
-        persist(checkpoint, "canceled", node.id);
+        persist(
+          checkpoint,
+          "canceled",
+          node.id,
+          result.outcome ?? node.terminalOutcome ?? "canceled",
+        );
         finishOwnedTick(
           run.id,
           token,
@@ -1042,7 +1084,12 @@ async function executeNode(input: {
     input.node.kind === "complete_cycle" ||
     input.node.kind === "cancel_cycle"
   ) {
-    return { status: "completed" };
+    return {
+      status: "completed",
+      ...(input.node.terminalOutcome
+        ? { outcome: input.node.terminalOutcome }
+        : {}),
+    };
   }
   if (input.node.kind === "agent") {
     return executeAgent(input);
@@ -1061,6 +1108,7 @@ async function executeNode(input: {
   }
   if (
     input.node.kind === "script" ||
+    input.node.kind === "transform" ||
     input.node.kind === "gate" ||
     input.node.kind === "finally"
   ) {
@@ -1074,16 +1122,23 @@ async function executeNode(input: {
         file: input.node.file,
         exportName: input.node.kind === "gate" ? "check" : "run",
         context: input.nodeInput,
-        projectCwd: input.projectCwd,
+        projectCwd: resolveWorkspaceCwd(
+          input.node,
+          input.nodeInput,
+          input.projectCwd,
+        ),
         environment: input.environment,
         secrets: input.secrets,
         signal: input.signal,
       });
       if (
         input.node.kind === "script" ||
+        input.node.kind === "transform" ||
         input.node.kind === "finally"
       ) {
-        return { status: "completed", output: execution.value };
+        return input.node.outcomes.length > 0
+          ? readCodeOutcomeResult(input.node, execution.value)
+          : { status: "completed", output: execution.value };
       }
       return readGateResult(input.node, execution.value);
     } catch (error) {
@@ -1232,6 +1287,21 @@ async function executeLoop(
       `Loop ${input.node.id} has no executable specification.`,
     );
   }
+  const maxIterations =
+    typeof spec.maxIterations === "number"
+      ? spec.maxIterations
+      : input.nodeInput["$loop.maxIterations"];
+  if (
+    typeof maxIterations !== "number" ||
+    !Number.isInteger(maxIterations) ||
+    maxIterations < 1 ||
+    maxIterations > 10
+  ) {
+    return failure(
+      "flow_loop_max_iterations_invalid",
+      `Loop ${input.node.id} maxIterations must resolve to an integer from 1 to 10.`,
+    );
+  }
   const recovered = readLoopProgress(input.nodeProgress);
   const firstStepIndex = spec.firstIterationStartAt
     ? spec.steps.findIndex(
@@ -1247,12 +1317,20 @@ async function executeLoop(
   };
   input.onNodeProgress(asProgress(progress));
 
-  while (progress.iteration <= spec.maxIterations) {
+  while (progress.iteration <= maxIterations) {
     while (progress.stepIndex < spec.steps.length) {
       const step = spec.steps[progress.stepIndex]!;
+      const previousIteration = progress.history.at(-1) ?? null;
+      const previousStep =
+        isObject(previousIteration) && isObject(previousIteration.outputs)
+          ? previousIteration.outputs[step.id] ?? null
+          : null;
       const context: FlowV1JsonObject = {
         ...input.nodeInput,
         iteration: progress.iteration,
+        history: progress.history,
+        previousIteration,
+        previousStep,
         previous:
           progress.stepIndex > 0
             ? progress.outputs[
@@ -1316,6 +1394,7 @@ async function executeLoop(
     if (matched) {
       return {
         status: "completed",
+        outcome: "matched",
         output: {
           iterations: progress.iteration,
           final: sourceOutput ?? null,
@@ -1323,10 +1402,11 @@ async function executeLoop(
         },
       };
     }
-    if (progress.iteration >= spec.maxIterations) {
+    if (progress.iteration >= maxIterations) {
       if (spec.onMaxIterations === "complete") {
         return {
           status: "completed",
+          outcome: "exhausted",
           output: {
             iterations: progress.iteration,
             final: sourceOutput ?? null,
@@ -1337,7 +1417,7 @@ async function executeLoop(
       }
       return failure(
         "flow_loop_max_iterations",
-        `Loop ${input.node.id} reached ${spec.maxIterations} iterations.`,
+        `Loop ${input.node.id} reached ${maxIterations} iterations.`,
       );
     }
     progress.iteration += 1;
@@ -1357,7 +1437,7 @@ type MapProgress = {
   itemStates: Array<{
     index: number;
     item: FlowV1JsonValue;
-    status: "pending" | "running" | "completed" | "failed";
+    status: "pending" | "running" | "completed" | "rejected" | "failed";
     stepIndex: number;
     outputs: Record<string, FlowV1JsonValue>;
     error?: FlowV1JsonObject;
@@ -1478,13 +1558,51 @@ async function executeMap(
         input.onNodeProgress!(asProgress(progress));
       }
       if (state.status === "running") {
-        state.status = "completed";
+        const semanticOutcome = spec.itemOutcome
+          ? readPath(
+              state.outputs,
+              spec.itemOutcome.source.split(".").filter(Boolean),
+            )
+          : undefined;
+        if (
+          typeof semanticOutcome === "string" &&
+          spec.itemOutcome?.rejected.includes(semanticOutcome)
+        ) {
+          state.status = "rejected";
+          if (spec.onItemRejected === "fail") {
+            fatalResult = failure(
+              "flow_map_item_rejected",
+              `Map ${input.node.id} item ${state.index} was rejected with ${semanticOutcome}.`,
+            );
+          }
+        } else if (
+          spec.itemOutcome &&
+          (typeof semanticOutcome !== "string" ||
+            !spec.itemOutcome.success.includes(semanticOutcome))
+        ) {
+          state.status = "failed";
+          state.error = {
+            code: "flow_map_item_outcome_invalid",
+            message: `Map item outcome ${String(semanticOutcome)} is not declared successful or rejected.`,
+          };
+          if (spec.onItemFailure === "fail") {
+            fatalResult = failure(
+              "flow_map_item_outcome_invalid",
+              String(state.error.message),
+            );
+          }
+        } else {
+          state.status = "completed";
+        }
         input.onNodeProgress!(asProgress(progress));
       }
     }
   };
   const workerCount = Math.min(
-    input.flow.runtime.maxParallelNodes,
+    spec.execution?.access === "write" &&
+      spec.execution.isolation === "required"
+      ? 1
+      : input.flow.runtime.maxParallelNodes,
     progress.itemStates.filter((state) => state.status === "pending").length,
   );
   await Promise.all(
@@ -1515,12 +1633,32 @@ async function executeMap(
         message: "Map item failed without a structural error.",
       },
     }));
+  const rejected = progress.itemStates
+    .filter((state) => state.status === "rejected")
+    .map((state) => {
+      const lastStep = spec.steps.at(-1)!;
+      return {
+        index: state.index,
+        item: state.item,
+        output: state.outputs[lastStep.id] ?? null,
+        steps: state.outputs,
+      };
+    });
+  const outcome =
+    completed.length === progress.items.length
+      ? "all_succeeded"
+      : rejected.length === progress.items.length
+        ? "all_rejected"
+        : "partial";
   return {
     status: "completed",
+    outcome,
     output: {
-      items: completed,
+      succeeded: completed,
+      rejected,
       failed,
       total: progress.items.length,
+      outcome,
     },
   };
 }
@@ -1548,88 +1686,149 @@ async function executeCompositeAgentStep(input: {
       };
     }
   }
-  const attempt = startFlowV1NodeAttempt({
-    cycleId: input.parent.cycleId,
-    runId: input.parent.runId,
-    ownerToken: input.parent.ownerToken,
-    nodeId: `${input.parent.node.id}.${input.step.id}`,
-    nodeInput: input.context,
-  });
+  const parentWorkspaceCwd = resolveWorkspaceCwd(
+    input.parent.node,
+    input.parent.nodeInput,
+    input.parent.projectCwd,
+  );
   const cwd = input.step.cwd
     ? path.resolve(
-        input.parent.projectCwd ?? process.cwd(),
+        parentWorkspaceCwd,
         input.step.cwd,
       )
-    : input.parent.projectCwd ?? process.cwd();
-  let text = "";
-  let result: FlowV1NodeResult;
-  try {
-    for await (const event of runAgent({
-      runId: `${input.parent.runId}:${input.parent.node.id}:${input.executionId}`,
-      agent:
-        input.step.agent ?? input.parent.defaultAgent ?? "mock",
-      cwd,
-      prompt: renderCompositeTemplate(input.step.prompt, input.context),
-      title: input.step.label,
-      model: input.step.model ?? input.parent.defaultModel,
-      permissionMode:
-        input.step.permissionMode ??
-        input.parent.defaultPermissionMode,
-      signal: input.parent.signal,
-      metadata: {
-        flowVersionId: input.parent.versionId,
-        cycleId: input.parent.cycleId,
-        tickId: input.parent.runId,
-        nodeId: input.parent.node.id,
-        compositeExecutionId: input.executionId,
-        attemptId: attempt.id,
-      },
-    })) {
-      if (event.type === "session_ref") {
-        setFlowV1NodeAttemptAgentSession({
-          attemptId: attempt.id,
-          ownerToken: input.parent.ownerToken,
-          agentSessionId: event.session.agentSessionId,
-        });
-      } else if (event.type === "text_delta") {
-        text += event.text;
-      } else if (event.type === "error") {
-        result = failure(event.code, event.message);
-        finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
-        return result;
-      } else if (
-        event.type === "done" &&
-        (event.status === "failed" || event.status === "canceled")
-      ) {
-        result = failure(
-          event.status === "canceled"
-            ? "flow_agent_canceled"
-            : "flow_agent_failed",
-          event.reason ?? `Agent ${input.step.id} ${event.status}.`,
-        );
-        finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
-        return result;
-      }
+    : parentWorkspaceCwd;
+  let reviewWorkspace: Awaited<
+    ReturnType<typeof createFlowV1ReviewWorkspace>
+  > | null = null;
+  if (
+    input.step.execution?.access === "review" &&
+    input.step.execution.isolation === "required"
+  ) {
+    try {
+      reviewWorkspace = await createFlowV1ReviewWorkspace(cwd);
+    } catch (error) {
+      return failure(
+        "flow_review_workspace_failed",
+        error instanceof Error ? error.message : String(error),
+      );
     }
-    if (input.step.output === "json") {
-      const parsed: unknown = JSON.parse(text);
-      result = isJsonValue(parsed)
-        ? { status: "completed", output: parsed }
-        : failure(
-            "flow_agent_json_invalid",
-            `Agent ${input.step.id} returned a non-JSON value.`,
-          );
-    } else {
-      result = { status: "completed", output: text };
-    }
-  } catch (error) {
-    result = failure(
-      readErrorCode(error, "flow_agent_execution_failed"),
-      error instanceof Error ? error.message : String(error),
-    );
   }
-  finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
-  return result;
+  const executionCwd = reviewWorkspace?.cwd ?? cwd;
+  const basePrompt = renderCompositeTemplate(
+    input.step.prompt,
+    input.context,
+  );
+  const maxAttempts =
+    input.step.output?.kind === "json"
+      ? structuredValidationMaxAttempts(input.step.output)
+      : 1;
+  let validationError: string | undefined;
+  try {
+  for (let validationAttempt = 1; validationAttempt <= maxAttempts; validationAttempt += 1) {
+    const attempt = startFlowV1NodeAttempt({
+      cycleId: input.parent.cycleId,
+      runId: input.parent.runId,
+      ownerToken: input.parent.ownerToken,
+      nodeId: `${input.parent.node.id}.${input.step.id}`,
+      nodeInput: input.context,
+    });
+    let text = "";
+    let result: FlowV1NodeResult;
+    try {
+      for await (const event of runAgent({
+        runId: `${input.parent.runId}:${input.parent.node.id}:${input.executionId}:validation-${validationAttempt}`,
+        agent:
+          resolveAgentSetting(
+            input.step.agent,
+            input.parent.nodeInput,
+            `$config.${input.step.id}.agent`,
+          ) ?? input.parent.defaultAgent ?? "mock",
+        cwd: executionCwd,
+        prompt: validationError
+          ? appendStructuredOutputCorrection(basePrompt, validationError)
+          : basePrompt,
+        title: input.step.label,
+        model:
+          resolveAgentSetting(
+            input.step.model,
+            input.parent.nodeInput,
+            `$config.${input.step.id}.model`,
+          ) ?? input.parent.defaultModel,
+        permissionMode:
+          resolveAgentSetting(
+            input.step.permissionMode,
+            input.parent.nodeInput,
+            `$config.${input.step.id}.permissionMode`,
+          ) ??
+          input.parent.defaultPermissionMode,
+        signal: input.parent.signal,
+        metadata: {
+          flowVersionId: input.parent.versionId,
+          cycleId: input.parent.cycleId,
+          tickId: input.parent.runId,
+          nodeId: input.parent.node.id,
+          compositeExecutionId: input.executionId,
+          attemptId: attempt.id,
+        },
+      })) {
+        if (event.type === "session_ref") {
+          setFlowV1NodeAttemptAgentSession({
+            attemptId: attempt.id,
+            ownerToken: input.parent.ownerToken,
+            agentSessionId: event.session.agentSessionId,
+          });
+        } else if (event.type === "text_delta") {
+          text += event.text;
+        } else if (event.type === "error") {
+          result = failure(event.code, event.message);
+          finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
+          return result;
+        } else if (
+          event.type === "done" &&
+          (event.status === "failed" || event.status === "canceled")
+        ) {
+          result = failure(
+            event.status === "canceled"
+              ? "flow_agent_canceled"
+              : "flow_agent_failed",
+            event.reason ?? `Agent ${input.step.id} ${event.status}.`,
+          );
+          finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
+          return result;
+        }
+      }
+      if (input.step.output?.kind === "json") {
+        result = readStructuredAgentOutput(
+          input.step.id,
+          text,
+          input.step.output.schema,
+        );
+      } else {
+        result = { status: "completed", output: text };
+      }
+    } catch (error) {
+      result = failure(
+        readErrorCode(error, "flow_agent_execution_failed"),
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
+    if (
+      result.status !== "failed" ||
+      result.error.retryable !== true ||
+      validationAttempt >= maxAttempts
+    ) {
+      return result;
+    }
+    validationError = result.error.message;
+  }
+  return failure(
+    "flow_agent_json_invalid",
+    `Agent ${input.step.id} exhausted structured output validation attempts.`,
+  );
+  } finally {
+    await reviewWorkspace?.cleanup();
+  }
 }
 
 function finishCompositeAttempt(
@@ -1669,6 +1868,52 @@ function renderCompositeTemplate(
       return typeof value === "string" ? value : JSON.stringify(value);
     },
   );
+}
+
+function resolveAgentSetting(
+  setting: FlowV1Node["agent"],
+  nodeInput: FlowV1JsonObject,
+  inputKey: string,
+): string | undefined {
+  if (typeof setting === "string") {
+    return setting;
+  }
+  if (!setting) {
+    return undefined;
+  }
+  const resolved = nodeInput[inputKey];
+  return typeof resolved === "string" && resolved.trim()
+    ? resolved
+    : undefined;
+}
+
+function resolveWorkspaceCwd(
+  node: FlowV1Node,
+  nodeInput: FlowV1JsonObject,
+  projectCwd?: string,
+): string {
+  const base = path.resolve(projectCwd ?? process.cwd());
+  if (!node.workspace) {
+    return base;
+  }
+  const workspace = nodeInput["$workspace"];
+  if (!isObject(workspace) || typeof workspace.path !== "string") {
+    throw new FlowV1TickSupervisorError(
+      "flow_workspace_invalid",
+      `Node ${node.id} workspace must resolve to an object containing path.`,
+    );
+  }
+  const resolved = path.resolve(base, workspace.path);
+  if (
+    node.execution?.isolation === "required" &&
+    resolved === base
+  ) {
+    throw new FlowV1TickSupervisorError(
+      "flow_workspace_not_isolated",
+      `Node ${node.id} requires an isolated workspace.`,
+    );
+  }
+  return resolved;
 }
 
 function readLoopProgress(
@@ -1773,20 +2018,56 @@ async function executeAgent(
       `Agent ${input.node.id} has no prompt.`,
     );
   }
+  const workspaceCwd = resolveWorkspaceCwd(
+    input.node,
+    input.nodeInput,
+    input.projectCwd,
+  );
   const cwd = input.node.cwd
-    ? path.resolve(input.projectCwd ?? process.cwd(), input.node.cwd)
-    : input.projectCwd ?? process.cwd();
+    ? path.resolve(workspaceCwd, input.node.cwd)
+    : workspaceCwd;
+  let reviewWorkspace: Awaited<
+    ReturnType<typeof createFlowV1ReviewWorkspace>
+  > | null = null;
+  if (
+    input.node.execution?.access === "review" &&
+    input.node.execution.isolation === "required"
+  ) {
+    try {
+      reviewWorkspace = await createFlowV1ReviewWorkspace(cwd);
+    } catch (error) {
+      return failure(
+        "flow_review_workspace_failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+  const executionCwd = reviewWorkspace?.cwd ?? cwd;
   let text = "";
   try {
     for await (const event of runAgent({
       runId: `${input.runId}:${input.node.id}:${input.attemptId}`,
-      agent: input.node.agent ?? input.defaultAgent ?? "mock",
-      cwd,
+      agent:
+        resolveAgentSetting(
+          input.node.agent,
+          input.nodeInput,
+          "$config.agent",
+        ) ?? input.defaultAgent ?? "mock",
+      cwd: executionCwd,
       prompt: input.agentPrompt,
       title: input.node.label,
-      model: input.node.model ?? input.defaultModel,
+      model:
+        resolveAgentSetting(
+          input.node.model,
+          input.nodeInput,
+          "$config.model",
+        ) ?? input.defaultModel,
       permissionMode:
-        input.node.permissionMode ?? input.defaultPermissionMode,
+        resolveAgentSetting(
+          input.node.permissionMode,
+          input.nodeInput,
+          "$config.permissionMode",
+        ) ?? input.defaultPermissionMode,
       signal: input.signal,
       metadata: {
         flowVersionId: input.versionId,
@@ -1823,25 +2104,17 @@ async function executeAgent(
       readErrorCode(error, "flow_agent_execution_failed"),
       error instanceof Error ? error.message : String(error),
     );
+  } finally {
+    await reviewWorkspace?.cleanup();
   }
-  if (input.node.output !== "json") {
+  if (input.node.output?.kind !== "json") {
     return { status: "completed", output: text };
   }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (!isJsonValue(parsed)) {
-      return failure(
-        "flow_agent_json_invalid",
-        `Agent ${input.node.id} returned a non-JSON value.`,
-      );
-    }
-    return { status: "completed", output: parsed };
-  } catch {
-    return failure(
-      "flow_agent_json_invalid",
-      `Agent ${input.node.id} did not return valid JSON.`,
-    );
-  }
+  return readStructuredAgentOutput(
+    input.node.id,
+    text,
+    input.node.output.schema,
+  );
 }
 
 async function executeEffect(
@@ -1917,7 +2190,11 @@ async function executeEffect(
       file: input.node.file,
       exportName: "apply",
       context: input.nodeInput,
-      projectCwd: input.projectCwd,
+      projectCwd: resolveWorkspaceCwd(
+        input.node,
+        input.nodeInput,
+        input.projectCwd,
+      ),
       environment: input.environment,
       secrets: input.secrets,
       signal: input.signal,
@@ -1967,7 +2244,11 @@ async function runEffectReconcile(
         result: ledger.result,
       },
     },
-    projectCwd: input.projectCwd,
+    projectCwd: resolveWorkspaceCwd(
+      input.node,
+      input.nodeInput,
+      input.projectCwd,
+    ),
     environment: input.environment,
     secrets: input.secrets,
     signal: input.signal,
@@ -2147,6 +2428,28 @@ function readGateResult(
   );
 }
 
+function readCodeOutcomeResult(
+  node: FlowV1Node,
+  value: FlowV1JsonValue,
+): FlowV1NodeResult {
+  if (
+    !isObject(value) ||
+    typeof value.outcome !== "string" ||
+    !node.outcomes.includes(value.outcome) ||
+    (value.output !== undefined && !isJsonValue(value.output))
+  ) {
+    return failure(
+      "flow_code_outcome_invalid",
+      `${node.kind} ${node.id} returned an invalid or undeclared outcome.`,
+    );
+  }
+  return {
+    status: "completed",
+    outcome: value.outcome,
+    ...(value.output !== undefined ? { output: value.output } : {}),
+  };
+}
+
 function readEffectApplyResult(
   value: FlowV1JsonValue,
 ): FlowV1EffectApplyResult {
@@ -2261,27 +2564,54 @@ function attemptStatus(
   }
 }
 
-function shouldRetryScriptNode(
+function shouldRetryNode(
   node: FlowV1Node,
   result: FlowV1NodeResult,
   attempt: number,
 ): boolean {
-  return (
+  const scriptRetry =
     node.kind === "script" &&
     result.status === "failed" &&
     node.retry !== undefined &&
     attempt < node.retry.maxAttempts &&
-    node.retry.errorCodes.includes(result.error.code)
-  );
+    node.retry.errorCodes.includes(result.error.code);
+  const structuredAgentRetry =
+    node.kind === "agent" &&
+    node.output?.kind === "json" &&
+    result.status === "failed" &&
+    result.error.retryable === true &&
+    attempt < structuredValidationMaxAttempts(node.output);
+  return scriptRetry || structuredAgentRetry;
 }
 
 function isParallelReadyNode(node: FlowV1Node): boolean {
   return (
-    node.kind === "agent" ||
+    (node.kind === "agent" &&
+      !(
+        node.output?.kind === "json" &&
+        structuredValidationMaxAttempts(node.output) > 1
+      )) ||
     (node.kind === "script" && node.retry === undefined) ||
     node.kind === "gate" ||
     node.kind === "effect"
   );
+}
+
+function structuredValidationMaxAttempts(
+  output: Extract<NonNullable<FlowV1Node["output"]>, { kind: "json" }>,
+): number {
+  return output.validationMaxAttempts ?? (output.schema ? 2 : 1);
+}
+
+function appendStructuredOutputCorrection(
+  prompt: string,
+  validationError: string,
+): string {
+  return `${prompt}
+
+Your previous response was rejected by deterministic output validation:
+${validationError}
+Return only one corrected JSON value matching the declared schema.`;
 }
 
 async function waitForRetry(
@@ -2301,6 +2631,116 @@ async function waitForRetry(
     }
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function readStructuredAgentOutput(
+  nodeId: string,
+  text: string,
+  schema?: FlowV1JsonObject,
+): FlowV1NodeResult {
+  const parsed = extractJsonValue(text);
+  if (parsed === undefined || !isJsonValue(parsed)) {
+    return {
+      status: "failed",
+      error: {
+        code: "flow_agent_json_invalid",
+        message: `Agent ${nodeId} did not return a valid JSON value.`,
+        retryable: true,
+      },
+    };
+  }
+  const schemaError = schema ? validateJsonSchema(parsed, schema, "$") : null;
+  if (schemaError) {
+    return {
+      status: "failed",
+      error: {
+        code: "flow_agent_json_schema_invalid",
+        message: `Agent ${nodeId} output failed schema validation: ${schemaError}`,
+        retryable: true,
+      },
+    };
+  }
+  return { status: "completed", output: parsed };
+}
+
+function extractJsonValue(text: string): unknown {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const fenced = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu)].at(
+    -1,
+  )?.[1];
+  if (fenced) candidates.push(fenced.trim());
+  const objectStart = trimmed.indexOf("{");
+  const objectEnd = trimmed.lastIndexOf("}");
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(trimmed.slice(objectStart, objectEnd + 1));
+  }
+  const arrayStart = trimmed.indexOf("[");
+  const arrayEnd = trimmed.lastIndexOf("]");
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    candidates.push(trimmed.slice(arrayStart, arrayEnd + 1));
+  }
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next deterministic candidate.
+    }
+  }
+  return undefined;
+}
+
+function validateJsonSchema(
+  value: FlowV1JsonValue,
+  schema: FlowV1JsonObject,
+  pathLabel: string,
+): string | null {
+  if (Array.isArray(schema.enum) && !schema.enum.some((entry) => isDeepStrictEqual(entry, value))) {
+    return `${pathLabel} must be one of the declared enum values`;
+  }
+  const type = schema.type;
+  if (typeof type === "string") {
+    const matches =
+      type === "object"
+        ? isObject(value)
+        : type === "array"
+          ? Array.isArray(value)
+          : type === "string"
+            ? typeof value === "string"
+            : type === "number"
+              ? typeof value === "number"
+              : type === "integer"
+                ? typeof value === "number" && Number.isInteger(value)
+                : type === "boolean"
+                  ? typeof value === "boolean"
+                  : type === "null"
+                    ? value === null
+                    : true;
+    if (!matches) return `${pathLabel} must be ${type}`;
+  }
+  if (isObject(value)) {
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    for (const key of required) {
+      if (!(key in value)) return `${pathLabel}.${key} is required`;
+    }
+    if (isObject(schema.properties)) {
+      for (const [key, childSchema] of Object.entries(schema.properties)) {
+        if (key in value && isObject(childSchema)) {
+          const error = validateJsonSchema(value[key]!, childSchema, `${pathLabel}.${key}`);
+          if (error) return error;
+        }
+      }
+    }
+  }
+  if (Array.isArray(value) && isObject(schema.items)) {
+    for (const [index, item] of value.entries()) {
+      const error = validateJsonSchema(item, schema.items, `${pathLabel}[${index}]`);
+      if (error) return error;
+    }
+  }
+  return null;
 }
 
 function failure(code: string, message: string): FlowV1NodeResult {

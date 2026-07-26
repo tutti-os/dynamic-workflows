@@ -658,9 +658,11 @@ The runtime never classifies retryability by matching provider prose.
 
 ### 10.3 Agent retry
 
-The existing in-session transient continuation and JSON repair behavior is
-preserved. Retrying a failed node invalidates that node and its transitive
-downstream dependents while retaining unaffected upstream state.
+Typed JSON output is extracted and schema-validated deterministically. Invalid
+output receives bounded repair attempts (two by default, configurable from one
+to three); each attempt is durable and the exact validation failure is added
+to the repair prompt. Retrying a failed node invalidates that node and its
+transitive downstream dependents while retaining unaffected upstream state.
 
 ### 10.4 Effect retry
 

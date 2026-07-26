@@ -86,6 +86,79 @@ describe("Flow v1 Tick supervisor", () => {
     );
   });
 
+  it("retries invalid structured Agent output with deterministic validation feedback", async () => {
+    let invocation = 0;
+    runAgentMock.mockImplementation(async function* () {
+      invocation += 1;
+      yield {
+        type: "text_delta",
+        text:
+          invocation === 1
+            ? '{"status":"MAYBE"}'
+            : '{"status":"PASS"}',
+      };
+      yield { type: "done", status: "completed" };
+    });
+    const fixture = await createRunnableFlow(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const review = agent({
+              id: "review",
+              prompt: "Return the review result.",
+              output: json({
+                validationMaxAttempts: 2,
+                schema: {
+                  type: "object",
+                  required: ["status"],
+                  properties: {
+                    status: { enum: ["PASS", "FAIL"] },
+                  },
+                },
+              }),
+            });
+            const done = completeCycle({
+              id: "done",
+              outcome: "accepted",
+              inputs: { review },
+            });
+          `,
+        },
+      ]),
+    );
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const attempts = await import("@/lib/db/workflows/flow-attempts");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "structured-retry",
+      inputSnapshot: {},
+      paramsRevision: 1,
+      paramsSnapshot: {},
+    });
+
+    const result = await runFlowV1Tick({
+      runId: started.run.id,
+      projectCwd: dataDir,
+    });
+
+    expect(result.stopReason).toBe("cycle_completed");
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(runAgentMock.mock.calls[1]?.[0].prompt).toContain(
+      "failed schema validation",
+    );
+    expect(
+      attempts
+        .listFlowV1NodeAttempts(started.cycle.id)
+        .filter((attempt) => attempt.nodeId === "review")
+        .map((attempt) => attempt.status),
+    ).toEqual(["failed", "completed"]);
+  });
+
   it("retries Script only for declared structural error codes and records every Attempt", async () => {
     const fixture = await createRunnableFlow(scriptRetryBundle());
     const runtime = await import("@/lib/db/workflows/flow-runtime");
@@ -375,9 +448,9 @@ describe("Flow v1 Tick supervisor", () => {
     expect(result.stopReason).toBe("cycle_completed");
     expect(result.continuationRunId).toEqual(expect.any(String));
     expect(runtime.listFlowV1Cycles(fixture.flowId)).toEqual([
-      expect.objectContaining({ sequence: 3, status: "completed" }),
-      expect.objectContaining({ sequence: 2, status: "completed" }),
-      expect.objectContaining({ sequence: 1, status: "completed" }),
+      expect.objectContaining({ sequence: 3, status: "completed", outcome: "delivered" }),
+      expect.objectContaining({ sequence: 2, status: "completed", outcome: "delivered" }),
+      expect.objectContaining({ sequence: 1, status: "completed", outcome: "delivered" }),
     ]);
     expect(
       runtime.listFlowV1RunsForCycle(
@@ -545,6 +618,72 @@ describe("Flow v1 Tick supervisor", () => {
     ).toHaveLength(1);
   });
 
+  it("passes the previous iteration record explicitly into the next Loop round", async () => {
+    runAgentMock.mockImplementation(async function* (input) {
+      yield { type: "text_delta", text: input.prompt };
+      yield { type: "done", status: "completed" };
+    });
+    const fixture = await createRunnableFlow(loopHumanBundle());
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const humanTasks = await import("@/lib/db/workflows/human-tasks");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const first = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "loop-history-1",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    expect((await runFlowV1Tick({ runId: first.run.id })).stopReason).toBe(
+      "waiting_human",
+    );
+    const firstTask = humanTasks
+      .listFlowV1HumanTasks(first.cycle.id)
+      .find((task) => task.status === "pending")!;
+    humanTasks.resolveWorkflowHumanTask({
+      runId: first.run.id,
+      taskId: firstTask.id,
+      action: "revise",
+      values: { comment: "make the result smaller" },
+      revision: firstTask.revision,
+    });
+
+    const second = runtime.startFlowV1Tick({
+      cycleId: first.cycle.id,
+      origin: { kind: "user" },
+      idempotencyKey: "loop-history-2",
+    });
+    expect((await runFlowV1Tick({ runId: second.run.id })).stopReason).toBe(
+      "waiting_human",
+    );
+    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(runAgentMock.mock.calls[1]?.[0].prompt).toContain(
+      '"comment":"make the result smaller"',
+    );
+    const secondTask = humanTasks
+      .listFlowV1HumanTasks(first.cycle.id)
+      .find((task) => task.status === "pending")!;
+    humanTasks.resolveWorkflowHumanTask({
+      runId: second.run.id,
+      taskId: secondTask.id,
+      action: "approve",
+      values: {},
+      revision: secondTask.revision,
+    });
+
+    const third = runtime.startFlowV1Tick({
+      cycleId: first.cycle.id,
+      origin: { kind: "user" },
+      idempotencyKey: "loop-history-3",
+    });
+    expect((await runFlowV1Tick({ runId: third.run.id })).stopReason).toBe(
+      "cycle_completed",
+    );
+  });
+
   it("runs bounded Map Agent pipelines and records skipped item failures", async () => {
     let activeAgents = 0;
     let maxActiveAgents = 0;
@@ -563,7 +702,13 @@ describe("Flow v1 Tick supervisor", () => {
         }
         yield {
           type: "text_delta",
-          text: JSON.stringify({ migrated: input.prompt }),
+          text: input.prompt.startsWith("Verify")
+            ? JSON.stringify({
+                status: input.prompt.includes("good-b")
+                  ? "REJECTED"
+                  : "VERIFIED",
+              })
+            : JSON.stringify({ migrated: input.prompt }),
         };
         yield { type: "done", status: "completed" };
       } finally {
@@ -594,8 +739,10 @@ describe("Flow v1 Tick supervisor", () => {
             status: "completed",
             output: expect.objectContaining({
               total: 3,
-              items: [
+              succeeded: [
                 expect.objectContaining({ index: 0, item: "good-a" }),
+              ],
+              rejected: [
                 expect.objectContaining({ index: 2, item: "good-b" }),
               ],
               failed: [
@@ -610,6 +757,82 @@ describe("Flow v1 Tick supervisor", () => {
         }),
       }),
     );
+  });
+
+  it("routes exhausted Loops to a completed business outcome", async () => {
+    runAgentMock.mockImplementation(async function* () {
+      yield {
+        type: "text_delta",
+        text: JSON.stringify({ status: "FAIL", blockers: ["still broken"] }),
+      };
+      yield { type: "done", status: "completed" };
+    });
+    const fixture = await createRunnableFlow(loopOutcomeBundle(), {
+      maxRounds: 2,
+    });
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "loop-outcome",
+      inputSnapshot: {},
+      paramsRevision: 1,
+      paramsSnapshot: { maxRounds: 2 },
+    });
+
+    expect((await runFlowV1Tick({ runId: started.run.id })).stopReason).toBe(
+      "cycle_completed",
+    );
+    expect(runtime.getFlowV1Cycle(started.cycle.id)).toEqual(
+      expect.objectContaining({
+        status: "completed",
+        outcome: "not_accepted",
+      }),
+    );
+    expect(runtime.getFlowV1CycleCheckpoint(started.cycle.id)?.state).toEqual(
+      expect.objectContaining({
+        nodes: expect.objectContaining({
+          acceptance: expect.objectContaining({ outcome: "exhausted" }),
+        }),
+      }),
+    );
+  });
+
+  it("safely serializes write Maps when the local host cannot isolate items", async () => {
+    let activeAgents = 0;
+    let maxActiveAgents = 0;
+    runAgentMock.mockImplementation(async function* (input) {
+      activeAgents += 1;
+      maxActiveAgents = Math.max(maxActiveAgents, activeAgents);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      yield {
+        type: "text_delta",
+        text: input.prompt.startsWith("Verify")
+          ? JSON.stringify({ status: "VERIFIED" })
+          : JSON.stringify({ migrated: true }),
+      };
+      yield { type: "done", status: "completed" };
+      activeAgents -= 1;
+    });
+    const fixture = await createRunnableFlow(mapBundle(true));
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "isolated-map",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    expect((await runFlowV1Tick({ runId: started.run.id })).stopReason).toBe(
+      "cycle_completed",
+    );
+    expect(maxActiveAgents).toBe(1);
   });
 });
 
@@ -744,6 +967,7 @@ function immediateContinuationBundle() {
         };
         const done = completeCycle({
           id: "done",
+          outcome: "delivered",
           continue: "immediate",
         });
       `,
@@ -890,7 +1114,7 @@ function loopHumanBundle() {
           steps: [
             agent({
               id: "propose",
-              prompt: "Create proposal {{iteration}}",
+              prompt: "Create proposal {{iteration}} from {{previousIteration}}",
             }),
             human({
               id: "approve",
@@ -908,6 +1132,19 @@ function loopHumanBundle() {
                   intent: "primary",
                   fields: [],
                 },
+                {
+                  id: "revise",
+                  label: "Revise",
+                  intent: "default",
+                  fields: [
+                    {
+                      id: "comment",
+                      type: "textarea",
+                      label: "Comment",
+                      required: true,
+                    },
+                  ],
+                },
               ],
             }),
           ],
@@ -922,7 +1159,7 @@ function loopHumanBundle() {
   ]);
 }
 
-function mapBundle() {
+function mapBundle(requireIsolation = false) {
   return createFlowV1Bundle([
     {
       path: "flow.js",
@@ -936,11 +1173,27 @@ function mapBundle() {
           id: "migrate",
           source: ref("discover.items"),
           maxItems: 10,
+          ${
+            requireIsolation
+              ? 'execution: { access: "write", isolation: "required" },'
+              : ""
+          }
           onItemFailure: "skip",
+          onItemRejected: "collect",
+          itemOutcome: {
+            source: "verify_one.status",
+            success: ["VERIFIED"],
+            rejected: ["REJECTED"],
+          },
           steps: [
             agent({
               id: "migrate_one",
               prompt: "Migrate {{item}}",
+              output: "json",
+            }),
+            agent({
+              id: "verify_one",
+              prompt: "Verify {{item}} from {{previous}}",
               output: "json",
             }),
           ],
@@ -959,9 +1212,57 @@ function mapBundle() {
   ]);
 }
 
+function loopOutcomeBundle() {
+  return createFlowV1Bundle([
+    {
+      path: "flow.js",
+      content: `
+        export const schemaVersion = "tutti.flow.v1";
+        export const params = defineParams({
+          maxRounds: numberParam({ default: 2, min: 1, max: 10 }),
+        });
+        const acceptance = loop({
+          id: "acceptance",
+          maxIterations: ref("params.maxRounds"),
+          onMaxIterations: "complete",
+          steps: [
+            agent({
+              id: "review",
+              prompt: "Review",
+              output: json({ schema: {
+                type: "object",
+                required: ["status", "blockers"],
+                properties: {
+                  status: { enum: ["PASS", "FAIL"] },
+                  blockers: { type: "array" },
+                },
+              } }),
+            }),
+          ],
+          until: { source: "review", finalStatus: "PASS" },
+        });
+        const accepted = completeCycle({
+          id: "accepted",
+          outcome: "accepted",
+          inputs: { acceptance },
+        });
+        const notAccepted = completeCycle({
+          id: "not_accepted",
+          outcome: "not_accepted",
+          inputs: { acceptance },
+        });
+        route(acceptance, {
+          matched: accepted,
+          exhausted: notAccepted,
+        });
+      `,
+    },
+  ]);
+}
+
 async function createRunnableFlow(
   bundle: ReturnType<typeof createFlowV1Bundle>,
-  params?: Record<string, string>,
+  params?: Record<string, string | number>,
 ) {
   const { createFlowV1 } = await import("./flow-service");
   const created = createFlowV1({ bundle, params });

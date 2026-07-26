@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
  * Version 17 is the Flow v1 cutover. It intentionally rebuilds workflow
  * storage instead of migrating the removed script workflow runtime.
  */
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -184,6 +184,7 @@ function createFlowV1Schema(database: Database.Database): void {
       sequence INTEGER NOT NULL,
       flow_version_id TEXT NOT NULL,
       status TEXT NOT NULL,
+      outcome TEXT,
       current_node_id TEXT,
       input_snapshot_json TEXT NOT NULL,
       params_revision INTEGER NOT NULL,

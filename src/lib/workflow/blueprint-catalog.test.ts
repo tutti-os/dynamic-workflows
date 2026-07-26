@@ -19,6 +19,15 @@ describe("workflow blueprint catalog", () => {
     const ids = blueprints.map((blueprint) => blueprint.id);
 
     expect(ids).toEqual([
+      "human-feedback-loop-v1",
+      "loop-primitive-rd-acceptance-test-v1",
+      "rd-human-acceptance-delivery-v1",
+      "parallel-review-synthesis-v1",
+      "map-fan-out-demo-v1",
+      "repo-migration-sweep-v1",
+      "research-fanout-report-v1",
+      "release-readiness-check-v1",
+      "epic-breakdown-plan-v1",
       "large-file-governance-v1",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
@@ -66,6 +75,103 @@ describe("workflow blueprint catalog", () => {
       expect(parsed.meta.requiresCwd).toBe(blueprint.requiresCwd);
       expect(parsed.meta.name).toBe(blueprint.title);
       expect(parsed.nodes.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("preserves the pre-cutover Blueprint goals on the Flow v1 runtime", () => {
+    const expectedShapes: Record<string, string[]> = {
+      "human-feedback-loop-v1": ["loop", "complete_cycle"],
+      "loop-primitive-rd-acceptance-test-v1": [
+        "effect",
+        "loop",
+        "agent",
+        "agent",
+        "script",
+        "effect",
+        "effect",
+        "effect",
+        "complete_cycle",
+        "complete_cycle",
+        "complete_cycle",
+        "finally",
+      ],
+      "rd-human-acceptance-delivery-v1": [
+        "effect",
+        "loop",
+        "loop",
+        "agent",
+        "agent",
+        "script",
+        "effect",
+        "effect",
+        "effect",
+        "complete_cycle",
+        "complete_cycle",
+        "complete_cycle",
+        "finally",
+      ],
+      "parallel-review-synthesis-v1": [
+        "agent",
+        "agent",
+        "agent",
+        "agent",
+        "agent",
+        "complete_cycle",
+      ],
+      "map-fan-out-demo-v1": [
+        "agent",
+        "map",
+        "agent",
+        "complete_cycle",
+      ],
+      "repo-migration-sweep-v1": [
+        "effect",
+        "agent",
+        "map",
+        "loop",
+        "agent",
+        "agent",
+        "script",
+        "effect",
+        "effect",
+        "effect",
+        "complete_cycle",
+        "complete_cycle",
+        "complete_cycle",
+        "finally",
+      ],
+      "research-fanout-report-v1": [
+        "agent",
+        "map",
+        "agent",
+        "complete_cycle",
+      ],
+      "release-readiness-check-v1": [
+        "map",
+        "agent",
+        "human",
+        "transform",
+        "complete_cycle",
+        "complete_cycle",
+      ],
+      "epic-breakdown-plan-v1": [
+        "loop",
+        "transform",
+        "map",
+        "agent",
+        "complete_cycle",
+      ],
+    };
+
+    for (const [id, expectedKinds] of Object.entries(expectedShapes)) {
+      const blueprint = getWorkflowBlueprint(id);
+      expect(blueprint, id).toBeDefined();
+      const parsed = parseFlowV1Bundle(blueprint!.bundle);
+      expect(parsed.diagnostics, id).toEqual([]);
+      expect(
+        parsed.nodes.map((node) => node.kind),
+        id,
+      ).toEqual(expectedKinds);
     }
   });
 

@@ -152,11 +152,11 @@ export function applyFlowV1NodeResult(
   switch (result.status) {
     case "completed":
       if (
-        node.kind === "gate" &&
+        node.outcomes.length > 0 &&
         (!result.outcome || !node.outcomes.includes(result.outcome))
       ) {
         throw new Error(
-          `Gate ${nodeId} returned an undeclared control outcome.`,
+          `Node ${nodeId} returned an undeclared control outcome.`,
         );
       }
       state.status = "completed";

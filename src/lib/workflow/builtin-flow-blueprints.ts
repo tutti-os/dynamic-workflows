@@ -1,7 +1,9 @@
 import { createFlowV1Bundle } from "@/lib/flow-v1/bundle";
 import type { WorkflowBlueprintDetail } from "./blueprint-types";
+import { PRESERVED_FLOW_V1_BLUEPRINTS } from "./preserved-flow-blueprints";
 
 export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
+  ...PRESERVED_FLOW_V1_BLUEPRINTS,
   {
     id: "large-file-governance-v1",
     title: "Large File Governance Loop",
@@ -71,6 +73,10 @@ export const memory = defineMemory({
       title: "Timeline",
       update: "append",
     },
+    decisions: {
+      title: "Decisions",
+      update: "append",
+    },
   },
 });
 
@@ -83,16 +89,34 @@ const sync = effect({
 const candidate = script({
   id: "find_large_file",
   file: "scripts/find-large-file.mjs",
+  outcomes: ["found", "empty"],
   inputs: {
     sync,
     threshold: ref("params.lineThreshold"),
   },
 });
+const noWork = completeCycle({
+  id: "no_work",
+  outcome: "no_work",
+  continue: "scheduled",
+  inputs: { candidate },
+});
 const plan = agent({
   id: "plan_refactor",
   inputs: { candidate },
-  memory: { include: ["currentUnderstanding"] },
-  output: "json",
+  memory: { include: ["currentUnderstanding", "decisions"] },
+  output: json({ schema: {
+    type: "object",
+    required: ["title", "rationale", "boundaries", "orderedSteps", "tests", "risks"],
+    properties: {
+      title: { type: "string" },
+      rationale: { type: "string" },
+      boundaries: { type: "array" },
+      orderedSteps: { type: "array" },
+      tests: { type: "array" },
+      risks: { type: "array" },
+    },
+  } }),
   prompt: "Inspect {{candidate.path}} ({{candidate.lines}} lines). Return JSON with title, rationale, boundaries, orderedSteps, tests, and risks. Do not edit files.",
 });
 const issue = effect({
@@ -113,6 +137,7 @@ const workspace = effect({
   inputs: {
     approval,
     candidate,
+    sync,
     mainBranch: ref("params.mainBranch"),
   },
   idempotencyKey: template("{{cycle.id}}:prepare-workspace"),
@@ -120,14 +145,62 @@ const workspace = effect({
 const implement = agent({
   id: "implement_plan",
   inputs: { candidate, plan, approval, workspace },
+  workspace,
+  execution: { access: "write", isolation: "required" },
   permissionMode: "workspace-write",
   prompt: "Work only inside the prepared git worktree at {{workspace.path}} on branch {{workspace.branch}}. Implement the approved refactor plan for {{candidate.path}}. Follow {{plan}}, run focused tests there, and leave that worktree ready for review. Do not modify the parent checkout.",
+});
+const changes = script({
+  id: "check_changes",
+  file: "scripts/check-changes.mjs",
+  inputs: { implement, workspace },
+  workspace,
+  execution: { access: "write", isolation: "required" },
+  outcomes: ["changed", "no_changes"],
+});
+const commit = effect({
+  id: "commit_changes",
+  file: "scripts/commit-changes.mjs",
+  inputs: { changes, candidate, workspace },
+  workspace,
+  execution: { access: "write", isolation: "required" },
+  idempotencyKey: template("{{cycle.id}}:commit"),
+});
+const push = effect({
+  id: "push_branch",
+  file: "scripts/push-branch.mjs",
+  inputs: { commit, workspace },
+  workspace,
+  execution: { access: "write", isolation: "required" },
+  idempotencyKey: template("{{cycle.id}}:push"),
 });
 const pullRequest = effect({
   id: "create_pull_request",
   file: "scripts/create-pr.mjs",
-  inputs: { issue, candidate, plan, implement, workspace },
+  inputs: {
+    issue,
+    candidate,
+    plan,
+    commit,
+    push,
+    workspace,
+    mainBranch: ref("params.mainBranch"),
+  },
+  workspace,
+  execution: { access: "write", isolation: "required" },
   idempotencyKey: template("{{cycle.id}}:create-pr"),
+});
+const noChangesIssue = effect({
+  id: "close_no_changes_issue",
+  file: "scripts/resolve-issue.mjs",
+  inputs: { issue, changes },
+  idempotencyKey: template("{{cycle.id}}:close-no-changes"),
+});
+const noChanges = completeCycle({
+  id: "no_changes",
+  outcome: "no_changes",
+  continue: "scheduled",
+  inputs: { noChangesIssue },
 });
 const merged = gate({
   id: "wait_pull_request_merge",
@@ -141,33 +214,51 @@ const closeIssue = effect({
   inputs: { issue, pullRequest, merged },
   idempotencyKey: template("{{cycle.id}}:close-issue"),
 });
+const memoryUpdate = transform({
+  id: "build_memory_update",
+  file: "scripts/build-memory-update.mjs",
+  inputs: { candidate, plan, issue, pullRequest, merged, closeIssue },
+});
 const rememberResult = remember({
   id: "remember_result",
-  inputs: { candidate, pullRequest, closeIssue },
+  inputs: { memoryUpdate },
   updates: {
     currentUnderstanding: {
       mode: "replace",
-      value: ref("candidate.path"),
+      value: ref("memoryUpdate.currentUnderstanding"),
     },
     timeline: {
       mode: "append",
-      value: ref("pullRequest.url"),
+      value: ref("memoryUpdate.timeline"),
+    },
+    decisions: {
+      mode: "append",
+      value: ref("memoryUpdate.decision"),
     },
   },
 });
 const complete = completeCycle({
   id: "complete",
+  outcome: "delivered",
   inputs: { rememberResult },
   continue: "immediate",
 });
 const rejected = cancelCycle({
   id: "rejected",
+  outcome: "plan_rejected",
   inputs: { approval },
   continue: "scheduled",
 });
-const pullRequestClosed = cancelCycle({
+const rejectedDeliveryIssue = effect({
+  id: "close_rejected_delivery_issue",
+  file: "scripts/resolve-issue.mjs",
+  inputs: { issue, pullRequest, merged },
+  idempotencyKey: template("{{cycle.id}}:close-rejected-delivery"),
+});
+const pullRequestClosed = completeCycle({
   id: "pull_request_closed",
-  inputs: { merged },
+  outcome: "delivery_rejected",
+  inputs: { rejectedDeliveryIssue, merged },
   continue: "scheduled",
 });
 finalize({
@@ -177,7 +268,9 @@ finalize({
   retainOnFailure: true,
 });
 route(approval, { approved: workspace, rejected });
-route(merged, { merged: closeIssue, closed: pullRequestClosed });
+route(changes, { changed: commit, no_changes: noChangesIssue });
+route(merged, { merged: closeIssue, closed: rejectedDeliveryIssue });
+route(candidate, { found: plan, empty: noWork });
 `,
       },
       {
@@ -190,49 +283,84 @@ No file has been refactored yet.
 
 <!-- flow-memory:section:timeline:start -->
 <!-- flow-memory:section:timeline:end -->
+
+<!-- flow-memory:section:decisions:start -->
+<!-- flow-memory:section:decisions:end -->
+`,
+      },
+      {
+        path: "scripts/build-memory-update.mjs",
+        content: `export async function run(ctx) {
+  const currentUnderstanding = [
+    "Candidate: " + ctx.candidate.path + " (" + ctx.candidate.lines + " lines)",
+    "Issue: " + ctx.issue.url,
+    "Pull request: " + ctx.pullRequest.url,
+    "Merged: " + Boolean(ctx.merged?.mergedAt),
+    "Plan: " + JSON.stringify(ctx.plan),
+  ].join("\\n");
+  return {
+    currentUnderstanding,
+    decision: "Cycle " + ctx.cycle.id + ": approved plan for " + ctx.candidate.path,
+    timeline: "Cycle " + ctx.cycle.id + ": merged " + ctx.pullRequest.url,
+  };
+}
 `,
       },
       {
         path: "scripts/sync-main.mjs",
-        content: `import { execFileSync } from "node:child_process";
+        content: `import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
-export async function apply(ctx) {
-  git(["checkout", ctx.branch]);
-  git(["pull", "--ff-only", "origin", ctx.branch]);
-  return { output: { branch: ctx.branch, commit: git(["rev-parse", "HEAD"]) } };
+function marker(ctx) {
+  const commonDir = path.resolve(process.cwd(), git(["rev-parse", "--git-common-dir"]));
+  return path.join(commonDir, "tutti-flow-state", "sync-" + ctx.cycle.id + ".json");
 }
-export async function reconcile() {
-  return { status: "not_applied" };
+export async function apply(ctx) {
+  git(["fetch", "origin", ctx.branch]);
+  const output = { branch: ctx.branch, commit: git(["rev-parse", "origin/" + ctx.branch]) };
+  const file = marker(ctx);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file + ".tmp", JSON.stringify(output));
+  fs.renameSync(file + ".tmp", file);
+  return { externalRef: file, output };
+}
+export async function reconcile(ctx) {
+  try {
+    const output = JSON.parse(fs.readFileSync(marker(ctx), "utf8"));
+    return output.branch === ctx.branch && typeof output.commit === "string"
+      ? { status: "completed", externalRef: marker(ctx), output }
+      : { status: "unknown", reason: "Sync marker does not match the requested branch." };
+  } catch {
+    return { status: "not_applied" };
+  }
 }
 `,
       },
       {
         path: "scripts/find-large-file.mjs",
-        content: `import fs from "node:fs";
+        content: `import { execFileSync } from "node:child_process";
 import path from "node:path";
-const ignored = new Set([".git", "node_modules", ".next", "dist", "build", "coverage"]);
 const extensions = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java"]);
-function visit(directory, found) {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (ignored.has(entry.name)) continue;
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) visit(absolute, found);
-    else if (entry.isFile() && extensions.has(path.extname(entry.name))) {
-      const lines = fs.readFileSync(absolute, "utf8").split(/\\r?\\n/u).length;
-      found.push({ path: path.relative(process.cwd(), absolute), lines });
-    }
-  }
-}
+const ignored = /^(?:node_modules|\\.next|dist|build|coverage)\\//u;
+function git(args) { return execFileSync("git", args, { encoding: "utf8" }); }
 export async function run(ctx) {
-  const files = [];
-  visit(process.cwd(), files);
+  const paths = git(["ls-tree", "-r", "--name-only", ctx.sync.commit])
+    .trim()
+    .split(/\\r?\\n/u)
+    .filter((file) => file && !ignored.test(file) && extensions.has(path.extname(file)));
+  const files = paths.map((file) => ({
+    path: file,
+    lines: git(["show", ctx.sync.commit + ":" + file]).split(/\\r?\\n/u).length,
+  }));
   const candidate = files
     .filter((file) => file.lines >= ctx.threshold)
     .sort((left, right) => right.lines - left.lines || left.path.localeCompare(right.path))[0];
-  if (!candidate) throw new Error("No source file exceeds the configured threshold.");
-  return candidate;
+  return candidate
+    ? { outcome: "found", output: candidate }
+    : { outcome: "empty", output: { reason: "No source file exceeds the configured threshold." } };
 }
 `,
       },
@@ -296,7 +424,7 @@ export async function apply(ctx) {
       "-B",
       workspace.branch,
       workspace.path,
-      "origin/" + ctx.mainBranch,
+      ctx.sync.commit,
     ]);
   }
   return {
@@ -331,28 +459,97 @@ export async function reconcile(ctx) {
 `,
       },
       {
+        path: "scripts/check-changes.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
+export async function run() {
+  const status = git(["status", "--porcelain"]);
+  return status
+    ? { outcome: "changed", output: { status } }
+    : { outcome: "no_changes", output: { reason: "Implementation produced no repository changes." } };
+}
+`,
+      },
+      {
+        path: "scripts/commit-changes.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
+function marker(ctx) { return "Flow-Cycle: " + ctx.cycle.id; }
+export async function apply(ctx) {
+  git(["add", "-A"]);
+  git(["commit", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
+  return { externalRef: git(["rev-parse", "HEAD"]), output: { sha: git(["rev-parse", "HEAD"]) } };
+}
+export async function reconcile(ctx) {
+  const records = git(["log", "-n", "100", "--format=%H%x00%B%x00"]).split("\\u0000");
+  for (let index = 0; index + 1 < records.length; index += 2) {
+    if (records[index + 1].includes(marker(ctx))) {
+      return { status: "completed", externalRef: records[index], output: { sha: records[index] } };
+    }
+  }
+  return { status: "not_applied" };
+}
+`,
+      },
+      {
+        path: "scripts/push-branch.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
+function remoteSha(branch) {
+  const line = git(["ls-remote", "origin", "refs/heads/" + branch]);
+  return line ? line.split(/\\s+/u)[0] : "";
+}
+export async function apply(ctx) {
+  git(["push", "-u", "origin", ctx.commit.sha + ":refs/heads/" + ctx.workspace.branch]);
+  return { externalRef: ctx.workspace.branch, output: { branch: ctx.workspace.branch, sha: ctx.commit.sha } };
+}
+export async function reconcile(ctx) {
+  return remoteSha(ctx.workspace.branch) === ctx.commit.sha
+    ? { status: "completed", externalRef: ctx.workspace.branch, output: { branch: ctx.workspace.branch, sha: ctx.commit.sha } }
+    : { status: "not_applied" };
+}
+`,
+      },
+      {
         path: "scripts/create-pr.mjs",
         content: `import { execFileSync } from "node:child_process";
 function run(command, args, cwd = process.cwd()) {
   return execFileSync(command, args, { cwd, encoding: "utf8" }).trim();
 }
 export async function apply(ctx) {
-  const cwd = ctx.workspace.path;
-  run("git", ["add", "-A"], cwd);
-  run("git", ["commit", "-m", "refactor: split " + ctx.candidate.path], cwd);
-  run("git", ["push", "-u", "origin", ctx.workspace.branch], cwd);
-  const url = run("gh", ["pr", "create", "--head", ctx.workspace.branch, "--title", "Refactor " + ctx.candidate.path, "--body", "Closes " + ctx.issue.url], cwd);
+  const url = run("gh", ["pr", "create", "--head", ctx.push.branch, "--base", ctx.mainBranch, "--title", "Refactor " + ctx.candidate.path, "--body", "Closes " + ctx.issue.url]);
   return {
     externalRef: url,
-    output: { url, branch: ctx.workspace.branch, workspace: cwd },
+    output: { url, branch: ctx.push.branch, commit: ctx.commit.sha },
   };
 }
 export async function reconcile(ctx) {
-  const branch = ctx.workspace.branch;
-  const raw = run("gh", ["pr", "list", "--state", "all", "--head", branch, "--json", "url,headRefName"], ctx.workspace.path);
+  const branch = ctx.push.branch;
+  const raw = run("gh", ["pr", "list", "--state", "all", "--head", branch, "--json", "url,headRefName"]);
   const pullRequest = JSON.parse(raw)[0];
   return pullRequest
     ? { status: "completed", externalRef: pullRequest.url, output: { url: pullRequest.url, branch } }
+    : { status: "not_applied" };
+}
+`,
+      },
+      {
+        path: "scripts/resolve-issue.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
+function reason(ctx) {
+  return ctx.pullRequest?.url
+    ? "Pull request was closed without merge: " + ctx.pullRequest.url
+    : "Implementation produced no repository changes.";
+}
+export async function apply(ctx) {
+  gh(["issue", "close", ctx.issue.url, "--comment", reason(ctx)]);
+  return { externalRef: ctx.issue.url, output: { url: ctx.issue.url, closed: true, reason: reason(ctx) } };
+}
+export async function reconcile(ctx) {
+  const issue = JSON.parse(gh(["issue", "view", ctx.issue.url, "--json", "state,url"]));
+  return issue.state === "CLOSED"
+    ? { status: "completed", externalRef: issue.url, output: { url: issue.url, closed: true } }
     : { status: "not_applied" };
 }
 `,

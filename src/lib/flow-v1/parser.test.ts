@@ -164,6 +164,112 @@ describe("flow v1 parser", () => {
     );
   });
 
+  it("parses Transform, typed output retry, and isolated review contracts", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const workspace = effect({
+              id: "workspace",
+              file: "scripts/workspace.mjs",
+              idempotencyKey: template("{{cycle.id}}:workspace"),
+            });
+            const project = transform({
+              id: "project",
+              file: "scripts/project.mjs",
+              inputs: { workspace },
+            });
+            const acceptance = loop({
+              id: "acceptance",
+              inputs: { workspace, project },
+              workspace,
+              execution: { access: "write", isolation: "required" },
+              maxIterations: 2,
+              onMaxIterations: "complete",
+              steps: [
+                agent({
+                  id: "review",
+                  prompt: "Review repository truth.",
+                  execution: { access: "review", isolation: "required" },
+                  output: json({
+                    validationMaxAttempts: 3,
+                    schema: {
+                      type: "object",
+                      required: ["status"],
+                      properties: {
+                        status: { enum: ["PASS", "FAIL"] },
+                      },
+                    },
+                  }),
+                }),
+              ],
+              until: { source: "review", finalStatus: "PASS" },
+            });
+            const done = completeCycle({
+              id: "done",
+              outcome: "accepted",
+              inputs: { acceptance },
+            });
+          `,
+        },
+        {
+          path: "scripts/workspace.mjs",
+          content:
+            "export async function apply() { return {}; }\nexport async function reconcile() { return { status: 'not_applied' }; }",
+        },
+        {
+          path: "scripts/project.mjs",
+          content: "export async function run(ctx) { return ctx; }",
+        },
+      ]),
+    );
+
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.nodes.find((node) => node.id === "project")?.kind).toBe(
+      "transform",
+    );
+    const acceptance = parsed.nodes.find(
+      (node) => node.id === "acceptance",
+    );
+    expect(acceptance?.execution).toEqual({
+      access: "write",
+      isolation: "required",
+    });
+    expect(acceptance?.loop?.steps[0]).toEqual(
+      expect.objectContaining({
+        execution: { access: "review", isolation: "required" },
+        output: expect.objectContaining({
+          kind: "json",
+          validationMaxAttempts: 3,
+        }),
+      }),
+    );
+  });
+
+  it("rejects unbounded structured output validation attempts", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const review = agent({
+              id: "review",
+              prompt: "Review.",
+              output: json({ validationMaxAttempts: 99 }),
+            });
+            const done = completeCycle({ id: "done", inputs: { review } });
+          `,
+        },
+      ]),
+    );
+    expect(parsed.diagnostics.map((entry) => entry.code)).toContain(
+      "flow.agent_output_validation_attempts_invalid",
+    );
+  });
+
   it("parses Human task actions as control outcomes", () => {
     const parsed = parseFlowV1Bundle(
       createFlowV1Bundle([

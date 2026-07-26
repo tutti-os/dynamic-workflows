@@ -1,7 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import type { FlowV1DetailProjection } from "@/lib/flow-v1/types";
+import type {
+  FlowV1DetailProjection,
+  FlowV1NodeAttemptRecord,
+} from "@/lib/flow-v1/types";
 import type {
   WorkflowHumanAction,
   WorkflowHumanTask,
@@ -127,7 +130,7 @@ export function FlowRuntimeOverview(props: {
             {currentState?.waitingReason ??
               currentState?.error?.message ??
               (selectedCycle
-                ? `Cycle #${selectedCycle.sequence} is ${selectedCycle.status}.`
+                ? `Cycle #${selectedCycle.sequence} is ${selectedCycle.status}${selectedCycle.outcome ? ` with outcome ${selectedCycle.outcome}` : ""}.`
                 : "This Flow has not started a Cycle yet.")}
           </p>
         </div>
@@ -203,7 +206,7 @@ export function FlowRuntimeOverview(props: {
           label="Cycle"
           value={
             selectedCycle
-              ? `#${selectedCycle.sequence} · ${selectedCycle.status}`
+              ? `#${selectedCycle.sequence} · ${selectedCycle.status}${selectedCycle.outcome ? ` · ${selectedCycle.outcome}` : ""}`
               : "not started"
           }
         />
@@ -266,6 +269,14 @@ function DesignView(props: {
                 .map((input) => input.expression)
                 .join(", ") || "root"}
             </small>
+            {node.execution ? (
+              <small>
+                {node.execution.access} · {node.execution.isolation}
+                {node.workspace
+                  ? ` · workspace ${node.workspace.expression}`
+                  : ""}
+              </small>
+            ) : null}
           </div>
         ))}
       </div>
@@ -468,6 +479,7 @@ function LiveView(props: {
               <span className="flow-runtime-node-kind">{node.kind}</span>
               <strong>{node.label}</strong>
               <span>{state?.status ?? "idle"}</span>
+              {state?.outcome ? <small>Outcome: {state.outcome}</small> : null}
               {state?.attemptCount ? (
                 <small>{state.attemptCount} attempt(s)</small>
               ) : null}
@@ -483,7 +495,9 @@ function LiveView(props: {
           rows={props.projection.cycles.map((cycle) => ({
             id: cycle.id,
             primary: `Cycle #${cycle.sequence}`,
-            secondary: cycle.status,
+            secondary: cycle.outcome
+              ? `${cycle.status} · ${cycle.outcome}`
+              : cycle.status,
             timestamp: cycle.createdAt,
           }))}
         />
@@ -697,10 +711,21 @@ function humanFieldKey(
 }
 
 function ReviewView(props: { projection: FlowV1DetailProjection }) {
+  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(
+    props.projection.attempts.at(-1)?.id ?? null,
+  );
+  const selectedAttempt =
+    props.projection.attempts.find(
+      (attempt) => attempt.id === selectedAttemptId,
+    ) ??
+    props.projection.attempts.at(-1) ??
+    null;
   return (
     <div className="flow-runtime-panel flow-runtime-review">
       <HistoryList
         title="Node Attempts"
+        selectedId={selectedAttempt?.id}
+        onSelect={setSelectedAttemptId}
         rows={props.projection.attempts.map((attempt) => ({
           id: attempt.id,
           primary: `${attempt.nodeId} · #${attempt.sequence}`,
@@ -711,6 +736,7 @@ function ReviewView(props: { projection: FlowV1DetailProjection }) {
           timestamp: attempt.startedAt,
         }))}
       />
+      <AttemptDetail attempt={selectedAttempt} />
       <HistoryList
         title="Effect ledger"
         rows={props.projection.effects.map((effect) => ({
@@ -718,6 +744,15 @@ function ReviewView(props: { projection: FlowV1DetailProjection }) {
           primary: effect.nodeId,
           secondary: `${effect.status} · ${effect.externalRef ?? effect.idempotencyKey}`,
           timestamp: effect.updatedAt,
+        }))}
+      />
+      <HistoryList
+        title="Human decision history"
+        rows={props.projection.humanTasks.map((task) => ({
+          id: task.id,
+          primary: task.nodeId,
+          secondary: task.response?.action ?? task.status,
+          timestamp: task.resolvedAt ?? task.createdAt,
         }))}
       />
       <div className="flow-runtime-memory">
@@ -738,6 +773,114 @@ function ReviewView(props: { projection: FlowV1DetailProjection }) {
           )
         )}
       </div>
+    </div>
+  );
+}
+
+function AttemptDetail(props: {
+  attempt: FlowV1NodeAttemptRecord | null;
+}) {
+  const [openingSession, setOpeningSession] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const attempt = props.attempt;
+
+  async function openSession() {
+    if (!attempt?.agentSessionId) {
+      return;
+    }
+    setOpeningSession(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/agent-sessions/open", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentSessionId: attempt.agentSessionId }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | Record<string, unknown>
+        | null;
+      if (!response.ok) {
+        throw new Error(readActionError(payload));
+      }
+      setMessage("Agent session opened.");
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Agent session could not be opened.",
+      );
+    } finally {
+      setOpeningSession(false);
+    }
+  }
+
+  return (
+    <div className="flow-runtime-attempt-detail">
+      <div className="flow-runtime-panel-title">
+        <h3>Attempt detail</h3>
+        <span>{attempt?.status ?? "not selected"}</span>
+      </div>
+      {!attempt ? <p>Select an attempt to inspect it.</p> : null}
+      {attempt ? (
+        <>
+          <dl>
+            <div>
+              <dt>Node</dt>
+              <dd>{attempt.nodeId}</dd>
+            </div>
+            <div>
+              <dt>Attempt</dt>
+              <dd>#{attempt.sequence}</dd>
+            </div>
+            <div>
+              <dt>Started</dt>
+              <dd>{formatTimestamp(attempt.startedAt)}</dd>
+            </div>
+            <div>
+              <dt>Duration</dt>
+              <dd>
+                {formatDuration(attempt.startedAt, attempt.finishedAt)}
+              </dd>
+            </div>
+            {attempt.controlOutcome ? (
+              <div>
+                <dt>Outcome</dt>
+                <dd>{attempt.controlOutcome}</dd>
+              </div>
+            ) : null}
+          </dl>
+          {attempt.agentSessionId ? (
+            <div className="flow-runtime-attempt-session">
+              <code>{attempt.agentSessionId}</code>
+              <button
+                disabled={openingSession}
+                onClick={() => void openSession()}
+                type="button"
+              >
+                {openingSession ? "Opening…" : "Open Agent session"}
+              </button>
+            </div>
+          ) : null}
+          <AttemptPayload label="Input" value={attempt.input} />
+          <AttemptPayload label="Output" value={attempt.output} />
+          {attempt.error ? (
+            <AttemptPayload label="Error" value={attempt.error} />
+          ) : null}
+          {message ? <p role="status">{message}</p> : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function AttemptPayload(props: {
+  label: string;
+  value: unknown;
+}) {
+  return (
+    <div className="flow-runtime-attempt-payload">
+      <strong>{props.label}</strong>
+      <pre>{formatJsonValue(props.value)}</pre>
     </div>
   );
 }
@@ -805,6 +948,32 @@ function formatTimestamp(value: string | null | undefined): string {
   return Number.isNaN(parsed.getTime())
     ? value
     : parsed.toLocaleString();
+}
+
+function formatDuration(
+  startedAt: string,
+  finishedAt: string | null,
+): string {
+  const start = Date.parse(startedAt);
+  const finish = finishedAt ? Date.parse(finishedAt) : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(finish)) {
+    return "unknown";
+  }
+  const milliseconds = Math.max(0, finish - start);
+  if (milliseconds < 1_000) {
+    return `${milliseconds}ms`;
+  }
+  return `${(milliseconds / 1_000).toFixed(1)}s`;
+}
+
+function formatJsonValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "No value captured.";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value, null, 2);
 }
 
 function capitalize(value: string): string {

@@ -48,6 +48,9 @@ describe("migrateDb", () => {
       expect(readColumnNames(database, "workflows")).toEqual(
         expect.arrayContaining(["lifecycle", "params_revision"]),
       );
+      expect(readColumnNames(database, "workflow_cycles")).toContain(
+        "outcome",
+      );
       const runColumns = readColumnNames(database, "workflow_runs");
       expect(runColumns).toEqual(
         expect.arrayContaining([

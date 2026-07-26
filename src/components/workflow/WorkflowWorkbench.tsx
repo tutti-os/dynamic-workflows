@@ -92,6 +92,26 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     return () => window.clearInterval(interval);
   }, [detail, load]);
 
+  useEffect(() => {
+    const latestRun = detail?.flowV1?.runtime.latestRun;
+    const activeCycle = detail?.flowV1?.runtime.activeCycle;
+    const shouldTrack =
+      latestRun?.status === "pending" ||
+      latestRun?.status === "running" ||
+      activeCycle?.status === "running";
+    if (!shouldTrack) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void load().catch(() => undefined);
+    }, 1_500);
+    return () => window.clearInterval(interval);
+  }, [
+    detail?.flowV1?.runtime.activeCycle?.status,
+    detail?.flowV1?.runtime.latestRun?.status,
+    load,
+  ]);
+
   async function retryGeneration() {
     setRetrying(true);
     setError(null);

@@ -74,7 +74,14 @@ control dependencies.
 const plan = agent({
   id: "plan",
   inputs: { candidate },
-  output: "json",
+  output: json({
+    validationMaxAttempts: 2,
+    schema: {
+      type: "object",
+      required: ["title"],
+      properties: { title: { type: "string" } },
+    },
+  }),
   prompt: "Plan the refactor for {{candidate.path}}.",
 });
 
@@ -88,10 +95,25 @@ const decision = human({
 });
 ```
 
-Agent prompts cannot reference Secrets. Human Tasks are durable and end the
-current Tick while pending.
+Agent prompts cannot reference Secrets. `output: "json"` remains shorthand for
+untyped JSON. A schema enables deterministic extraction and validation before
+the output can drive Loop or Map control. Typed JSON defaults to two validation
+attempts; `validationMaxAttempts` may explicitly set 1–3. A rejected response
+is recorded as a failed Node Attempt and its exact validation error is passed
+to the next attempt. Human Tasks are durable and end the current Tick while
+pending.
 
-## Script and Gate
+## Transform, Script, and Gate
+
+Transform is a pure, replayable JSON projection:
+
+```js
+const record = transform({
+  id: "record",
+  file: "scripts/build-record.mjs",
+  inputs: { summary, decision },
+});
+```
 
 ```js
 const candidate = script({
@@ -114,7 +136,8 @@ const approval = gate({
 ```
 
 JavaScript modules export `run(ctx)` for Script and `check(ctx)` for Gate.
-Script returns JSON. Gate returns one of:
+Script returns JSON. A Script with declared `outcomes` returns
+`{ outcome, output }` and can be routed like a Gate. Gate returns one of:
 
 ```js
 { status: "waiting", reason: "Not approved yet" }
@@ -156,13 +179,16 @@ export async function reconcile(ctx) {
 The Effect ledger is written before `apply()`. Uncertain execution always
 reconciles before it may apply again.
 
+One Effect must represent one independently reconcilable external intent.
+Commit, push, and pull-request creation are separate Effects.
+
 ## Loop and Map
 
 ```js
 const review = loop({
   id: "review",
-  maxIterations: 3,
-  onMaxIterations: "fail",
+  maxIterations: ref("params.maxRounds"),
+  onMaxIterations: "complete",
   steps: [
     agent({ id: "repair", prompt: "Repair iteration {{iteration}}." }),
     human({
@@ -178,7 +204,14 @@ const migrated = map({
   id: "migrated",
   source: ref("discover.items"),
   maxItems: 50,
+  execution: { access: "write", isolation: "required" },
   onItemFailure: "skip",
+  onItemRejected: "collect",
+  itemOutcome: {
+    source: "verify.status",
+    success: ["VERIFIED"],
+    rejected: ["REJECTED"],
+  },
   steps: [
     agent({ id: "migrate", prompt: "Migrate {{item}}.", output: "json" }),
     agent({ id: "verify", prompt: "Verify {{previous}}.", output: "json" }),
@@ -189,6 +222,17 @@ const migrated = map({
 Loop supports Agent and Human steps, is bounded to 1..10 iterations, and
 checkpoints its exact step. Map supports Agent pipelines, is bounded to 1..100
 items, and uses `runtime.maxParallelNodes`.
+
+Loop produces `matched` or `exhausted` outcomes. Map produces
+`all_succeeded`, `partial`, or `all_rejected` and returns separate
+`succeeded`, `rejected`, and `failed` collections. A host that cannot isolate
+a write Map must safely serialize it.
+
+Loop step templates receive `iteration`, `previous` (the preceding step in the
+current iteration), `steps` (current-iteration outputs), `previousIteration`
+(the complete preceding iteration record, or `null`), and `history` (all
+completed iteration records). Use these explicit values for repair feedback;
+completed Agent sessions are not hidden context for a later Tick.
 
 ## Memory
 
@@ -229,8 +273,16 @@ finalize({
   runOn: ["completed", "failed", "canceled"],
 });
 
-const done = completeCycle({ id: "done", continue: "immediate" });
-const rejected = cancelCycle({ id: "rejected", continue: "scheduled" });
+const done = completeCycle({
+  id: "done",
+  outcome: "delivered",
+  continue: "immediate",
+});
+const rejected = completeCycle({
+  id: "rejected",
+  outcome: "not_accepted",
+  continue: "scheduled",
+});
 route(approval, { approved: done, rejected });
 ```
 

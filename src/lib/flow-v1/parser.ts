@@ -50,6 +50,7 @@ const NODE_CALLS: Record<string, FlowV1NodeKind> = {
   agent: "agent",
   human: "human",
   script: "script",
+  transform: "transform",
   gate: "gate",
   effect: "effect",
   finally: "finally",
@@ -63,6 +64,7 @@ const NODE_CALLS: Record<string, FlowV1NodeKind> = {
 
 const CODE_NODE_EXPORTS: Partial<Record<FlowV1NodeKind, string[]>> = {
   script: ["run"],
+  transform: ["run"],
   gate: ["check"],
   effect: ["apply", "reconcile"],
   finally: ["run"],
@@ -621,6 +623,21 @@ function addNode(
   }
   const loop = kind === "loop" ? readLoopSpec(properties, id, state) : undefined;
   const map = kind === "map" ? readMapSpec(properties, id, state) : undefined;
+  if (loop && typeof loop.maxIterations !== "number") {
+    inputs["$loop.maxIterations"] = loop.maxIterations;
+  }
+  for (const step of [...(loop?.steps ?? []), ...(map?.steps ?? [])]) {
+    if (step.kind !== "agent") continue;
+    for (const [name, value] of [
+      ["agent", step.agent],
+      ["model", step.model],
+      ["permissionMode", step.permissionMode],
+    ] as const) {
+      if (value && typeof value !== "string") {
+        inputs[`$config.${step.id}.${name}`] = value;
+      }
+    }
+  }
   if (map) {
     inputs["$map.source"] = map.source;
   }
@@ -642,6 +659,32 @@ function addNode(
   const retry = properties?.has("retry")
     ? readRetryPolicy(properties.get("retry"), id, kind, state)
     : undefined;
+  const workspace =
+    readReference(properties?.get("workspace")) ??
+    readIdentifierReference(properties?.get("workspace"));
+  if (workspace) {
+    inputs["$workspace"] = workspace;
+  }
+  const execution = readExecutionContract(properties?.get("execution"));
+  const agent = readResolvableString(properties?.get("agent"));
+  const model = readResolvableString(properties?.get("model"));
+  const permissionMode = readResolvableString(
+    properties?.get("permissionMode"),
+  );
+  const output = readAgentOutput(
+    properties?.get("output"),
+    id,
+    state,
+  );
+  for (const [name, value] of [
+    ["agent", agent],
+    ["model", model],
+    ["permissionMode", permissionMode],
+  ] as const) {
+    if (value && typeof value !== "string") {
+      inputs[`$config.${name}`] = value;
+    }
+  }
   const node: FlowV1Node = {
     id,
     ...(variableName ? { variableName } : {}),
@@ -651,28 +694,26 @@ function addNode(
       ? { file: readString(properties?.get("file")) }
       : {}),
     ...(prompt ? { prompt } : {}),
-    ...(readString(properties?.get("agent"))
-      ? { agent: readString(properties?.get("agent")) }
-      : {}),
-    ...(readString(properties?.get("model"))
-      ? { model: readString(properties?.get("model")) }
-      : {}),
-    ...(readString(properties?.get("permissionMode"))
-      ? { permissionMode: readString(properties?.get("permissionMode")) }
-      : {}),
+    ...(agent ? { agent } : {}),
+    ...(model ? { model } : {}),
+    ...(permissionMode ? { permissionMode } : {}),
     ...(readString(properties?.get("cwd"))
       ? { cwd: readString(properties?.get("cwd")) }
       : {}),
+    ...(workspace ? { workspace } : {}),
+    ...(execution ? { execution } : {}),
     ...(human ? { human } : {}),
     ...(loop ? { loop } : {}),
     ...(map ? { map } : {}),
-    ...(readString(properties?.get("output")) === "json"
-      ? { output: "json" as const }
-      : {}),
+    ...(output ? { output } : {}),
     outcomes:
       kind === "human" && human
         ? human.actions.map((action) => action.id)
-        : readStringArray(properties?.get("outcomes")),
+        : kind === "loop"
+          ? ["matched", "exhausted"]
+          : kind === "map"
+            ? ["all_succeeded", "partial", "all_rejected"]
+          : readStringArray(properties?.get("outcomes")),
     inputs,
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(retry ? { retry } : {}),
@@ -693,6 +734,11 @@ function addNode(
     ...(kind === "complete_cycle" || kind === "cancel_cycle"
       ? readContinueMode(properties?.get("continue"))
         ? { continueMode: readContinueMode(properties?.get("continue")) }
+        : {}
+      : {}),
+    ...(kind === "complete_cycle" || kind === "cancel_cycle"
+      ? readString(properties?.get("outcome"))
+        ? { terminalOutcome: readString(properties?.get("outcome")) }
         : {}
       : {}),
     ...(rangeOf(initializer) ? { sourceRange: rangeOf(initializer) } : {}),
@@ -784,6 +830,21 @@ function readContinueMode(
   return value === "immediate" || value === "scheduled" ? value : undefined;
 }
 
+function readExecutionContract(
+  node: AstNode | undefined,
+): FlowV1Node["execution"] | undefined {
+  const properties = readObjectProperties(node);
+  const access = readString(properties?.get("access"));
+  const isolation = readString(properties?.get("isolation"));
+  if (
+    (access === "read" || access === "write" || access === "review") &&
+    (isolation === "shared" || isolation === "required")
+  ) {
+    return { access, isolation };
+  }
+  return undefined;
+}
+
 function readMemoryUpdates(
   node: AstNode | undefined,
   nodeId: string,
@@ -863,7 +924,9 @@ function readLoopSpec(
   nodeId: string,
   state: ParserState,
 ): FlowV1LoopSpec | undefined {
-  const maxIterations = readNumber(properties?.get("maxIterations"));
+  const maxIterations =
+    readNumber(properties?.get("maxIterations")) ??
+    readReference(properties?.get("maxIterations"));
   const onMaxIterations =
     readString(properties?.get("onMaxIterations")) ?? "fail";
   const steps = readCompositeSteps(
@@ -881,9 +944,10 @@ function readLoopSpec(
   );
   const startAt = readString(firstIteration?.get("startAt"));
   if (
-    !Number.isInteger(maxIterations) ||
-    maxIterations! < 1 ||
-    maxIterations! > 10 ||
+    (!isReference(maxIterations) &&
+      (!Number.isInteger(maxIterations) ||
+        maxIterations! < 1 ||
+        maxIterations! > 10)) ||
     (onMaxIterations !== "fail" && onMaxIterations !== "complete") ||
     steps.length === 0 ||
     !source ||
@@ -924,6 +988,25 @@ function readMapSpec(
   const maxItems = readNumber(properties?.get("maxItems"));
   const onItemFailure =
     readString(properties?.get("onItemFailure")) ?? "fail";
+  const onItemRejected =
+    readString(properties?.get("onItemRejected")) ?? "collect";
+  const itemOutcomeProperties = readObjectProperties(
+    properties?.get("itemOutcome"),
+  );
+  const itemOutcomeSource = readString(itemOutcomeProperties?.get("source"));
+  const itemOutcomeSuccess = readStringArray(
+    itemOutcomeProperties?.get("success"),
+  );
+  const itemOutcomeRejected = readStringArray(
+    itemOutcomeProperties?.get("rejected"),
+  );
+  const executionProperties = readObjectProperties(
+    properties?.get("execution"),
+  );
+  const executionAccess = readString(executionProperties?.get("access"));
+  const executionIsolation = readString(
+    executionProperties?.get("isolation"),
+  );
   const steps = readCompositeSteps(
     properties?.get("steps") ?? properties?.get("step"),
     nodeId,
@@ -938,6 +1021,7 @@ function readMapSpec(
     maxItems! < 1 ||
     maxItems! > 100 ||
     (onItemFailure !== "skip" && onItemFailure !== "fail") ||
+    (onItemRejected !== "collect" && onItemRejected !== "fail") ||
     steps.length === 0
   ) {
     state.diagnostics.push(
@@ -953,6 +1037,29 @@ function readMapSpec(
     source,
     maxItems: maxItems!,
     onItemFailure,
+    onItemRejected,
+    ...(itemOutcomeSource &&
+    itemOutcomeSuccess.length > 0 &&
+    itemOutcomeRejected.length > 0
+      ? {
+          itemOutcome: {
+            source: itemOutcomeSource,
+            success: itemOutcomeSuccess,
+            rejected: itemOutcomeRejected,
+          },
+        }
+      : {}),
+    ...(executionAccess &&
+    executionIsolation &&
+    ["read", "write", "review"].includes(executionAccess) &&
+    ["shared", "required"].includes(executionIsolation)
+      ? {
+          execution: {
+            access: executionAccess as "read" | "write" | "review",
+            isolation: executionIsolation as "shared" | "required",
+          },
+        }
+      : {}),
     steps,
   };
 }
@@ -1018,26 +1125,44 @@ function readCompositeSteps(
       );
       continue;
     }
+    const output = readAgentOutput(
+      properties?.get("output"),
+      `${nodeId}.${id}`,
+      state,
+    );
     steps.push({
       id,
       kind: "agent",
       label: readString(properties?.get("label")) ?? id,
       prompt,
-      ...(readString(properties?.get("agent"))
-        ? { agent: readString(properties?.get("agent")) }
+      ...(readResolvableString(properties?.get("agent"))
+        ? { agent: readResolvableString(properties?.get("agent")) }
         : {}),
-      ...(readString(properties?.get("model"))
-        ? { model: readString(properties?.get("model")) }
+      ...(readResolvableString(properties?.get("model"))
+        ? { model: readResolvableString(properties?.get("model")) }
         : {}),
-      ...(readString(properties?.get("permissionMode"))
-        ? { permissionMode: readString(properties?.get("permissionMode")) }
+      ...(readResolvableString(properties?.get("permissionMode"))
+        ? {
+            permissionMode: readResolvableString(
+              properties?.get("permissionMode"),
+            ),
+          }
         : {}),
       ...(readString(properties?.get("cwd"))
         ? { cwd: readString(properties?.get("cwd")) }
         : {}),
-      ...(readString(properties?.get("output")) === "json"
-        ? { output: "json" as const }
+      ...(readReference(properties?.get("workspace")) ??
+      readIdentifierReference(properties?.get("workspace"))
+        ? {
+            workspace:
+              readReference(properties?.get("workspace")) ??
+              readIdentifierReference(properties?.get("workspace"))!,
+          }
         : {}),
+      ...(readExecutionContract(properties?.get("execution"))
+        ? { execution: readExecutionContract(properties?.get("execution")) }
+        : {}),
+      ...(output ? { output } : {}),
     });
   }
   return steps;
@@ -1587,6 +1712,18 @@ function validateBundleModules(state: ParserState): void {
     if (!ast) {
       continue;
     }
+    if (
+      node.kind === "transform" &&
+      collectModuleSpecifiers(ast).length > 0
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.transform_import_forbidden",
+          `Transform ${node.id} must be a pure Bundle-local JSON projection and cannot import modules.`,
+          `nodes.${node.id}.file`,
+        ),
+      );
+    }
     const exports = collectNamedExports(ast);
     for (const exportName of requiredExports) {
       if (!exports.has(exportName)) {
@@ -1864,6 +2001,65 @@ function readReference(node: AstNode | undefined): FlowV1Reference | undefined {
   }
   const expression = readString(firstArgument(call));
   return expression ? referenceFromExpression(expression) : undefined;
+}
+
+function isReference(
+  value: number | FlowV1Reference | undefined,
+): value is FlowV1Reference {
+  return typeof value === "object" && value !== null && "source" in value;
+}
+
+function readResolvableString(
+  node: AstNode | undefined,
+): string | FlowV1Reference | undefined {
+  return readString(node) ?? readReference(node);
+}
+
+function readAgentOutput(
+  node: AstNode | undefined,
+  nodeId: string,
+  state: ParserState,
+): FlowV1Node["output"] | undefined {
+  if (readString(node) === "json") {
+    return { kind: "json" };
+  }
+  if (readString(node) === "text") {
+    return { kind: "text" };
+  }
+  if (!node || readCalleeName(node) !== "json") {
+    return undefined;
+  }
+  const properties = readObjectProperties(firstArgument(node));
+  const schema = readStaticValue(properties?.get("schema"));
+  const validationMaxAttempts = readNumber(
+    properties?.get("validationMaxAttempts"),
+  );
+  if (
+    properties?.has("validationMaxAttempts") &&
+    (!Number.isInteger(validationMaxAttempts) ||
+      validationMaxAttempts! < 1 ||
+      validationMaxAttempts! > 3)
+  ) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.agent_output_validation_attempts_invalid",
+        `Agent ${nodeId} validationMaxAttempts must be an integer from 1 to 3.`,
+        `nodes.${nodeId}.output.validationMaxAttempts`,
+        properties.get("validationMaxAttempts"),
+      ),
+    );
+  }
+  return {
+    kind: "json",
+    ...(schema && typeof schema === "object" && !Array.isArray(schema)
+      ? { schema }
+      : {}),
+    ...(Number.isInteger(validationMaxAttempts) &&
+    validationMaxAttempts! >= 1 &&
+    validationMaxAttempts! <= 3
+      ? { validationMaxAttempts: validationMaxAttempts! }
+      : {}),
+  };
 }
 
 function readIdentifierReference(

@@ -84,6 +84,7 @@ export const FLOW_V1_NODE_KINDS = [
   "agent",
   "human",
   "script",
+  "transform",
   "gate",
   "effect",
   "finally",
@@ -112,6 +113,22 @@ export type FlowV1Reference = {
   expression: string;
   source: string;
   path: string[];
+};
+
+export type FlowV1ResolvableString = string | FlowV1Reference;
+export type FlowV1ResolvableNumber = number | FlowV1Reference;
+export type FlowV1JsonSchema = FlowV1JsonObject;
+export type FlowV1AgentOutput =
+  | { kind: "text" }
+  | {
+      kind: "json";
+      schema?: FlowV1JsonSchema;
+      validationMaxAttempts?: number;
+    };
+
+export type FlowV1ExecutionContract = {
+  access: "read" | "write" | "review";
+  isolation: "shared" | "required";
 };
 
 export type FlowV1HumanContextItem = {
@@ -148,11 +165,13 @@ export type FlowV1CompositeAgentStep = {
   kind: "agent";
   label: string;
   prompt: string;
-  agent?: string;
-  model?: string;
-  permissionMode?: string;
+  agent?: FlowV1ResolvableString;
+  model?: FlowV1ResolvableString;
+  permissionMode?: FlowV1ResolvableString;
   cwd?: string;
-  output?: "json";
+  workspace?: FlowV1Reference;
+  execution?: FlowV1ExecutionContract;
+  output?: FlowV1AgentOutput;
 };
 
 export type FlowV1CompositeHumanStep = {
@@ -163,7 +182,7 @@ export type FlowV1CompositeHumanStep = {
 };
 
 export type FlowV1LoopSpec = {
-  maxIterations: number;
+  maxIterations: FlowV1ResolvableNumber;
   onMaxIterations: "fail" | "complete";
   firstIterationStartAt?: string;
   steps: Array<FlowV1CompositeAgentStep | FlowV1CompositeHumanStep>;
@@ -176,6 +195,13 @@ export type FlowV1MapSpec = {
   source: FlowV1Reference;
   maxItems: number;
   onItemFailure: "skip" | "fail";
+  onItemRejected: "collect" | "fail";
+  itemOutcome?: {
+    source: string;
+    success: string[];
+    rejected: string[];
+  };
+  execution?: FlowV1ExecutionContract;
   steps: FlowV1CompositeAgentStep[];
 };
 
@@ -211,14 +237,16 @@ export type FlowV1Node = {
   label: string;
   file?: string;
   prompt?: string;
-  agent?: string;
-  model?: string;
-  permissionMode?: string;
+  agent?: FlowV1ResolvableString;
+  model?: FlowV1ResolvableString;
+  permissionMode?: FlowV1ResolvableString;
   cwd?: string;
+  workspace?: FlowV1Reference;
+  execution?: FlowV1ExecutionContract;
   human?: FlowV1HumanSpec;
   loop?: FlowV1LoopSpec;
   map?: FlowV1MapSpec;
-  output?: "json";
+  output?: FlowV1AgentOutput;
   outcomes: string[];
   inputs: Record<string, FlowV1Reference>;
   idempotencyKey?: FlowV1Reference | string;
@@ -228,6 +256,7 @@ export type FlowV1Node = {
   memorySections?: string[];
   memoryUpdates?: Record<string, FlowV1MemoryUpdateSpec>;
   continueMode?: "immediate" | "scheduled";
+  terminalOutcome?: string;
   sourceRange?: { start: number; end: number };
 };
 
@@ -395,6 +424,7 @@ export type FlowV1CycleRecord = {
   sequence: number;
   flowVersionId: string;
   status: FlowV1CycleStatus;
+  outcome: string | null;
   currentNodeId: string | null;
   inputSnapshot: FlowV1JsonObject;
   paramsRevision: number;

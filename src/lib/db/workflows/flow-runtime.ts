@@ -27,6 +27,7 @@ type CycleRow = {
   sequence: number;
   flow_version_id: string;
   status: string;
+  outcome: string | null;
   current_node_id: string | null;
   input_snapshot_json: string;
   params_revision: number;
@@ -144,10 +145,10 @@ export function startFlowV1Cycle(input: {
       .prepare(
         `
         INSERT INTO workflow_cycles (
-          id, flow_id, sequence, flow_version_id, status, current_node_id,
+          id, flow_id, sequence, flow_version_id, status, outcome, current_node_id,
           input_snapshot_json, params_revision, params_snapshot_json,
           memory_hash_at_start, created_at, started_at, completed_at
-        ) VALUES (?, ?, ?, ?, 'running', NULL, ?, ?, ?, ?, ?, ?, NULL)
+        ) VALUES (?, ?, ?, ?, 'running', NULL, NULL, ?, ?, ?, ?, ?, ?, NULL)
       `,
       )
       .run(
@@ -404,6 +405,7 @@ export function compareAndSetFlowV1CycleCheckpoint(input: {
   expectedRevision: number;
   state: FlowV1JsonObject;
   cycleStatus?: FlowV1CycleStatus;
+  cycleOutcome?: string | null;
   currentNodeId?: string | null;
   runId?: string;
   ownerToken?: string;
@@ -462,7 +464,12 @@ export function compareAndSetFlowV1CycleCheckpoint(input: {
       args.push(input.runId, input.ownerToken);
     }
     const updated = update.run(...args).changes;
-    if (updated === 1 && (input.cycleStatus || input.currentNodeId !== undefined)) {
+    if (
+      updated === 1 &&
+      (input.cycleStatus ||
+        input.cycleOutcome !== undefined ||
+        input.currentNodeId !== undefined)
+    ) {
       const status = input.cycleStatus;
       const terminal = status === "completed" || status === "canceled";
       database
@@ -470,6 +477,7 @@ export function compareAndSetFlowV1CycleCheckpoint(input: {
           `
           UPDATE workflow_cycles
           SET status = COALESCE(?, status),
+            outcome = CASE WHEN ? THEN ? ELSE outcome END,
             current_node_id = CASE WHEN ? THEN ? ELSE current_node_id END,
             completed_at = CASE WHEN ? THEN ? ELSE completed_at END
           WHERE id = ?
@@ -477,6 +485,8 @@ export function compareAndSetFlowV1CycleCheckpoint(input: {
         )
         .run(
           status ?? null,
+          input.cycleOutcome !== undefined ? 1 : 0,
+          input.cycleOutcome ?? null,
           input.currentNodeId !== undefined ? 1 : 0,
           input.currentNodeId ?? null,
           terminal ? 1 : 0,
@@ -846,6 +856,7 @@ function mapCycle(row: CycleRow): FlowV1CycleRecord {
     sequence: row.sequence,
     flowVersionId: row.flow_version_id,
     status: row.status as FlowV1CycleStatus,
+    outcome: row.outcome,
     currentNodeId: row.current_node_id,
     inputSnapshot: parseObject(
       row.input_snapshot_json,
