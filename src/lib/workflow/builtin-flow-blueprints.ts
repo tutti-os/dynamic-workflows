@@ -416,13 +416,18 @@ function issueApiPath(url) {
   return "repos/" + owner + "/" + repo + "/issues/" + number;
 }
 export async function check(ctx) {
-  const issue = JSON.parse(execFileSync("gh", ["api", issueApiPath(ctx.issue.url)], { encoding: "utf8" }));
-  const output = { state: issue.state, labels: issue.labels, url: issue.html_url };
-  if (issue.state === "closed") return { status: "completed", outcome: "rejected", output };
-  const approved = issue.labels.some((label) => label.name === "flow-approved");
-  return approved
-    ? { status: "completed", outcome: "approved", output }
-    : { status: "waiting", reason: "Add the flow-approved label to approve the Issue plan." };
+  const apiPath = issueApiPath(ctx.issue.url);
+  try {
+    const issue = JSON.parse(execFileSync("gh", ["api", apiPath], { encoding: "utf8" }));
+    const output = { state: issue.state, labels: issue.labels, url: issue.html_url };
+    if (issue.state === "closed") return { status: "completed", outcome: "rejected", output };
+    const approved = issue.labels.some((label) => label.name === "flow-approved");
+    return approved
+      ? { status: "completed", outcome: "approved", output }
+      : { status: "waiting", reason: "Add the flow-approved label to approve the Issue plan." };
+  } catch {
+    return { status: "waiting", reason: "GitHub Issue status is temporarily unavailable; retry on the next Tick." };
+  }
 }
 `,
       },
@@ -625,11 +630,16 @@ function pullRequestApiPath(url) {
   return "repos/" + owner + "/" + repo + "/pulls/" + number;
 }
 export async function check(ctx) {
-  const pr = JSON.parse(execFileSync("gh", ["api", pullRequestApiPath(ctx.pullRequest.url)], { encoding: "utf8" }));
-  const output = { state: pr.state, mergedAt: pr.merged_at, url: pr.html_url };
-  if (pr.merged_at) return { status: "completed", outcome: "merged", output };
-  if (pr.state === "closed") return { status: "completed", outcome: "closed", output };
-  return { status: "waiting", reason: "Pull request is still open." };
+  const apiPath = pullRequestApiPath(ctx.pullRequest.url);
+  try {
+    const pr = JSON.parse(execFileSync("gh", ["api", apiPath], { encoding: "utf8" }));
+    const output = { state: pr.state, mergedAt: pr.merged_at, url: pr.html_url };
+    if (pr.merged_at) return { status: "completed", outcome: "merged", output };
+    if (pr.state === "closed") return { status: "completed", outcome: "closed", output };
+    return { status: "waiting", reason: "Pull request is still open." };
+  } catch {
+    return { status: "waiting", reason: "GitHub Pull Request status is temporarily unavailable; retry on the next Tick." };
+  }
 }
 `,
       },

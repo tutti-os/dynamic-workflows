@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -133,6 +139,60 @@ describe("official Blueprint behavior", () => {
     expect(found.value).toEqual({
       outcome: "found",
       output: { path: "large.ts", lines: 12 },
+    });
+  });
+
+  it("keeps GitHub gates waiting when status checks are temporarily unavailable", async () => {
+    const blueprint = getWorkflowBlueprint("large-file-governance-v1");
+    expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
+    if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
+      throw new Error("Large-file Blueprint is unavailable.");
+    }
+    const projectCwd = mkdtempSync(path.join(tmpdir(), "github-gate-blueprint-"));
+    temporaryDirectories.push(projectCwd);
+    const bin = path.join(projectCwd, "bin");
+    mkdirSync(bin);
+    const fakeGh = path.join(bin, "gh");
+    writeFileSync(fakeGh, "#!/bin/sh\nexit 1\n");
+    chmodSync(fakeGh, 0o755);
+    const environment = {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    };
+
+    const issue = await runFlowV1CodeModule({
+      versionId: "large-file-issue-gate-unavailable",
+      bundle: blueprint.bundle,
+      file: "scripts/issue-approval.mjs",
+      exportName: "check",
+      context: {
+        issue: { url: "https://github.com/example/project/issues/1" },
+      },
+      environment,
+      projectCwd,
+    });
+    expect(issue.value).toEqual({
+      status: "waiting",
+      reason:
+        "GitHub Issue status is temporarily unavailable; retry on the next Tick.",
+    });
+
+    const pullRequest = await runFlowV1CodeModule({
+      versionId: "large-file-pr-gate-unavailable",
+      bundle: blueprint.bundle,
+      file: "scripts/pr-merged.mjs",
+      exportName: "check",
+      context: {
+        pullRequest: {
+          url: "https://github.com/example/project/pull/2",
+        },
+      },
+      environment,
+      projectCwd,
+    });
+    expect(pullRequest.value).toEqual({
+      status: "waiting",
+      reason:
+        "GitHub Pull Request status is temporarily unavailable; retry on the next Tick.",
     });
   });
 
