@@ -206,7 +206,11 @@ export async function invokeFlowV1(input: {
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
 }): Promise<{
-  action: "started_cycle" | "resumed_cycle" | "active_tick";
+  action:
+    | "started_cycle"
+    | "resumed_cycle"
+    | "active_tick"
+    | "idempotent_tick";
   tick: FlowV1TickBundle;
   execution: FlowV1TickExecutionResult | null;
 }> {
@@ -274,7 +278,7 @@ export async function invokeFlowV1(input: {
   const provided = input.invocationInput;
   const activeCycle = getActiveFlowV1Cycle(input.flowId);
   let tick: FlowV1TickBundle;
-  let action: "started_cycle" | "resumed_cycle";
+  let action: "started_cycle" | "resumed_cycle" | "idempotent_tick";
   if (activeCycle) {
     if (
       provided &&
@@ -300,7 +304,7 @@ export async function invokeFlowV1(input: {
       origin: { kind: "user" },
       idempotencyKey: input.idempotencyKey ?? randomUUID(),
     });
-    action = "resumed_cycle";
+    action = tick.created ? "resumed_cycle" : "idempotent_tick";
   } else {
     const cycleInput = resolveCycleInputs(parsed, provided ?? {});
     const params = getCurrentFlowV1Params(input.flowId);
@@ -318,7 +322,7 @@ export async function invokeFlowV1(input: {
         bundle,
       )?.hash,
     });
-    action = "started_cycle";
+    action = tick.created ? "started_cycle" : "idempotent_tick";
   }
   const execution =
     input.executeTick === false || tick.run.status !== "pending"

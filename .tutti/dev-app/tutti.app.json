@@ -3,7 +3,7 @@
   "appId": "dynamic-workflows-dev",
   "version": "0.1.0",
   "name": "Dynamic Workflows Dev",
-  "description": "Script-first dynamic workflow orchestrator for local Nextop agents.",
+  "description": "Persistent Flow orchestrator for local Tutti agents and deterministic automation.",
   "icon": {
     "type": "asset",
     "src": "icon.svg"

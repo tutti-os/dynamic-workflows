@@ -39,6 +39,10 @@ export async function packageTuttiDevApp(options = {}) {
     path.join(sourceDir, "node_modules", "next", "dist", "bin", "next"),
     "source node_modules/next is required; run npm install first",
   );
+  await assertFile(
+    path.join(sourceDir, "tools", "scripts", "ensure-native-modules.mjs"),
+    "native module compatibility helper is required",
+  );
 
   const sourcePackage = JSON.parse(
     await readFile(sourcePackageJsonPath, "utf8"),
@@ -123,7 +127,7 @@ export async function packageTuttiDevApp(options = {}) {
   return result;
 }
 
-function bootstrapScript(sourceDir, defaultNodeBin) {
+export function bootstrapScript(sourceDir, defaultNodeBin) {
   return [
     "#!/bin/sh",
     "set -eu",
@@ -144,6 +148,11 @@ function bootstrapScript(sourceDir, defaultNodeBin) {
     '  echo "dynamic-workflows dev package requires prepared source dependencies in $source_dir." >&2',
     "  exit 1",
     "fi",
+    'native_check="$source_dir/tools/scripts/ensure-native-modules.mjs"',
+    'if [ ! -f "$native_check" ]; then',
+    '  echo "dynamic-workflows dev package requires $native_check." >&2',
+    "  exit 1",
+    "fi",
     "",
     'export NEXT_TELEMETRY_DISABLED="${NEXT_TELEMETRY_DISABLED:-1}"',
     'export NEXTOP_CLI_PATH="${NEXTOP_CLI_PATH:-${TUTTI_CLI:-tutti-dev}}"',
@@ -151,6 +160,7 @@ function bootstrapScript(sourceDir, defaultNodeBin) {
     'mkdir -p "$DYNAMIC_WORKFLOWS_DATA_DIR" "${TUTTI_APP_LOG_DIR:-$source_dir/.tmp/tutti-logs}"',
     'cd "$source_dir"',
     "",
+    '"$node_bin" "$native_check" --fix',
     'exec "$node_bin" "$next_bin" dev -H "$host" -p "$port"',
     "",
   ].join("\n");
@@ -167,7 +177,7 @@ function packageAgents(sourceDir) {
     "Runtime rules:",
     "",
     "- Run `npm install` in the source directory before starting this package.",
-    "- `bootstrap.sh` starts `next dev` with the source environment Node by default, because this dev package reuses native `node_modules` from the checkout. Set `DYNAMIC_WORKFLOWS_NODE` to override it.",
+    "- `bootstrap.sh` starts `next dev` with the source environment Node by default and repairs native-module ABI mismatches before launch, because this dev package reuses `node_modules` from the checkout. Set `DYNAMIC_WORKFLOWS_NODE` to override it.",
     "- `bootstrap.sh` uses `TUTTI_CLI` for agent target detection, while still setting `NEXTOP_CLI_PATH` for older adapter code.",
     "- `tutti.cli.json` exposes `dynamic-workflows` commands for status, agent target discovery, workflow listing, workflow inspection, script validation, workflow creation, and workflow execution.",
     "- CLI command handlers are served by the source Next app under `/tutti/cli/*` and return Tutti `CliCommandOutput` objects directly.",

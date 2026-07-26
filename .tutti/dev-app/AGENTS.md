@@ -1,26 +1,16 @@
-# Dynamic Workflows Local Dev App
+# Dynamic Workflows Dev Package
 
-This directory is a Tutti local debug wrapper for the source project at `/Users/ccr/tsh-project/dynamic-workflows`. Keep it small: it describes and launches the checkout, but the app implementation stays in the project root.
+This is a local-only Tutti development package. It does not contain the app implementation; `bootstrap.sh` launches the checked-out source repository directly.
 
-Tutti Desktop can Load unpacked either from the project root or directly from `.tutti/dev-app/`.
+Source directory: `/Users/liying/project/dynamic-workflows`
 
-Runtime contract:
+Runtime rules:
 
-- `bootstrap.sh` is the Tutti runtime entrypoint and starts the source Next.js dev server.
-- It reads `TUTTI_APP_HOST`, defaulting to `127.0.0.1` only when absent.
-- It requires `TUTTI_APP_PORT`; there is no hard-coded or guessed fallback port.
-- It uses `TUTTI_APP_NPM` to run `npm run dev -- -H "$TUTTI_APP_HOST" -p "$TUTTI_APP_PORT"` from the project root.
-- It requires existing project dependencies; run `npm install` in the project root before loading the app if `node_modules` is absent.
-- The manifest healthcheck is the source app's `GET /api/health` route.
-
-Source hot reload:
-
-- Edits under `src/`, `package.json`, and other project source files are handled by the Next.js dev server.
-- Edits to `tutti.app.json`, `tutti.cli.json`, `bootstrap.sh`, `COMMANDS.md`, `icon.svg`, or this `AGENTS.md` require App Center's local-dev Reload action so Tutti rereads the manifest and restarts the runtime.
-
-Data and integration:
-
-- Workflow data uses `DYNAMIC_WORKFLOWS_DATA_DIR`, defaulting to `TUTTI_APP_DATA_DIR` and then `.data` only outside the Tutti runtime.
+- Run `npm install` in the source directory before starting this package.
+- `bootstrap.sh` starts `next dev` with the source environment Node by default and repairs native-module ABI mismatches before launch, because this dev package reuses `node_modules` from the checkout. Set `DYNAMIC_WORKFLOWS_NODE` to override it.
+- `bootstrap.sh` uses `TUTTI_CLI` for agent target detection, while still setting `NEXTOP_CLI_PATH` for older adapter code.
+- `tutti.cli.json` exposes `dynamic-workflows` commands for status, agent target discovery, workflow listing, workflow inspection, script validation, workflow creation, and workflow execution.
+- CLI command handlers are served by the source Next app under `/tutti/cli/*` and return Tutti `CliCommandOutput` objects directly.
 - In Tutti, workflow cwd inputs must resolve to existing directories staged under `TUTTI_APP_DATA_DIR` or `TUTTI_APP_RUNTIME_DIR`; relative values resolve from the runtime directory, and nested node cwd values cannot escape either directory. Direct local development falls back to the source checkout as its boundary.
-- CLI command handlers are declared in `tutti.cli.json` and served by the source app under `/tutti/cli/*`.
-- Agent target discovery should use `TUTTI_CLI`; `bootstrap.sh` also sets `NEXTOP_CLI_PATH` from it for existing adapter compatibility.
+- Durable data is written to `DYNAMIC_WORKFLOWS_DATA_DIR`, falling back to `TUTTI_APP_DATA_DIR` and then the source `.data` directory.
+- Re-run `npm run import:tutti-dev` after changing manifest, bootstrap, or this package wrapper.

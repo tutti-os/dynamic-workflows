@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS } from "../src/lib/tutti/cli.ts";
+import { bootstrapScript } from "./package-tutti-dev-app.mjs";
 import { cliManifest, commandsMarkdown } from "./tutti-app-package-shared.mjs";
 
 describe("Tutti app CLI package contract", () => {
@@ -33,5 +34,17 @@ describe("Tutti app CLI package contract", () => {
     expect(markdown).not.toContain("--timeout-ms 10000");
     expect(markdown).not.toContain("~16s");
     expect(markdown).not.toContain("bounded waits");
+  });
+
+  it("repairs native module ABI mismatches before the dev server starts", () => {
+    const bootstrap = bootstrapScript("/tmp/dynamic-workflows", "/tmp/node");
+
+    expect(bootstrap).toContain(
+      'native_check="$source_dir/tools/scripts/ensure-native-modules.mjs"',
+    );
+    expect(bootstrap).toContain('"$node_bin" "$native_check" --fix');
+    expect(bootstrap.indexOf('"$node_bin" "$native_check" --fix')).toBeLessThan(
+      bootstrap.indexOf('exec "$node_bin" "$next_bin" dev'),
+    );
   });
 });

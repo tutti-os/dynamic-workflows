@@ -1,7 +1,7 @@
 {
   "schemaVersion": "tutti.app.cli.v1",
   "scope": "dynamic-workflows",
-  "description": "Create, inspect, validate, and run local Dynamic Workflows.",
+  "description": "Create, configure, inspect, and run persistent tutti.flow.v1 Bundles.",
   "documentation": {
     "file": "COMMANDS.md"
   },
@@ -10,8 +10,8 @@
       "path": [
         "status"
       ],
-      "summary": "Show Dynamic Workflows runtime status",
-      "description": "Report app health, workflow counts, cwd root, and agent target detection status.",
+      "summary": "Show runtime status",
+      "description": "Report Flow and agent availability.",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -30,8 +30,8 @@
       "path": [
         "agents"
       ],
-      "summary": "List available agent targets",
-      "description": "List agent targets and model options detected through the local Tutti CLI.",
+      "summary": "List agent targets",
+      "description": "List locally available Agent targets.",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -50,14 +50,14 @@
       "path": [
         "list"
       ],
-      "summary": "List saved workflows",
-      "description": "List saved workflows with their current version and latest run status.",
+      "summary": "List Flows",
+      "description": "List persistent Flows with Cycle, Tick, lifecycle, and Schedule state.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "limit": {
             "type": "integer",
-            "description": "Maximum number of workflows to return. Defaults to 50."
+            "description": "Maximum number of Flows to return."
           }
         }
       },
@@ -75,18 +75,18 @@
       "path": [
         "show"
       ],
-      "summary": "Show one workflow",
-      "description": "Return workflow metadata, current version, runs, and parsed node summary.",
+      "summary": "Show one Flow",
+      "description": "Return Bundle metadata, graph, configuration, current Cycle, and history.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "workflow-id": {
             "type": "string",
-            "description": "Workflow id to inspect."
+            "description": "Flow id."
           },
           "include-script": {
             "type": "boolean",
-            "description": "Include the current workflow script in the output."
+            "description": "Include all Bundle source files."
           }
         },
         "required": [
@@ -107,18 +107,18 @@
       "path": [
         "validate"
       ],
-      "summary": "Validate a workflow script",
-      "description": "Parse a workflow script and return diagnostics, external inputs, and node summary.",
+      "summary": "Validate a Flow Bundle",
+      "description": "Statically validate a standalone tutti.flow.v1 Bundle without executing code nodes.",
       "inputSchema": {
         "type": "object",
         "properties": {
-          "script": {
+          "directory": {
             "type": "string",
-            "description": "Workflow JavaScript source to validate."
+            "description": "Bundle directory containing flow.js."
           }
         },
         "required": [
-          "script"
+          "directory"
         ]
       },
       "output": {
@@ -135,26 +135,26 @@
       "path": [
         "create"
       ],
-      "summary": "Launch a workflow authoring session",
-      "description": "Create a workflow and launch an authoring agent session from a prompt, returning immediately with the workflow id and session. Versions land whenever the session submits.",
+      "summary": "Launch Flow authoring",
+      "description": "Launch an Agent that produces, reviews, and submits a standalone Flow Bundle.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "prompt": {
             "type": "string",
-            "description": "Natural-language workflow request."
+            "description": "Natural-language Flow request."
           },
           "agent": {
             "type": "string",
-            "description": "Optional exact agent target id for generation. Discover current targets with tutti --json agent list."
+            "description": "Authoring Agent target id."
           },
           "model": {
             "type": "string",
-            "description": "Optional model override."
+            "description": "Optional authoring model."
           },
           "cwd": {
             "type": "string",
-            "description": "Optional working directory, resolved inside the configured workflow cwd root."
+            "description": "Optional runtime project directory."
           }
         },
         "required": [
@@ -173,40 +173,88 @@
     },
     {
       "path": [
+        "import"
+      ],
+      "summary": "Import a Flow Bundle",
+      "description": "Save a standalone Bundle as a new persistent Flow.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "directory": {
+            "type": "string",
+            "description": "Bundle directory containing flow.js."
+          },
+          "params": {
+            "type": "string",
+            "description": "JSON object containing initial Params."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Project directory used by code nodes."
+          },
+          "secret-bindings": {
+            "type": "string",
+            "description": "JSON object mapping Secrets to environment variable names."
+          },
+          "publish": {
+            "type": "boolean",
+            "description": "Publish the imported Version."
+          },
+          "activate": {
+            "type": "boolean",
+            "description": "Activate the Flow after import."
+          }
+        },
+        "required": [
+          "directory"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/import"
+      }
+    },
+    {
+      "path": [
         "run"
       ],
-      "summary": "Start a workflow run",
-      "description": "Start the official or selected version of a saved workflow in the background and return the persisted run record used by the UI.",
+      "summary": "Dispatch a Flow Tick",
+      "description": "Start a Cycle or resume the active Cycle and queue one durable Tick.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "workflow-id": {
             "type": "string",
-            "description": "Workflow id to run."
-          },
-          "version-id": {
-            "type": "string",
-            "description": "Optional workflow version id. Omit to run the official version."
+            "description": "Flow id."
           },
           "inputs": {
             "type": "string",
-            "description": "JSON object string containing external workflow inputs, including runtime option inputs used by agent/model templates."
+            "description": "JSON object containing immutable Cycle Inputs."
+          },
+          "idempotency-key": {
+            "type": "string",
+            "description": "Optional caller idempotency key."
           },
           "agent": {
             "type": "string",
-            "description": "Exact agent target id for nodes without an explicit agent. Discover current targets with tutti --json agent list. Defaults to mock."
+            "description": "Default Agent target for Agent nodes."
           },
           "model": {
             "type": "string",
-            "description": "Optional model override."
+            "description": "Default Agent model."
           },
           "permission-mode": {
             "type": "string",
-            "description": "Optional run-level permission mode id. Discover exact ids with tutti agent composer-options --agent-id <agent-id> --json. Omit to use the agent default."
+            "description": "Default Agent permission mode."
           },
           "cwd": {
             "type": "string",
-            "description": "Optional working directory, resolved inside the configured workflow cwd root."
+            "description": "Runtime project directory override."
           }
         },
         "required": [
@@ -225,11 +273,255 @@
     },
     {
       "path": [
+        "configure"
+      ],
+      "summary": "Configure a Flow",
+      "description": "Update Params, project cwd, and Secret environment bindings.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Flow id."
+          },
+          "params": {
+            "type": "string",
+            "description": "JSON object containing Params."
+          },
+          "expected-params-revision": {
+            "type": "integer",
+            "description": "Optimistic Params revision."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Project directory used by code nodes."
+          },
+          "secret-bindings": {
+            "type": "string",
+            "description": "JSON Secret binding object."
+          }
+        },
+        "required": [
+          "workflow-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/configure"
+      }
+    },
+    {
+      "path": [
+        "activate"
+      ],
+      "summary": "Activate a Flow",
+      "description": "Set the Flow lifecycle to active.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Flow id."
+          }
+        },
+        "required": [
+          "workflow-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/activate"
+      }
+    },
+    {
+      "path": [
+        "pause"
+      ],
+      "summary": "Pause a Flow",
+      "description": "Set the Flow lifecycle to paused.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Flow id."
+          }
+        },
+        "required": [
+          "workflow-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/pause"
+      }
+    },
+    {
+      "path": [
+        "cancel-cycle"
+      ],
+      "summary": "Cancel a Cycle",
+      "description": "Request cancellation and run matching Finally nodes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "workflow-id": {
+            "type": "string",
+            "description": "Flow id."
+          },
+          "cycle-id": {
+            "type": "string",
+            "description": "Optional Cycle id."
+          },
+          "run-id": {
+            "type": "string",
+            "description": "Optional Tick id used to resolve its Cycle."
+          }
+        },
+        "required": [
+          "workflow-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/cancel-cycle"
+      }
+    },
+    {
+      "path": [
+        "runs",
+        "get"
+      ],
+      "summary": "Inspect a Tick",
+      "description": "Return its Cycle checkpoint, Attempts, Effects, and Human tasks.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run-id": {
+            "type": "string",
+            "description": "Tick id."
+          }
+        },
+        "required": [
+          "run-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/runs/get"
+      }
+    },
+    {
+      "path": [
+        "runs",
+        "wait"
+      ],
+      "summary": "Wait for a Tick stop point",
+      "description": "Durably wait until a Tick stops or asks for Human input.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run-id": {
+            "type": "string",
+            "description": "Tick id."
+          }
+        },
+        "required": [
+          "run-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/runs/wait"
+      },
+      "execution": {
+        "mode": "wait"
+      }
+    },
+    {
+      "path": [
+        "runs",
+        "respond"
+      ],
+      "summary": "Respond to a Human node",
+      "description": "Resolve a pending Human task and queue the next Tick.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "run-id": {
+            "type": "string",
+            "description": "Tick id."
+          },
+          "task-id": {
+            "type": "string",
+            "description": "Human task id."
+          },
+          "action": {
+            "type": "string",
+            "description": "Selected action id."
+          },
+          "values": {
+            "type": "string",
+            "description": "JSON object containing action field values."
+          },
+          "revision": {
+            "type": "integer",
+            "description": "Optional optimistic task revision."
+          }
+        },
+        "required": [
+          "run-id",
+          "task-id",
+          "action"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/runs/respond"
+      }
+    },
+    {
+      "path": [
         "blueprints",
         "list"
       ],
-      "summary": "List workflow blueprints",
-      "description": "List built-in workflow blueprint summaries (patterns, tags, use cases).",
+      "summary": "List Blueprints",
+      "description": "List standalone Flow Bundle templates.",
       "inputSchema": {
         "type": "object",
         "properties": {}
@@ -249,34 +541,34 @@
         "blueprints",
         "search"
       ],
-      "summary": "Search workflow blueprints",
-      "description": "Search built-in workflow blueprints by keywords, category, tags, or cwd requirement.",
+      "summary": "Search Blueprints",
+      "description": "Search templates by scenario, tag, category, and capability.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "query": {
             "type": "string",
-            "description": "Keywords matched against title, description, tags, and pattern summary."
+            "description": "Search text."
           },
           "category": {
             "type": "string",
-            "description": "Filter by category: coding, review, planning, research, or ops."
+            "description": "Blueprint category."
           },
           "tags": {
             "type": "string",
-            "description": "Comma-separated tag filter."
+            "description": "Comma-separated tags."
           },
           "requires-cwd": {
             "type": "boolean",
-            "description": "Filter by whether the blueprint requires an explicit project directory."
+            "description": "Filter by project requirement."
           },
           "include-script": {
             "type": "boolean",
-            "description": "Include full workflow scripts in the results."
+            "description": "Include Bundle files."
           },
           "limit": {
             "type": "integer",
-            "description": "Maximum number of results. Defaults to 20."
+            "description": "Maximum result count."
           }
         }
       },
@@ -295,18 +587,18 @@
         "blueprints",
         "get"
       ],
-      "summary": "Show one workflow blueprint",
-      "description": "Return one blueprint's metadata and optionally its full workflow script.",
+      "summary": "Get a Blueprint",
+      "description": "Return one Flow Bundle template.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "blueprint-id": {
             "type": "string",
-            "description": "Blueprint id to fetch."
+            "description": "Blueprint id."
           },
           "include-script": {
             "type": "boolean",
-            "description": "Include the full workflow script."
+            "description": "Include Bundle files."
           }
         },
         "required": [
@@ -325,26 +617,71 @@
     },
     {
       "path": [
+        "blueprints",
+        "instantiate"
+      ],
+      "summary": "Instantiate a Blueprint",
+      "description": "Copy a complete Blueprint Bundle into a new independent Flow.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "blueprint-id": {
+            "type": "string",
+            "description": "Blueprint id."
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional Flow name override."
+          }
+        },
+        "required": [
+          "blueprint-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/blueprints/instantiate"
+      }
+    },
+    {
+      "path": [
         "authoring",
         "validate"
       ],
-      "summary": "Validate an authored workflow script",
-      "description": "Validate a script file inside an authoring job workspace without saving a workflow version.",
+      "summary": "Validate an authored Bundle",
+      "description": "Validate draft.flow and optionally start an independent semantic review.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "job-id": {
             "type": "string",
-            "description": "Authoring job id from the task prompt (generation or edit job)."
+            "description": "Authoring job id."
           },
-          "file": {
+          "directory": {
             "type": "string",
-            "description": "Script file path inside the authoring workspace (relative paths resolve against it)."
+            "description": "Bundle directory inside the authoring workspace."
+          },
+          "review-mode": {
+            "type": "string",
+            "description": "Either \"none\" or \"agent\"."
+          },
+          "reviewer-agent": {
+            "type": "string",
+            "description": "Optional independent reviewer Agent."
+          },
+          "reviewer-model": {
+            "type": "string",
+            "description": "Optional reviewer model."
           }
         },
         "required": [
           "job-id",
-          "file"
+          "directory"
         ]
       },
       "output": {
@@ -360,28 +697,96 @@
     {
       "path": [
         "authoring",
-        "submit"
+        "review",
+        "get"
       ],
-      "summary": "Submit an authored workflow script",
-      "description": "Save a script version for a workflow authoring job (create or edit). Validates the script; on accepted: false, fix the returned diagnostics and submit again. A session may submit multiple times; each accepted submit saves a new version.",
+      "summary": "Get semantic review",
+      "description": "Read the current review bound to an authored Bundle.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "job-id": {
             "type": "string",
-            "description": "Authoring job id from the task prompt (generation or edit job)."
-          },
-          "file": {
-            "type": "string",
-            "description": "Script file path inside the authoring workspace (relative paths resolve against it)."
-          },
-          "script": {
-            "type": "string",
-            "description": "Inline workflow script source; alternative to file."
+            "description": "Authoring job id."
           }
         },
         "required": [
           "job-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/authoring/review/get"
+      }
+    },
+    {
+      "path": [
+        "authoring",
+        "review",
+        "wait"
+      ],
+      "summary": "Wait for semantic review",
+      "description": "Durably wait for the independent review to stop.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job-id": {
+            "type": "string",
+            "description": "Authoring job id."
+          }
+        },
+        "required": [
+          "job-id"
+        ]
+      },
+      "output": {
+        "defaultMode": "json",
+        "json": true
+      },
+      "handler": {
+        "kind": "http",
+        "method": "POST",
+        "path": "/tutti/cli/authoring/review/wait"
+      },
+      "execution": {
+        "mode": "wait"
+      }
+    },
+    {
+      "path": [
+        "authoring",
+        "submit"
+      ],
+      "summary": "Submit an authored Bundle",
+      "description": "Persist the exact reviewed Bundle as a new published Version.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "job-id": {
+            "type": "string",
+            "description": "Authoring job id."
+          },
+          "directory": {
+            "type": "string",
+            "description": "Bundle directory inside the authoring workspace."
+          },
+          "skip-semantic-review": {
+            "type": "boolean",
+            "description": "Explicitly waive independent review."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Required audit reason when review is waived."
+          }
+        },
+        "required": [
+          "job-id",
+          "directory"
         ]
       },
       "output": {
@@ -398,18 +803,18 @@
       "path": [
         "resume"
       ],
-      "summary": "Resume an interrupted workflow run",
-      "description": "Resume a recoverable workflow run by reattaching to persisted agent sessions and continuing the same run record.",
+      "summary": "Resume a waiting Flow",
+      "description": "Queue the next Tick for the active Cycle associated with a prior Tick.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "workflow-id": {
             "type": "string",
-            "description": "Workflow id that owns the run."
+            "description": "Flow id."
           },
           "run-id": {
             "type": "string",
-            "description": "Interrupted workflow run id to resume."
+            "description": "Prior Tick id."
           }
         },
         "required": [

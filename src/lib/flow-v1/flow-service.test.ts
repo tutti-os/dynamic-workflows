@@ -130,6 +130,35 @@ describe("Flow v1 creation, publication, and direct Invocation", () => {
     expect(duplicate.tick.cycle.id).toBe(pending.tick.cycle.id);
   });
 
+  it("identifies a completed Tick returned by an idempotent retry", async () => {
+    const service = await import("./flow-service");
+    const created = service.createFlowV1({
+      bundle: directGateBundle(),
+      activate: true,
+    });
+    const first = await service.invokeFlowV1({
+      flowId: created.flowId,
+      invocationInput: { item: "large.ts" },
+      idempotencyKey: "completed-retry",
+      environment: { FLOW_DIRECT_APPROVED: "true" },
+    });
+    expect(first.action).toBe("started_cycle");
+    expect(first.execution?.stopReason).toBe("cycle_completed");
+
+    const retry = await service.invokeFlowV1({
+      flowId: created.flowId,
+      invocationInput: { item: "different-input-is-ignored" },
+      idempotencyKey: "completed-retry",
+      environment: { FLOW_DIRECT_APPROVED: "true" },
+    });
+
+    expect(retry.action).toBe("idempotent_tick");
+    expect(retry.tick.created).toBe(false);
+    expect(retry.tick.cycle.id).toBe(first.tick.cycle.id);
+    expect(retry.tick.run.id).toBe(first.tick.run.id);
+    expect(retry.execution).toBeNull();
+  });
+
   it("resolves a Human task and creates exactly one continuation Tick", async () => {
     const service = await import("./flow-service");
     const humanTasks = await import("@/lib/db/workflows/human-tasks");
