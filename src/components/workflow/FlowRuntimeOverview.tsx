@@ -18,6 +18,9 @@ import {
 import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
 import type {
   FlowV1DetailProjection,
+  FlowV1Edge,
+  FlowV1GraphCheckpoint,
+  FlowV1Node,
   FlowV1NodeAttemptRecord,
 } from "@/lib/flow-v1/types";
 import type {
@@ -279,7 +282,10 @@ function DesignView(props: {
           {props.projection.graph.edges.length} edges
         </span>
       </div>
-      <FlowGraph mode="design" projection={props.projection} />
+      <FlowGraph
+        graph={props.projection.graph}
+        mode="design"
+      />
       <ConfigurationEditor
         projection={props.projection}
         workflowId={props.workflowId}
@@ -501,7 +507,12 @@ function LiveView(props: {
             : "Healthy"}
         </span>
       </div>
-      <FlowGraph mode="live" projection={props.projection} />
+      <FlowGraph
+        checkpoint={props.projection.checkpoint}
+        currentNodeId={props.projection.selectedCycle?.currentNodeId}
+        graph={props.projection.graph}
+        mode="live"
+      />
       <div className="flow-runtime-history-grid">
         <HistoryList
           title="Cycles"
@@ -535,13 +546,18 @@ function LiveView(props: {
   );
 }
 
-function FlowGraph(props: {
-  projection: FlowV1DetailProjection;
+export function FlowGraph(props: {
+  graph: {
+    nodes: FlowV1Node[];
+    edges: FlowV1Edge[];
+  };
   mode: "design" | "live";
+  checkpoint?: FlowV1GraphCheckpoint | null;
+  currentNodeId?: string | null;
 }) {
   const elements = useMemo(
-    () => buildFlowGraphElements(props.projection, props.mode),
-    [props.projection, props.mode],
+    () => buildFlowGraphElements(props),
+    [props],
   );
   return (
     <div
@@ -571,8 +587,12 @@ function FlowGraph(props: {
 }
 
 function buildFlowGraphElements(
-  projection: FlowV1DetailProjection,
-  mode: "design" | "live",
+  projection: {
+    graph: { nodes: FlowV1Node[]; edges: FlowV1Edge[] };
+    mode: "design" | "live";
+    checkpoint?: FlowV1GraphCheckpoint | null;
+    currentNodeId?: string | null;
+  },
 ): { nodes: ReactFlowNode[]; edges: ReactFlowEdge[] } {
   const levels = layoutFlowGraph(projection);
   const groups = new Map<number, string[]>();
@@ -580,7 +600,7 @@ function buildFlowGraphElements(
     const level = levels.get(node.id) ?? 0;
     groups.set(level, [...(groups.get(level) ?? []), node.id]);
   }
-  const currentNodeId = projection.selectedCycle?.currentNodeId;
+  const currentNodeId = projection.currentNodeId;
   const selectedEdges = new Set(
     projection.checkpoint?.selectedControlEdgeIds ?? [],
   );
@@ -591,7 +611,8 @@ function buildFlowGraphElements(
     const level = levels.get(node.id) ?? 0;
     const row = groups.get(level)?.indexOf(node.id) ?? 0;
     const state = projection.checkpoint?.nodes[node.id];
-    const status = mode === "live" ? state?.status ?? "idle" : "design";
+    const status =
+      projection.mode === "live" ? state?.status ?? "idle" : "design";
     return {
       id: node.id,
       position: { x: level * 260, y: row * 125 },
@@ -608,7 +629,7 @@ function buildFlowGraphElements(
             <span>{node.kind}</span>
             <strong>{node.label}</strong>
             <small>
-              {mode === "live"
+              {projection.mode === "live"
                 ? [
                     status,
                     state?.outcome
@@ -655,7 +676,7 @@ function buildFlowGraphElements(
         .join(" "),
       animated:
         selected &&
-        projection.selectedCycle?.currentNodeId === edge.targetNodeId,
+        projection.currentNodeId === edge.targetNodeId,
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 14,
@@ -667,7 +688,9 @@ function buildFlowGraphElements(
 }
 
 function layoutFlowGraph(
-  projection: FlowV1DetailProjection,
+  projection: {
+    graph: { nodes: FlowV1Node[]; edges: FlowV1Edge[] };
+  },
 ): Map<string, number> {
   const levels = new Map(
     projection.graph.nodes.map((node) => [node.id, 0]),

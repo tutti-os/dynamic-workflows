@@ -1866,6 +1866,119 @@ a {
   padding-top: 12px;
 }
 
+.flow-draft-review {
+  display: grid;
+  gap: 14px;
+  margin: 16px 0;
+  border: 1px solid var(--border-1);
+  border-radius: 12px;
+  background: var(--background-fronted);
+  padding: 16px;
+}
+
+.flow-draft-status {
+  border: 1px solid color-mix(in srgb, var(--state-warning) 55%, var(--border-1));
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--state-warning);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.flow-draft-version-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.flow-draft-version-strip span {
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-draft-version-strip span.is-current {
+  border-color: var(--state-warning);
+  color: var(--foreground);
+}
+
+.flow-draft-review-summary {
+  border-left: 3px solid var(--state-success);
+  background: var(--background);
+  padding: 10px 12px;
+  font-size: 11px;
+}
+
+.flow-draft-review-summary p {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+}
+
+.flow-draft-review-summary ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--state-warning);
+}
+
+.flow-draft-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 14px;
+}
+
+.flow-draft-grid select {
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 7px 9px;
+  color: var(--foreground);
+}
+
+.flow-draft-source {
+  max-height: 390px;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--background);
+  padding: 12px;
+  font: 10px/1.55 var(--font-geist-mono);
+  white-space: pre;
+}
+
+.flow-draft-runtime-config {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.flow-draft-runtime-config div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.flow-draft-runtime-config dt {
+  color: var(--text-secondary);
+}
+
+.flow-draft-runtime-config dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .flow-draft-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .flow-runtime-panel-title h3 {
   font-size: 12px;
 }

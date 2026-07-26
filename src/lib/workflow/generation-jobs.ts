@@ -21,9 +21,9 @@ import {
 } from "@/lib/workflow/authoring/semantic-review";
 import { createSampleFlowV1Bundle } from "@/lib/workflow/sample";
 import {
-  configureFlowV1,
   createFlowV1Version,
 } from "@/lib/flow-v1/flow-service";
+import { setFlowV1RuntimeConfig } from "@/lib/flow-v1/runtime-config";
 
 const activeGenerationJobs = new Map<string, Promise<void>>();
 
@@ -108,12 +108,11 @@ async function launchGenerationSession(generationId: string) {
       createFlowV1Version({
         flowId: generation.workflowId,
         bundle,
-        publish: true,
+        publish: false,
         semanticReview,
       });
-      configureFlowV1({
+      setFlowV1RuntimeConfig({
         flowId: generation.workflowId,
-        params: {},
         projectCwd: generation.cwd ?? undefined,
         defaultAgent: generation.agent ?? "mock",
         defaultModel: generation.model,
@@ -123,6 +122,7 @@ async function launchGenerationSession(generationId: string) {
         generation: {
           source: "sample_flow_bundle",
           bundleHash: bundle.hash,
+          versionStatus: "draft",
         },
       });
       return;

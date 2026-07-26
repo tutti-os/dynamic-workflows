@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { WorkflowErrorBoundary } from "@/components/workflow/WorkflowErrorBoundary";
 import { FlowRuntimeOverview } from "@/components/workflow/FlowRuntimeOverview";
+import { FlowDraftReview } from "@/components/workflow/FlowDraftReview";
 import {
   hasCurrentVersion,
   WorkflowGenerationState,
@@ -19,6 +20,7 @@ import type { FlowV1DetailProjection } from "@/lib/flow-v1/types";
 
 type FlowWorkflowDetail = WorkflowDetail & {
   flowV1: FlowV1DetailProjection | null;
+  draftReview: NonNullable<WorkflowDetail["draftReview"]> | null;
 };
 
 export function WorkflowWorkbench(props: { workflowId: string }) {
@@ -82,6 +84,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     if (
       !detail ||
       detail.currentVersion ||
+      detail.draftReview ||
       detail.generation?.status === "failed"
     ) {
       return;
@@ -209,7 +212,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     );
   }
 
-  if (!hasCurrentVersion(detail)) {
+  if (!hasCurrentVersion(detail) && !detail.draftReview) {
     return (
       <WorkflowGenerationState
         detail={detail}
@@ -221,7 +224,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     );
   }
 
-  if (!detail.flowV1) {
+  if (detail.currentVersion && !detail.flowV1) {
     return (
       <main className="app-shell">
         <ErrorState
@@ -235,6 +238,11 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
       </main>
     );
   }
+  const displayName =
+    detail.draftReview?.version.meta.name ?? detail.workflow.name;
+  const displayDescription =
+    detail.draftReview?.version.meta.description ??
+    detail.workflow.description;
 
   return (
     <main className="app-shell">
@@ -245,18 +253,18 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
           </Link>
           <div className="detail-heading">
             <div className="detail-heading-title">
-              <h1>{detail.workflow.name}</h1>
+              <h1>{displayName}</h1>
             </div>
             <div className="detail-meta">
               <span className="detail-description">
-                {detail.workflow.description}
+                {displayDescription}
               </span>
             </div>
           </div>
         </div>
         <div className="flow-detail-actions">
           <button
-            disabled={mutating !== null}
+            disabled={mutating !== null || !detail.currentVersion}
             onClick={() => void duplicateFlow()}
             type="button"
           >
@@ -273,11 +281,21 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
         </div>
       </header>
       {error ? <p className="flow-detail-error">{error}</p> : null}
-      <FlowRuntimeOverview
-        workflowId={props.workflowId}
-        projection={detail.flowV1}
-        onRefresh={load}
-      />
+      {detail.draftReview ? (
+        <FlowDraftReview
+          draft={detail.draftReview}
+          onRefresh={load}
+          versions={detail.versions}
+          workflowId={props.workflowId}
+        />
+      ) : null}
+      {detail.flowV1 ? (
+        <FlowRuntimeOverview
+          workflowId={props.workflowId}
+          projection={detail.flowV1}
+          onRefresh={load}
+        />
+      ) : null}
     </main>
   );
 }

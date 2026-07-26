@@ -13,6 +13,9 @@ export type VersionRow = {
   version: number;
   meta_json: string;
   semantic_review_json: string | null;
+  version_status: "draft" | "published" | "superseded";
+  bundle_hash: string;
+  published_at: string | null;
   created_at: string;
 };
 
@@ -74,6 +77,9 @@ export function mapVersion(row: VersionRow): WorkflowVersionRecord {
           id: row.id,
         })
       : null,
+    status: row.version_status,
+    bundleHash: row.bundle_hash,
+    publishedAt: row.published_at,
     createdAt: row.created_at,
   };
 }

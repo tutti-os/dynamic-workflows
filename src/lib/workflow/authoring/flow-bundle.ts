@@ -19,9 +19,9 @@ import {
   getWorkflowGeneration,
 } from "@/lib/db/workflows/generations";
 import {
-  configureFlowV1,
   createFlowV1Version,
 } from "@/lib/flow-v1/flow-service";
+import { setFlowV1RuntimeConfig } from "@/lib/flow-v1/runtime-config";
 import {
   AuthoringSubmitError,
   requireSemanticReview,
@@ -114,6 +114,7 @@ export async function submitAuthoringFlowBundle(input: {
   workflowId?: string;
   versionId?: string;
   version?: number;
+  versionStatus?: "draft";
   bundleHash?: string;
   diagnosticSummary?: WorkflowDiagnosticSummary;
   diagnostics?: WorkflowDiagnostic[];
@@ -145,12 +146,11 @@ export async function submitAuthoringFlowBundle(input: {
   const created = createFlowV1Version({
     flowId: generation.workflowId,
     bundle: validation.bundle,
-    publish: true,
+    publish: false,
     semanticReview,
   });
-  configureFlowV1({
+  setFlowV1RuntimeConfig({
     flowId: generation.workflowId,
-    params: {},
     projectCwd: generation.cwd ?? undefined,
     defaultAgent: generation.agent ?? "mock",
     defaultModel: generation.model,
@@ -160,6 +160,7 @@ export async function submitAuthoringFlowBundle(input: {
     generation: {
       submittedVia: "authoring_flow_bundle",
       bundleHash: validation.bundle.hash,
+      versionStatus: "draft",
       semanticReview: {
         status: semanticReview.status,
         reviewId: semanticReview.reviewId,
@@ -172,6 +173,7 @@ export async function submitAuthoringFlowBundle(input: {
     workflowId: generation.workflowId,
     versionId: created.versionId,
     version: created.version,
+    versionStatus: "draft",
     bundleHash: created.bundleHash,
   };
 }

@@ -31,11 +31,13 @@ Read `dsl-reference.md`, `patterns.md`, and `blueprint-guide.md` before writing.
 
    `tutti --json dynamic-workflows authoring review wait --job-id <job-id>`
 
-7. Submit the reviewed Bundle:
+7. Submit the reviewed Bundle as an immutable Draft:
 
    `tutti --json dynamic-workflows authoring submit --job-id <job-id> --directory draft.flow`
 
-8. Delivery is complete only when the response contains `accepted: true`.
+8. Delivery is complete only when the response contains `accepted: true` and
+   `versionStatus: "draft"`. The user owns Publish and Activate; do not perform
+   either action.
 
 ## Non-negotiable rules
 

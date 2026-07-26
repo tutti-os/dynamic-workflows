@@ -15,7 +15,7 @@ export const meta = {
 };
 export const runtime = {
   maxNodeExecutionsPerTick: 20,
-  maxImmediateContinuations: 0,
+  maxImmediateContinuations: 1,
   maxParallelNodes: 2,
 };
 const inventory = agent({

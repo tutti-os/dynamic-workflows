@@ -98,6 +98,18 @@ describe("Flow v1 authoring validation", () => {
     const { getFlowV1BundleForVersion } = await import(
       "@/lib/db/workflows/flow-bundles"
     );
+    const { getWorkflowDetail } = await import(
+      "@/lib/db/workflows/workflow-repository"
+    );
+    const { getWorkflowVersion } = await import(
+      "@/lib/db/workflows/versions"
+    );
+    const { getLatestFlowV1DraftReview } = await import(
+      "@/lib/flow-v1/draft-projection"
+    );
+    const { publishFlowV1Version } = await import(
+      "@/lib/flow-v1/flow-service"
+    );
     const pending = createPendingWorkflowGeneration({
       prompt: "Create a persistent maintenance Flow",
     });
@@ -132,10 +144,44 @@ describe("Flow v1 authoring validation", () => {
       accepted: true,
       workflowId: pending.workflow.id,
       version: 1,
+      versionStatus: "draft",
       bundleHash: expect.any(String),
     });
+    expect(getWorkflowDetail(pending.workflow.id)?.currentVersion).toBeNull();
+    expect(getWorkflowVersion(submitted.versionId!)).toEqual(
+      expect.objectContaining({
+        status: "draft",
+        publishedAt: null,
+      }),
+    );
     expect(
       getFlowV1BundleForVersion(submitted.versionId!)?.hash,
     ).toBe(submitted.bundleHash);
+    expect(getLatestFlowV1DraftReview(pending.workflow.id)).toEqual(
+      expect.objectContaining({
+        version: expect.objectContaining({
+          id: submitted.versionId,
+          status: "draft",
+        }),
+        graph: expect.objectContaining({
+          nodes: expect.arrayContaining([
+            expect.objectContaining({ id: "scan" }),
+          ]),
+        }),
+      }),
+    );
+
+    publishFlowV1Version({
+      flowId: pending.workflow.id,
+      versionId: submitted.versionId!,
+      params: {},
+    });
+    expect(getLatestFlowV1DraftReview(pending.workflow.id)).toBeNull();
+    expect(getWorkflowDetail(pending.workflow.id)?.currentVersion).toEqual(
+      expect.objectContaining({
+        id: submitted.versionId,
+        status: "published",
+      }),
+    );
   });
 });

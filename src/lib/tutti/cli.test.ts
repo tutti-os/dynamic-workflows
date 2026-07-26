@@ -90,6 +90,49 @@ describe("Flow-only dynamic workflows CLI", () => {
     );
   });
 
+  it("shows and explicitly publishes an imported Draft", async () => {
+    const imported = await invoke("import", {
+      directory: bundleDir,
+      publish: false,
+    });
+    const created = imported.value.flow as {
+      flowId: string;
+      versionId: string;
+    };
+
+    const draft = await invoke("show", {
+      workflowId: created.flowId,
+    });
+    expect(draft.value).toEqual(
+      expect.objectContaining({
+        currentVersion: null,
+        draftReview: expect.objectContaining({
+          version: expect.objectContaining({ status: "draft" }),
+        }),
+      }),
+    );
+
+    const published = await invoke("publish", {
+      workflowId: created.flowId,
+      versionId: created.versionId,
+      params: {},
+    });
+    expect(published.value).toEqual(
+      expect.objectContaining({
+        ok: true,
+        published: expect.objectContaining({
+          versionId: created.versionId,
+        }),
+      }),
+    );
+    const shown = await invoke("show", {
+      workflowId: created.flowId,
+    });
+    expect(shown.value.currentVersion).toEqual(
+      expect.objectContaining({ id: created.versionId }),
+    );
+  });
+
   it("rejects single-script validate and import inputs", async () => {
     const validated = await invoke("validate", {
       script: "export const meta = {}",

@@ -4,8 +4,14 @@ import type {
   WorkflowMeta,
 } from "@/lib/workflow/types";
 import type {
+  FlowV1BundleFile,
   FlowV1DetailProjection,
+  FlowV1Edge,
+  FlowV1JsonObject,
+  FlowV1Node,
   FlowV1RuntimeSummary,
+  FlowV1SchemaEntry,
+  FlowV1VersionStatus,
 } from "@/lib/flow-v1/types";
 
 export type WorkflowHumanTaskRecord = WorkflowHumanTask;
@@ -57,7 +63,33 @@ export type WorkflowVersionRecord = {
   version: number;
   meta: WorkflowMeta;
   semanticReview: AuthoringSemanticReview | null;
+  status: FlowV1VersionStatus;
+  bundleHash: string;
+  publishedAt: string | null;
   createdAt: string;
+};
+
+export type WorkflowDraftReview = {
+  version: WorkflowVersionRecord;
+  bundle: {
+    hash: string;
+    files: FlowV1BundleFile[];
+  };
+  graph: {
+    nodes: FlowV1Node[];
+    edges: FlowV1Edge[];
+  };
+  configuration: {
+    paramsSchema: Record<string, FlowV1SchemaEntry>;
+    inputsSchema: Record<string, FlowV1SchemaEntry>;
+    secretsSchema: Record<string, FlowV1SchemaEntry>;
+    suggestedParams: FlowV1JsonObject;
+    projectCwd: string | null;
+    defaultAgent: string | null;
+    defaultModel: string | null;
+    defaultPermissionMode: string | null;
+  };
+  diagnostics: WorkflowDiagnostic[];
 };
 
 export type WorkflowGenerationStatus =
@@ -92,6 +124,7 @@ export type WorkflowGenerationRecord = {
 export type WorkflowListItem = {
   workflow: WorkflowRecord;
   currentVersion: WorkflowVersionRecord | null;
+  latestVersion: WorkflowVersionRecord | null;
   generation: WorkflowGenerationRecord | null;
   flowV1Runtime: FlowV1RuntimeSummary | null;
 };
@@ -102,4 +135,5 @@ export type WorkflowDetail = {
   versions: WorkflowVersionRecord[];
   generation: WorkflowGenerationRecord | null;
   flowV1?: FlowV1DetailProjection | null;
+  draftReview?: WorkflowDraftReview | null;
 };

@@ -44,6 +44,7 @@ import {
   configureFlowV1,
   createFlowV1,
   dispatchFlowV1,
+  publishFlowV1Version,
   setFlowV1Lifecycle,
   respondToFlowV1HumanTask,
 } from "@/lib/flow-v1/flow-service";
@@ -61,6 +62,7 @@ import {
 } from "@/lib/db/workflows/flow-attempts";
 import { listFlowV1HumanTasks } from "@/lib/db/workflows/human-tasks";
 import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
+import { getLatestFlowV1DraftReview } from "@/lib/flow-v1/draft-projection";
 import {
   readFlowV1BundleDirectory,
 } from "@/lib/flow-v1/bundle";
@@ -119,6 +121,7 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "validate",
   "create",
   "import",
+  "publish",
   "run",
   "configure",
   "activate",
@@ -163,6 +166,8 @@ export async function handleDynamicWorkflowsCliRequest(
         return cliJson(await createCommand(input));
       case "import":
         return envelope(() => importCommand(input));
+      case "publish":
+        return envelope(() => publishCommand(input));
       case "run":
         return envelope(() => runCommand(input));
       case "configure":
@@ -322,6 +327,7 @@ function listCommand(input: CliInput, context: CliContext) {
   const rows = listWorkflows()
     .slice(0, limit)
     .map((item) => {
+      const latestVersion = item.latestVersion;
       const flowV1 =
         item.currentVersion &&
         getFlowV1BundleForVersion(item.currentVersion.id)
@@ -329,9 +335,16 @@ function listCommand(input: CliInput, context: CliContext) {
           : null;
       return {
         id: item.workflow.id,
-        name: item.workflow.name,
-        description: item.workflow.description,
-        version: item.currentVersion?.version ?? null,
+        name:
+          latestVersion?.status === "draft"
+            ? latestVersion.meta.name
+            : item.workflow.name,
+        description:
+          latestVersion?.status === "draft"
+            ? latestVersion.meta.description
+            : item.workflow.description,
+        version: latestVersion?.version ?? null,
+        versionStatus: latestVersion?.status ?? null,
         lifecycle: flowV1?.lifecycle ?? null,
         cycleStatus: flowV1?.activeCycle?.status ?? null,
         cycleCount: flowV1?.cycleCount ?? null,
@@ -372,15 +385,15 @@ function showCommand(input: CliInput) {
   if (!detail) {
     throw new CliHttpError("workflow_not_found", "Workflow not found.", 404);
   }
-  if (!detail.currentVersion) {
+  const selectedVersion = detail.currentVersion ?? detail.versions[0];
+  if (!selectedVersion) {
     throw new CliHttpError(
       "workflow_version_not_found",
       "Workflow version not found.",
       404,
     );
   }
-
-  const bundle = getFlowV1BundleForVersion(detail.currentVersion.id);
+  const bundle = getFlowV1BundleForVersion(selectedVersion.id);
   if (!bundle) {
     throw new CliHttpError(
       "flow_bundle_not_found",
@@ -391,7 +404,8 @@ function showCommand(input: CliInput) {
   const parsed = parseFlowV1Bundle(bundle);
   return {
     workflow: detail.workflow,
-    currentVersion: {
+    currentVersion: detail.currentVersion
+      ? {
       id: detail.currentVersion.id,
       version: detail.currentVersion.version,
       meta: parsed.meta,
@@ -409,15 +423,42 @@ function showCommand(input: CliInput) {
             },
           }
         : {}),
-    },
+    }
+      : null,
+    draftReview: getLatestFlowV1DraftReview(workflowId),
     versions: detail.versions.map((version) => ({
       id: version.id,
       version: version.version,
+      status: version.status,
+      bundleHash: version.bundleHash,
+      publishedAt: version.publishedAt,
       meta: version.meta,
       createdAt: version.createdAt,
     })),
     flow: getFlowV1DetailProjection(workflowId),
     diagnostics: parsed.diagnostics,
+  };
+}
+
+function publishCommand(input: CliInput) {
+  const workflowId = readRequiredString(input, [
+    "workflow-id",
+    "workflowId",
+  ]);
+  const versionId = readRequiredString(input, ["version-id", "versionId"]);
+  const published = publishFlowV1Version({
+    flowId: workflowId,
+    versionId,
+    params: readFlowV1JsonObject(input, [
+      "params",
+      "params-json",
+      "paramsJson",
+    ]),
+  });
+  return {
+    published,
+    workflow: getWorkflowDetail(workflowId),
+    runtime: getFlowV1DetailProjection(workflowId)?.runtime ?? null,
   };
 }
 

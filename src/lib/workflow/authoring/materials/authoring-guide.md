@@ -42,7 +42,9 @@ The Flow is persistent:
 ## Delivery protocol
 
 Write all files under `draft.flow/`, validate statically, repair every error,
-and submit until the response contains `accepted: true`.
+and submit until the response contains `accepted: true`. Submission creates an
+immutable Draft Version for user review; it never publishes or activates the
+Flow.
 
 ```bash
 tutti --json dynamic-workflows authoring validate \
@@ -58,4 +60,5 @@ tutti --json dynamic-workflows authoring submit \
   --directory draft.flow
 ```
 
-Chat output is not delivery.
+Chat output is not delivery. Do not publish or activate the Draft on the
+user's behalf.

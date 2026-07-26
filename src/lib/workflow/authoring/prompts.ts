@@ -9,7 +9,7 @@ export function buildCreateAuthoringPrompt(input: {
     "Create and submit a new persistent Flow Bundle.",
     "",
     "Design the persistent Cycle, Tick waiting points, Script/Gate/Effect boundaries, Human decisions, Memory updates, Schedule, and terminal continuation before drafting.",
-    "Follow the injected authoring guide and workflow-authoring skill. Search the Blueprint catalog, write a complete standalone tutti.flow.v1 Bundle, validate it statically, start the independent semantic review, wait for it, and submit the reviewed Bundle.",
+    "Follow the injected authoring guide and workflow-authoring skill. Search the Blueprint catalog, write a complete standalone tutti.flow.v1 Bundle, validate it statically, start the independent semantic review, wait for it, and submit the reviewed Bundle as a Draft for the user to review.",
     "",
     `Job id: ${input.jobId}`,
     `Mode: create`,
@@ -27,7 +27,7 @@ export function buildCreateAuthoringPrompt(input: {
 }
 
 const ACCEPTANCE_INSTRUCTION =
-  "Chat output is not delivery. Fix validation or submission diagnostics and retry until the submit response contains accepted: true; stop only for a genuine blocker that cannot be resolved from the request or local context.";
+  'Chat output is not delivery. Fix validation or submission diagnostics and retry until the submit response contains accepted: true and versionStatus: "draft". Do not publish or activate the Draft; those decisions belong to the user. Stop only for a genuine blocker that cannot be resolved from the request or local context.';
 
 function reviewWaitExample(jobId: string): string {
   return `tutti --json dynamic-workflows authoring review wait --job-id ${jobId}`;

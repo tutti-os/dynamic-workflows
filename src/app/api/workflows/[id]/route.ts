@@ -7,6 +7,7 @@ import {
   updateWorkflowMetadata,
 } from "@/lib/db/workflows/workflow-repository";
 import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
+import { getLatestFlowV1DraftReview } from "@/lib/flow-v1/draft-projection";
 import {
   configureFlowV1,
   setFlowV1Lifecycle,
@@ -33,6 +34,7 @@ export async function GET(
   return NextResponse.json({
     ...detail,
     flowV1,
+    draftReview: getLatestFlowV1DraftReview(id),
   });
 }
 

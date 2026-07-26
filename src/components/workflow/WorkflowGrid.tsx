@@ -118,6 +118,14 @@ function WorkflowCard(props: {
   onDeleteWorkflow: (workflowId: string, workflowName: string) => Promise<void>;
 }) {
   const { item } = props;
+  const displayName =
+    item.latestVersion?.status === "draft"
+      ? item.latestVersion.meta.name
+      : item.workflow.name;
+  const displayDescription =
+    item.latestVersion?.status === "draft"
+      ? item.latestVersion.meta.description
+      : item.workflow.description;
   const workflowUrl = `/workflows/${item.workflow.id}`;
   const generationStatus = item.generation?.status;
   const latestRunStatus = item.flowV1Runtime?.latestRun?.status;
@@ -130,22 +138,22 @@ function WorkflowCard(props: {
         <Link
           className="workflow-card-main"
           href={workflowUrl}
-          aria-label={`Open ${item.workflow.name}`}
+          aria-label={`Open ${displayName}`}
         >
           <span className="workflow-card-icon">
             <DirectoryIcon size={20} />
           </span>
           <span className="workflow-card-summary">
             <span className="workflow-card-copy">
-              <span className="workflow-card-title">{item.workflow.name}</span>
+              <span className="workflow-card-title">{displayName}</span>
               <span className="workflow-card-description">
-                {item.workflow.description}
+                {displayDescription}
               </span>
             </span>
             <span className="workflow-card-submeta">
               <span>
-                {item.currentVersion
-                  ? `Version ${item.currentVersion.version}`
+                {item.latestVersion
+                  ? `Version ${item.latestVersion.version}`
                   : "Draft"}
               </span>
               <span>
@@ -171,6 +179,8 @@ function WorkflowCard(props: {
               >
                 {formatStatusLabel(displayedStatus)}
               </Badge>
+            ) : item.latestVersion?.status === "draft" ? (
+              <Badge variant="pending">Review draft</Badge>
             ) : item.currentVersion ? (
               <Badge variant="success">Ready</Badge>
             ) : (
@@ -194,7 +204,7 @@ function WorkflowCard(props: {
                 variant="outline"
                 size="icon-lg"
                 type="button"
-                aria-label={`More actions for ${item.workflow.name}`}
+                aria-label={`More actions for ${displayName}`}
               >
                 <MoreHorizontalIcon />
               </Button>
@@ -204,7 +214,7 @@ function WorkflowCard(props: {
                 onSelect={() =>
                   void props.onCopyWorkflowId(
                     item.workflow.id,
-                    item.workflow.name,
+                    displayName,
                   )
                 }
               >
@@ -229,7 +239,7 @@ function WorkflowCard(props: {
               <DropdownMenuItem
                 variant="destructive"
                 onSelect={() =>
-                  void props.onDeleteWorkflow(item.workflow.id, item.workflow.name)
+                  void props.onDeleteWorkflow(item.workflow.id, displayName)
                 }
                 disabled={props.deleting}
               >

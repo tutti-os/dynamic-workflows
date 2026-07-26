@@ -54,6 +54,29 @@ export function listWorkflows(): WorkflowListItem[] {
       versionsById.set(version.id, version);
     }
   }
+  const latestVersionRows = database
+    .prepare(
+      `
+      SELECT *
+      FROM (
+        SELECT workflow_versions.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY workflow_id
+            ORDER BY version DESC
+          ) AS row_number
+        FROM workflow_versions
+        WHERE workflow_id IN (${workflowPlaceholders})
+      )
+      WHERE row_number = 1
+    `,
+    )
+    .all(...workflowIds) as VersionRow[];
+  const latestVersionsByWorkflowId = new Map(
+    latestVersionRows.map((row) => {
+      const version = mapVersion(row);
+      return [version.workflowId, version];
+    }),
+  );
 
   const generationRows = database
     .prepare(
@@ -83,6 +106,7 @@ export function listWorkflows(): WorkflowListItem[] {
       currentVersion: workflow.currentVersionId
         ? versionsById.get(workflow.currentVersionId) ?? null
         : null,
+      latestVersion: latestVersionsByWorkflowId.get(workflow.id) ?? null,
       generation: generationsByWorkflowId.get(workflow.id) ?? null,
       flowV1Runtime: workflow.currentVersionId
         ? getFlowV1RuntimeSummary(workflow.id)

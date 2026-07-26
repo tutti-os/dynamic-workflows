@@ -426,6 +426,8 @@ function initializeMemoryIfDeclared(
 export function publishFlowV1Version(input: {
   flowId: string;
   versionId: string;
+  params?: FlowV1JsonObject;
+  expectedParamsRevision?: number;
   now?: string;
 }): { versionId: string; bundleHash: string } {
   const bundle = getFlowV1BundleForVersion(input.versionId);
@@ -439,11 +441,13 @@ export function publishFlowV1Version(input: {
   const database = getDb();
   const now = input.now ?? new Date().toISOString();
   const currentParams = getCurrentFlowV1Params(input.flowId);
-  const compatibleParams = Object.fromEntries(
-    Object.keys(flow.params)
-      .filter((name) => currentParams?.values[name] !== undefined)
-      .map((name) => [name, currentParams!.values[name]!]),
-  ) as FlowV1JsonObject;
+  const compatibleParams =
+    input.params ??
+    (Object.fromEntries(
+      Object.keys(flow.params)
+        .filter((name) => currentParams?.values[name] !== undefined)
+        .map((name) => [name, currentParams!.values[name]!]),
+    ) as FlowV1JsonObject);
   const params = resolveParams(flow, compatibleParams);
   database.transaction(() => {
     const version = database
@@ -466,7 +470,7 @@ export function publishFlowV1Version(input: {
         UPDATE workflow_versions
         SET version_status = 'superseded'
         WHERE workflow_id = ? AND id <> ?
-          AND version_status = 'published'
+          AND version_status IN ('draft', 'published')
       `,
       )
       .run(input.flowId, input.versionId);
@@ -483,7 +487,8 @@ export function publishFlowV1Version(input: {
       .prepare(
         `
         UPDATE workflows
-        SET name = ?, description = ?, current_version_id = ?, updated_at = ?
+        SET name = ?, description = ?, current_version_id = ?,
+          lifecycle = 'draft', updated_at = ?
         WHERE id = ?
       `,
       )
@@ -501,7 +506,8 @@ export function publishFlowV1Version(input: {
       setFlowV1Params({
         flowId: input.flowId,
         values: params,
-        expectedRevision: currentParams?.revision ?? 0,
+        expectedRevision:
+          input.expectedParamsRevision ?? currentParams?.revision ?? 0,
       });
     }
     configureSchedule(input.flowId, flow, params, now);

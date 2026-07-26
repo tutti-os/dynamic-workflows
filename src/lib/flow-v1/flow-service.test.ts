@@ -258,6 +258,40 @@ describe("Flow v1 creation, publication, and direct Invocation", () => {
       { id: first.versionId, version_status: "superseded" },
       { id: second.versionId, version_status: "published" },
     ]);
+    expect(
+      getDb()
+        .prepare("SELECT lifecycle FROM workflows WHERE id = ?")
+        .get(first.flowId),
+    ).toEqual({ lifecycle: "draft" });
+  });
+
+  it("supersedes older unpublished Drafts when a newer Draft is published", async () => {
+    const service = await import("./flow-service");
+    const { getDb } = await import("@/lib/db/client");
+    const created = service.createFlowV1({
+      bundle: directGateBundle(),
+    });
+    const firstDraft = service.createFlowV1Version({
+      flowId: created.flowId,
+      bundle: directGateBundle("draft-v2"),
+    });
+    const secondDraft = service.createFlowV1Version({
+      flowId: created.flowId,
+      bundle: directGateBundle("draft-v3"),
+    });
+
+    service.publishFlowV1Version({
+      flowId: created.flowId,
+      versionId: secondDraft.versionId,
+    });
+
+    expect(
+      getDb()
+        .prepare(
+          "SELECT version_status FROM workflow_versions WHERE id = ?",
+        )
+        .get(firstDraft.versionId),
+    ).toEqual({ version_status: "superseded" });
   });
 
   it("enforces declared Param and Cycle input types, ranges, and keys", async () => {
