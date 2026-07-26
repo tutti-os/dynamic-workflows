@@ -115,6 +115,8 @@ async function launchGenerationSession(generationId: string) {
         flowId: generation.workflowId,
         params: {},
         projectCwd: generation.cwd ?? undefined,
+        defaultAgent: generation.agent ?? "mock",
+        defaultModel: generation.model,
       });
       completeWorkflowFlowGeneration({
         generationId,

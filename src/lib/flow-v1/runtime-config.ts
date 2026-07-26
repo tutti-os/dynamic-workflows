@@ -24,12 +24,18 @@ export type FlowV1SecretBinding = {
 
 export type FlowV1RuntimeConfig = {
   projectCwd: string | null;
+  defaultAgent: string | null;
+  defaultModel: string | null;
+  defaultPermissionMode: string | null;
   secretBindings: Record<string, FlowV1SecretBinding>;
 };
 
 export function setFlowV1RuntimeConfig(input: {
   flowId: string;
   projectCwd?: string | null;
+  defaultAgent?: string | null;
+  defaultModel?: string | null;
+  defaultPermissionMode?: string | null;
   secretBindings?: Record<string, FlowV1SecretBinding>;
 }): FlowV1RuntimeConfig {
   const database = getDb();
@@ -64,6 +70,55 @@ export function setFlowV1RuntimeConfig(input: {
         `,
         )
         .run(projectCwd, new Date().toISOString(), input.flowId).changes;
+      if (updated !== 1) {
+        throw new FlowV1RuntimeConfigError(
+          "flow_not_found",
+          `Flow ${input.flowId} was not found.`,
+        );
+      }
+    }
+    if (
+      input.defaultAgent !== undefined ||
+      input.defaultModel !== undefined ||
+      input.defaultPermissionMode !== undefined
+    ) {
+      const defaultAgent = normalizeRuntimeSetting(
+        input.defaultAgent,
+        "Agent",
+      );
+      const defaultModel = normalizeRuntimeSetting(
+        input.defaultModel,
+        "Model",
+      );
+      const defaultPermissionMode = normalizeRuntimeSetting(
+        input.defaultPermissionMode,
+        "Permission mode",
+      );
+      const updated = database
+        .prepare(
+          `
+          UPDATE workflows
+          SET
+            default_agent = CASE WHEN ? = 1 THEN ? ELSE default_agent END,
+            default_model = CASE WHEN ? = 1 THEN ? ELSE default_model END,
+            default_permission_mode = CASE
+              WHEN ? = 1 THEN ?
+              ELSE default_permission_mode
+            END,
+            updated_at = ?
+          WHERE id = ?
+        `,
+        )
+        .run(
+          input.defaultAgent !== undefined ? 1 : 0,
+          defaultAgent,
+          input.defaultModel !== undefined ? 1 : 0,
+          defaultModel,
+          input.defaultPermissionMode !== undefined ? 1 : 0,
+          defaultPermissionMode,
+          new Date().toISOString(),
+          input.flowId,
+        ).changes;
       if (updated !== 1) {
         throw new FlowV1RuntimeConfigError(
           "flow_not_found",
@@ -120,8 +175,22 @@ export function getFlowV1RuntimeConfig(
 ): FlowV1RuntimeConfig {
   const database = getDb();
   const flow = database
-    .prepare("SELECT project_cwd FROM workflows WHERE id = ?")
-    .get(flowId) as { project_cwd: string | null } | undefined;
+    .prepare(
+      `
+      SELECT project_cwd, default_agent, default_model,
+        default_permission_mode
+      FROM workflows
+      WHERE id = ?
+    `,
+    )
+    .get(flowId) as
+    | {
+        project_cwd: string | null;
+        default_agent: string | null;
+        default_model: string | null;
+        default_permission_mode: string | null;
+      }
+    | undefined;
   if (!flow) {
     throw new FlowV1RuntimeConfigError(
       "flow_not_found",
@@ -162,7 +231,13 @@ export function getFlowV1RuntimeConfig(
       env: binding.env,
     };
   }
-  return { projectCwd: flow.project_cwd, secretBindings };
+  return {
+    projectCwd: flow.project_cwd,
+    defaultAgent: flow.default_agent,
+    defaultModel: flow.default_model,
+    defaultPermissionMode: flow.default_permission_mode,
+    secretBindings,
+  };
 }
 
 export function resolveFlowV1ExecutionConfig(input: {
@@ -170,6 +245,9 @@ export function resolveFlowV1ExecutionConfig(input: {
   flow: ParsedFlowV1;
 }): {
   projectCwd: string | undefined;
+  defaultAgent: string | undefined;
+  defaultModel: string | undefined;
+  defaultPermissionMode: string | undefined;
   secrets: Record<string, string>;
   missingSecretNames: string[];
 } {
@@ -187,7 +265,27 @@ export function resolveFlowV1ExecutionConfig(input: {
   }
   return {
     projectCwd: config.projectCwd ?? undefined,
+    defaultAgent: config.defaultAgent ?? undefined,
+    defaultModel: config.defaultModel ?? undefined,
+    defaultPermissionMode: config.defaultPermissionMode ?? undefined,
     secrets,
     missingSecretNames,
   };
+}
+
+function normalizeRuntimeSetting(
+  value: string | null | undefined,
+  label: string,
+): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new FlowV1RuntimeConfigError(
+      "flow_runtime_setting_invalid",
+      `${label} must be a non-empty string or null.`,
+    );
+  }
+  return normalized;
 }

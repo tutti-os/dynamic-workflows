@@ -102,6 +102,91 @@ const DEFAULT_RUNTIME: FlowV1RuntimeDefinition = {
   maxParallelNodes: 4,
 };
 
+type SchemaHelperDefinition = {
+  namespace: "params" | "inputs" | "secrets";
+  valueType: "string" | "number" | "boolean" | "json" | "secret";
+  configKeys: Set<string>;
+};
+
+const COMMON_SCHEMA_CONFIG_KEYS = ["required", "default"];
+const SCHEMA_HELPERS: Record<string, SchemaHelperDefinition> = {
+  stringParam: {
+    namespace: "params",
+    valueType: "string",
+    configKeys: new Set([
+      ...COMMON_SCHEMA_CONFIG_KEYS,
+      "minLength",
+      "maxLength",
+      "pattern",
+    ]),
+  },
+  numberParam: {
+    namespace: "params",
+    valueType: "number",
+    configKeys: new Set([
+      ...COMMON_SCHEMA_CONFIG_KEYS,
+      "min",
+      "max",
+      "integer",
+    ]),
+  },
+  booleanParam: {
+    namespace: "params",
+    valueType: "boolean",
+    configKeys: new Set(COMMON_SCHEMA_CONFIG_KEYS),
+  },
+  jsonParam: {
+    namespace: "params",
+    valueType: "json",
+    configKeys: new Set(COMMON_SCHEMA_CONFIG_KEYS),
+  },
+  cronParam: {
+    namespace: "params",
+    valueType: "string",
+    configKeys: new Set(COMMON_SCHEMA_CONFIG_KEYS),
+  },
+  stringInput: {
+    namespace: "inputs",
+    valueType: "string",
+    configKeys: new Set([
+      ...COMMON_SCHEMA_CONFIG_KEYS,
+      "minLength",
+      "maxLength",
+      "pattern",
+    ]),
+  },
+  numberInput: {
+    namespace: "inputs",
+    valueType: "number",
+    configKeys: new Set([
+      ...COMMON_SCHEMA_CONFIG_KEYS,
+      "min",
+      "max",
+      "integer",
+    ]),
+  },
+  booleanInput: {
+    namespace: "inputs",
+    valueType: "boolean",
+    configKeys: new Set(COMMON_SCHEMA_CONFIG_KEYS),
+  },
+  jsonInput: {
+    namespace: "inputs",
+    valueType: "json",
+    configKeys: new Set(COMMON_SCHEMA_CONFIG_KEYS),
+  },
+  stringSecret: {
+    namespace: "secrets",
+    valueType: "secret",
+    configKeys: new Set(["required"]),
+  },
+  connectionSecret: {
+    namespace: "secrets",
+    valueType: "secret",
+    configKeys: new Set(["required", "provider"]),
+  },
+};
+
 export function parseFlowV1Bundle(bundle: FlowV1Bundle): ParsedFlowV1 {
   const state: ParserState = {
     bundle,
@@ -329,7 +414,26 @@ function readSchemaDeclaration(
     }
     const helper = readCalleeName(call);
     const configNode = firstArgument(call);
-    const config = readStaticObject(configNode) ?? {};
+    const staticConfig = readStaticObject(configNode);
+    if (configNode && !staticConfig) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.schema_config_invalid",
+          `${namespace}.${name} helper configuration must be a static object literal.`,
+          `${namespace}.${name}`,
+          configNode,
+        ),
+      );
+    }
+    const config = staticConfig ?? {};
+    validateSchemaEntry({
+      namespace,
+      name,
+      helper,
+      config,
+      node: value,
+      state,
+    });
     entries[name] = {
       name,
       helper: helper ?? "unknown",
@@ -339,6 +443,271 @@ function readSchemaDeclaration(
     };
   }
   return entries;
+}
+
+function validateSchemaEntry(input: {
+  namespace: string;
+  name: string;
+  helper: string | undefined;
+  config: FlowV1JsonObject;
+  node: AstNode;
+  state: ParserState;
+}): void {
+  const definition = input.helper
+    ? SCHEMA_HELPERS[input.helper]
+    : undefined;
+  const entryPath = `${input.namespace}.${input.name}`;
+  if (!definition || definition.namespace !== input.namespace) {
+    input.state.diagnostics.push(
+      diagnostic(
+        "flow.schema_helper_unknown",
+        `${entryPath} uses unsupported helper ${input.helper ?? "(unknown)"}.`,
+        entryPath,
+        input.node,
+      ),
+    );
+    return;
+  }
+  for (const key of Object.keys(input.config)) {
+    if (!definition.configKeys.has(key)) {
+      input.state.diagnostics.push(
+        diagnostic(
+          "flow.schema_config_key_unknown",
+          `${entryPath} does not support configuration key "${key}".`,
+          `${entryPath}.${key}`,
+          input.node,
+        ),
+      );
+    }
+  }
+  if (
+    Object.hasOwn(input.config, "required") &&
+    typeof input.config.required !== "boolean"
+  ) {
+    input.state.diagnostics.push(
+      diagnostic(
+        "flow.schema_required_invalid",
+        `${entryPath}.required must be a boolean.`,
+        `${entryPath}.required`,
+        input.node,
+      ),
+    );
+  }
+  if (Object.hasOwn(input.config, "default")) {
+    validateSchemaValue(
+      input.config.default,
+      definition,
+      `${entryPath}.default`,
+      input.node,
+      input.state,
+      input.config,
+    );
+  }
+  validateSchemaConstraints(
+    definition,
+    input.config,
+    entryPath,
+    input.node,
+    input.state,
+  );
+}
+
+function validateSchemaConstraints(
+  definition: SchemaHelperDefinition,
+  config: FlowV1JsonObject,
+  entryPath: string,
+  node: AstNode,
+  state: ParserState,
+): void {
+  if (definition.valueType === "number") {
+    for (const key of ["min", "max"] as const) {
+      if (
+        Object.hasOwn(config, key) &&
+        (typeof config[key] !== "number" || !Number.isFinite(config[key]))
+      ) {
+        state.diagnostics.push(
+          diagnostic(
+            "flow.schema_number_constraint_invalid",
+            `${entryPath}.${key} must be a finite number.`,
+            `${entryPath}.${key}`,
+            node,
+          ),
+        );
+      }
+    }
+    if (
+      typeof config.min === "number" &&
+      typeof config.max === "number" &&
+      config.min > config.max
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.schema_number_range_invalid",
+          `${entryPath}.min cannot be greater than max.`,
+          entryPath,
+          node,
+        ),
+      );
+    }
+    if (
+      Object.hasOwn(config, "integer") &&
+      typeof config.integer !== "boolean"
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.schema_integer_constraint_invalid",
+          `${entryPath}.integer must be a boolean.`,
+          `${entryPath}.integer`,
+          node,
+        ),
+      );
+    }
+  }
+  if (definition.valueType === "string") {
+    for (const key of ["minLength", "maxLength"] as const) {
+      if (
+        Object.hasOwn(config, key) &&
+        (!Number.isInteger(config[key]) ||
+          (config[key] as number) < 0)
+      ) {
+        state.diagnostics.push(
+          diagnostic(
+            "flow.schema_string_constraint_invalid",
+            `${entryPath}.${key} must be a non-negative integer.`,
+            `${entryPath}.${key}`,
+            node,
+          ),
+        );
+      }
+    }
+    if (
+      typeof config.minLength === "number" &&
+      typeof config.maxLength === "number" &&
+      config.minLength > config.maxLength
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.schema_string_range_invalid",
+          `${entryPath}.minLength cannot be greater than maxLength.`,
+          entryPath,
+          node,
+        ),
+      );
+    }
+    if (Object.hasOwn(config, "pattern")) {
+      if (typeof config.pattern !== "string") {
+        state.diagnostics.push(
+          diagnostic(
+            "flow.schema_pattern_invalid",
+            `${entryPath}.pattern must be a string.`,
+            `${entryPath}.pattern`,
+            node,
+          ),
+        );
+      } else {
+        try {
+          new RegExp(config.pattern, "u");
+        } catch {
+          state.diagnostics.push(
+            diagnostic(
+              "flow.schema_pattern_invalid",
+              `${entryPath}.pattern must be a valid regular expression.`,
+              `${entryPath}.pattern`,
+              node,
+            ),
+          );
+        }
+      }
+    }
+  }
+  if (
+    definition.valueType === "secret" &&
+    definition.configKeys.has("provider") &&
+    (typeof config.provider !== "string" || !config.provider.trim())
+  ) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.schema_secret_provider_invalid",
+        `${entryPath}.provider must be a non-empty string.`,
+        `${entryPath}.provider`,
+        node,
+      ),
+    );
+  }
+}
+
+function validateSchemaValue(
+  value: FlowV1JsonValue | undefined,
+  definition: SchemaHelperDefinition,
+  valuePath: string,
+  node: AstNode,
+  state: ParserState,
+  config: FlowV1JsonObject,
+): void {
+  const validType =
+    definition.valueType === "json" ||
+    (definition.valueType === "string" && typeof value === "string") ||
+    (definition.valueType === "number" &&
+      typeof value === "number" &&
+      Number.isFinite(value)) ||
+    (definition.valueType === "boolean" && typeof value === "boolean");
+  if (!validType) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.schema_default_type_invalid",
+        `${valuePath} does not match helper type ${definition.valueType}.`,
+        valuePath,
+        node,
+      ),
+    );
+    return;
+  }
+  if (definition.valueType === "number" && typeof value === "number") {
+    if (
+      (typeof config.min === "number" && value < config.min) ||
+      (typeof config.max === "number" && value > config.max) ||
+      (config.integer === true && !Number.isInteger(value))
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.schema_default_constraint_invalid",
+          `${valuePath} violates its numeric constraints.`,
+          valuePath,
+          node,
+        ),
+      );
+    }
+  }
+  if (definition.valueType === "string" && typeof value === "string") {
+    const pattern =
+      typeof config.pattern === "string"
+        ? safeSchemaPattern(config.pattern)
+        : null;
+    if (
+      (typeof config.minLength === "number" &&
+        value.length < config.minLength) ||
+      (typeof config.maxLength === "number" &&
+        value.length > config.maxLength) ||
+      (pattern && !pattern.test(value))
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.schema_default_constraint_invalid",
+          `${valuePath} violates its string constraints.`,
+          valuePath,
+          node,
+        ),
+      );
+    }
+  }
+}
+
+function safeSchemaPattern(value: string): RegExp | null {
+  try {
+    return new RegExp(value, "u");
+  } catch {
+    return null;
+  }
 }
 
 function readCycles(
@@ -637,6 +1006,9 @@ function addNode(
         inputs[`$config.${step.id}.${name}`] = value;
       }
     }
+    if (step.workspace) {
+      inputs[`$workspace.${step.id}`] = step.workspace;
+    }
   }
   if (map) {
     inputs["$map.source"] = map.source;
@@ -665,7 +1037,45 @@ function addNode(
   if (workspace) {
     inputs["$workspace"] = workspace;
   }
-  const execution = readExecutionContract(properties?.get("execution"));
+  const execution = readExecutionContract(
+    properties?.get("execution"),
+    `nodes.${id}.execution`,
+    state,
+  );
+  if (
+    execution &&
+    execution.access !== "review" &&
+    execution.isolation === "required" &&
+    !workspace
+  ) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.workspace_required",
+        `Node ${id} requires a Workspace for isolated ${execution.access} execution.`,
+        `nodes.${id}.workspace`,
+        properties?.get("execution"),
+      ),
+    );
+  }
+  for (const step of [...(loop?.steps ?? []), ...(map?.steps ?? [])]) {
+    if (
+      step.kind === "agent" &&
+      step.execution &&
+      step.execution.access !== "review" &&
+      step.execution.isolation === "required" &&
+      !step.workspace &&
+      !workspace
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.workspace_required",
+          `Composite Agent ${id}.${step.id} requires a parent or step Workspace for isolated ${step.execution.access} execution.`,
+          `nodes.${id}.steps.${step.id}.workspace`,
+          properties?.get("execution"),
+        ),
+      );
+    }
+  }
   const agent = readResolvableString(properties?.get("agent"));
   const model = readResolvableString(properties?.get("model"));
   const permissionMode = readResolvableString(
@@ -832,8 +1242,24 @@ function readContinueMode(
 
 function readExecutionContract(
   node: AstNode | undefined,
+  diagnosticPath: string,
+  state: ParserState,
 ): FlowV1Node["execution"] | undefined {
+  if (!node) {
+    return undefined;
+  }
   const properties = readObjectProperties(node);
+  if (!properties) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.execution_contract_invalid",
+        "Execution contract must be an object literal.",
+        diagnosticPath,
+        node,
+      ),
+    );
+    return undefined;
+  }
   const access = readString(properties?.get("access"));
   const isolation = readString(properties?.get("isolation"));
   if (
@@ -842,6 +1268,14 @@ function readExecutionContract(
   ) {
     return { access, isolation };
   }
+  state.diagnostics.push(
+    diagnostic(
+      "flow.execution_contract_invalid",
+      'Execution contract requires access "read", "write", or "review" and isolation "shared" or "required".',
+      diagnosticPath,
+      node,
+    ),
+  );
   return undefined;
 }
 
@@ -1130,6 +1564,14 @@ function readCompositeSteps(
       `${nodeId}.${id}`,
       state,
     );
+    const workspace =
+      readReference(properties?.get("workspace")) ??
+      readIdentifierReference(properties?.get("workspace"));
+    const execution = readExecutionContract(
+      properties?.get("execution"),
+      `nodes.${nodeId}.steps.${id}.execution`,
+      state,
+    );
     steps.push({
       id,
       kind: "agent",
@@ -1151,17 +1593,8 @@ function readCompositeSteps(
       ...(readString(properties?.get("cwd"))
         ? { cwd: readString(properties?.get("cwd")) }
         : {}),
-      ...(readReference(properties?.get("workspace")) ??
-      readIdentifierReference(properties?.get("workspace"))
-        ? {
-            workspace:
-              readReference(properties?.get("workspace")) ??
-              readIdentifierReference(properties?.get("workspace"))!,
-          }
-        : {}),
-      ...(readExecutionContract(properties?.get("execution"))
-        ? { execution: readExecutionContract(properties?.get("execution")) }
-        : {}),
+      ...(workspace ? { workspace } : {}),
+      ...(execution ? { execution } : {}),
       ...(output ? { output } : {}),
     });
   }

@@ -583,8 +583,18 @@ export type FlowV1GraphCheckpoint = {
 
 export type FlowV1MemoryProjection = {
   path: string;
+  markdown: string;
   hash: string;
   sections: Record<string, string>;
+  conflicts: Array<{
+    cycleId: string;
+    nodeId: string;
+    baseHash: string;
+    currentHash: string;
+    candidateHash: string;
+    candidateMarkdown: string;
+    createdAt: string;
+  }>;
   error?: string;
 };
 
@@ -608,6 +618,9 @@ export type FlowV1DetailProjection = {
     secretsSchema: Record<string, FlowV1SchemaEntry>;
     params: FlowV1ParamsRecord | null;
     projectCwd: string | null;
+    defaultAgent: string | null;
+    defaultModel: string | null;
+    defaultPermissionMode: string | null;
     secretBindings: Record<
       string,
       { kind: "environment"; env: string }

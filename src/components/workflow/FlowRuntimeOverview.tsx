@@ -1,6 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import {
+  Background,
+  Controls,
+  MarkerType,
+  ReactFlow,
+  type Edge as ReactFlowEdge,
+  type Node as ReactFlowNode,
+} from "@xyflow/react";
+import { useMemo, useState } from "react";
+import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
+import {
+  WorkflowAgentSelect,
+  WorkflowModelSelect,
+  WorkflowPermissionModeSelect,
+} from "@/components/workflow/WorkflowRunSelectors";
+import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
 import type {
   FlowV1DetailProjection,
   FlowV1NodeAttemptRecord,
@@ -239,7 +254,12 @@ export function FlowRuntimeOverview(props: {
         />
       ) : null}
       {view === "review" ? (
-        <ReviewView projection={projection} />
+        <ReviewView
+          projection={projection}
+          workflowId={props.workflowId}
+          canResolve={!historicalProjection}
+          onRefresh={props.onRefresh}
+        />
       ) : null}
     </section>
   );
@@ -259,35 +279,7 @@ function DesignView(props: {
           {props.projection.graph.edges.length} edges
         </span>
       </div>
-      <div className="flow-runtime-node-track" aria-label="Flow design nodes">
-        {props.projection.graph.nodes.map((node) => (
-          <div className="flow-runtime-node" key={node.id}>
-            <span className="flow-runtime-node-kind">{node.kind}</span>
-            <strong>{node.label}</strong>
-            <small>
-              {Object.values(node.inputs)
-                .map((input) => input.expression)
-                .join(", ") || "root"}
-            </small>
-            {node.execution ? (
-              <small>
-                {node.execution.access} · {node.execution.isolation}
-                {node.workspace
-                  ? ` · workspace ${node.workspace.expression}`
-                  : ""}
-              </small>
-            ) : null}
-          </div>
-        ))}
-      </div>
-      <div className="flow-runtime-edge-list">
-        {props.projection.graph.edges.map((edge) => (
-          <code key={edge.id}>
-            {edge.sourceNodeId} → {edge.targetNodeId}
-            {edge.kind === "control" ? ` [${edge.outcome}]` : ""}
-          </code>
-        ))}
-      </div>
+      <FlowGraph mode="design" projection={props.projection} />
       <ConfigurationEditor
         projection={props.projection}
         workflowId={props.workflowId}
@@ -303,6 +295,11 @@ function ConfigurationEditor(props: {
   onRefresh: () => Promise<unknown>;
 }) {
   const configuration = props.projection.configuration;
+  const runSettings = useWorkflowRunSettings({
+    agent: configuration.defaultAgent ?? undefined,
+    model: configuration.defaultModel ?? undefined,
+    permissionMode: configuration.defaultPermissionMode ?? undefined,
+  });
   const [paramsText, setParamsText] = useState(
     JSON.stringify(configuration.params?.values ?? {}, null, 2),
   );
@@ -339,6 +336,10 @@ function ConfigurationEditor(props: {
         params,
         expectedParamsRevision: configuration.params?.revision ?? 0,
         projectCwd: projectCwd.trim() || null,
+        defaultAgent: runSettings.effectiveAgent,
+        defaultModel: runSettings.model.trim() || null,
+        defaultPermissionMode:
+          runSettings.permissionMode.trim() || null,
         secretBindings,
       });
       setMessage("Configuration saved.");
@@ -411,6 +412,34 @@ function ConfigurationEditor(props: {
             value={projectCwd}
           />
         </label>
+        <label>
+          <span>Default Agent</span>
+          <WorkflowAgentSelect
+            agents={runSettings.agents}
+            value={runSettings.effectiveAgent}
+            fallbackValue="mock"
+            disabled={runSettings.agentsLoading}
+            onValueChange={runSettings.setAgent}
+          />
+        </label>
+        <label>
+          <span>Default model</span>
+          <WorkflowModelSelect
+            models={runSettings.modelOptions}
+            value={runSettings.model}
+            disabled={runSettings.agentsLoading}
+            onValueChange={runSettings.setModel}
+          />
+        </label>
+        <label>
+          <span>Default permissions</span>
+          <WorkflowPermissionModeSelect
+            modes={runSettings.permissionModeOptions}
+            value={runSettings.permissionMode}
+            disabled={runSettings.agentsLoading}
+            onValueChange={runSettings.setPermissionMode}
+          />
+        </label>
         {Object.entries(configuration.secretsSchema).map(
           ([name, definition]) => (
             <label key={name}>
@@ -432,6 +461,12 @@ function ConfigurationEditor(props: {
           ),
         )}
       </div>
+      <AgentCatalogStatus
+        loading={runSettings.agentsLoading}
+        error={runSettings.agentsError}
+        warning={runSettings.agentsWarning}
+        onRetry={runSettings.retryAgents}
+      />
       <div className="flow-runtime-config-footer">
         <button
           disabled={pending !== null}
@@ -456,7 +491,6 @@ function LiveView(props: {
   onRefresh: () => Promise<unknown>;
   onInspectCycle: (cycleId: string) => Promise<void>;
 }) {
-  const { checkpoint } = props.projection;
   return (
     <div className="flow-runtime-panel">
       <div className="flow-runtime-panel-title">
@@ -467,26 +501,7 @@ function LiveView(props: {
             : "Healthy"}
         </span>
       </div>
-      <div className="flow-runtime-node-track" aria-label="Cycle node progress">
-        {props.projection.graph.nodes.map((node) => {
-          const state = checkpoint?.nodes[node.id];
-          return (
-            <div
-              className={`flow-runtime-node flow-runtime-node-${state?.status ?? "idle"}`}
-              key={node.id}
-              title={state?.waitingReason ?? state?.error?.message}
-            >
-              <span className="flow-runtime-node-kind">{node.kind}</span>
-              <strong>{node.label}</strong>
-              <span>{state?.status ?? "idle"}</span>
-              {state?.outcome ? <small>Outcome: {state.outcome}</small> : null}
-              {state?.attemptCount ? (
-                <small>{state.attemptCount} attempt(s)</small>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
+      <FlowGraph mode="live" projection={props.projection} />
       <div className="flow-runtime-history-grid">
         <HistoryList
           title="Cycles"
@@ -518,6 +533,166 @@ function LiveView(props: {
       />
     </div>
   );
+}
+
+function FlowGraph(props: {
+  projection: FlowV1DetailProjection;
+  mode: "design" | "live";
+}) {
+  const elements = useMemo(
+    () => buildFlowGraphElements(props.projection, props.mode),
+    [props.projection, props.mode],
+  );
+  return (
+    <div
+      className="flow-runtime-graph"
+      aria-label={
+        props.mode === "design"
+          ? "Flow design graph"
+          : "Cycle execution graph"
+      }
+    >
+      <ReactFlow
+        nodes={elements.nodes}
+        edges={elements.edges}
+        fitView
+        fitViewOptions={{ padding: 0.2 }}
+        minZoom={0.35}
+        maxZoom={1.5}
+        nodesConnectable={false}
+        nodesDraggable={false}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background gap={18} size={1} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+    </div>
+  );
+}
+
+function buildFlowGraphElements(
+  projection: FlowV1DetailProjection,
+  mode: "design" | "live",
+): { nodes: ReactFlowNode[]; edges: ReactFlowEdge[] } {
+  const levels = layoutFlowGraph(projection);
+  const groups = new Map<number, string[]>();
+  for (const node of projection.graph.nodes) {
+    const level = levels.get(node.id) ?? 0;
+    groups.set(level, [...(groups.get(level) ?? []), node.id]);
+  }
+  const currentNodeId = projection.selectedCycle?.currentNodeId;
+  const selectedEdges = new Set(
+    projection.checkpoint?.selectedControlEdgeIds ?? [],
+  );
+  const notSelectedEdges = new Set(
+    projection.checkpoint?.notSelectedControlEdgeIds ?? [],
+  );
+  const nodes = projection.graph.nodes.map((node) => {
+    const level = levels.get(node.id) ?? 0;
+    const row = groups.get(level)?.indexOf(node.id) ?? 0;
+    const state = projection.checkpoint?.nodes[node.id];
+    const status = mode === "live" ? state?.status ?? "idle" : "design";
+    return {
+      id: node.id,
+      position: { x: level * 260, y: row * 125 },
+      className: [
+        "flow-graph-node",
+        `flow-graph-node-${status}`,
+        currentNodeId === node.id ? "is-current" : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      data: {
+        label: (
+          <div className="flow-graph-node-content">
+            <span>{node.kind}</span>
+            <strong>{node.label}</strong>
+            <small>
+              {mode === "live"
+                ? [
+                    status,
+                    state?.outcome
+                      ? `outcome ${state.outcome}`
+                      : undefined,
+                    state?.attemptCount
+                      ? `${state.attemptCount} attempt(s)`
+                      : undefined,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")
+                : node.execution
+                  ? `${node.execution.access} · ${node.execution.isolation}`
+                  : Object.keys(node.inputs).length > 0
+                    ? `${Object.keys(node.inputs).length} input(s)`
+                    : "root"}
+            </small>
+          </div>
+        ),
+      },
+      title: state?.waitingReason ?? state?.error?.message ?? node.label,
+    };
+  });
+  const edges = projection.graph.edges.map((edge) => {
+    const selected =
+      edge.kind === "control" && selectedEdges.has(edge.id);
+    const notSelected =
+      edge.kind === "control" && notSelectedEdges.has(edge.id);
+    return {
+      id: edge.id,
+      source: edge.sourceNodeId,
+      target: edge.targetNodeId,
+      type: "smoothstep",
+      label: edge.kind === "control" ? edge.outcome : undefined,
+      className: [
+        "flow-graph-edge",
+        edge.kind === "control"
+          ? "flow-graph-edge-control"
+          : "flow-graph-edge-data",
+        selected ? "is-selected" : "",
+        notSelected ? "is-not-selected" : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+      animated:
+        selected &&
+        projection.selectedCycle?.currentNodeId === edge.targetNodeId,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 14,
+        height: 14,
+      },
+    };
+  });
+  return { nodes, edges };
+}
+
+function layoutFlowGraph(
+  projection: FlowV1DetailProjection,
+): Map<string, number> {
+  const levels = new Map(
+    projection.graph.nodes.map((node) => [node.id, 0]),
+  );
+  for (let pass = 0; pass < projection.graph.nodes.length; pass += 1) {
+    let changed = false;
+    for (const edge of projection.graph.edges) {
+      const sourceLevel = levels.get(edge.sourceNodeId) ?? 0;
+      const targetLevel = levels.get(edge.targetNodeId) ?? 0;
+      if (targetLevel <= sourceLevel) {
+        levels.set(edge.targetNodeId, sourceLevel + 1);
+        changed = true;
+      }
+    }
+    if (!changed) {
+      break;
+    }
+  }
+  const lastLevel = Math.max(0, ...levels.values());
+  for (const node of projection.graph.nodes) {
+    if (node.kind === "finally" && (levels.get(node.id) ?? 0) === 0) {
+      levels.set(node.id, lastLevel + 1);
+    }
+  }
+  return levels;
 }
 
 function HumanTasks(props: {
@@ -710,7 +885,12 @@ function humanFieldKey(
   return `${task.id}:${action.id}:${fieldId}`;
 }
 
-function ReviewView(props: { projection: FlowV1DetailProjection }) {
+function ReviewView(props: {
+  workflowId: string;
+  projection: FlowV1DetailProjection;
+  canResolve: boolean;
+  onRefresh: () => Promise<unknown>;
+}) {
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(
     props.projection.attempts.at(-1)?.id ?? null,
   );
@@ -763,16 +943,132 @@ function ReviewView(props: { projection: FlowV1DetailProjection }) {
         {props.projection.memory?.error ? (
           <p>{props.projection.memory.error}</p>
         ) : (
-          Object.entries(props.projection.memory?.sections ?? {}).map(
-            ([section, content]) => (
-              <article key={section}>
-                <strong>{section}</strong>
-                <pre>{content || "No entries yet."}</pre>
-              </article>
-            ),
-          )
+          <>
+            <MemoryConflicts
+              workflowId={props.workflowId}
+              projection={props.projection}
+              canResolve={props.canResolve}
+              onRefresh={props.onRefresh}
+            />
+            {Object.entries(props.projection.memory?.sections ?? {}).map(
+              ([section, content]) => (
+                <article key={section}>
+                  <strong>{section}</strong>
+                  <pre>{content || "No entries yet."}</pre>
+                </article>
+              ),
+            )}
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+function MemoryConflicts(props: {
+  workflowId: string;
+  projection: FlowV1DetailProjection;
+  canResolve: boolean;
+  onRefresh: () => Promise<unknown>;
+}) {
+  const [pending, setPending] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const conflicts = props.projection.memory?.conflicts ?? [];
+  if (conflicts.length === 0) {
+    return null;
+  }
+  const latestRun =
+    props.projection.runtime.latestRun ??
+    props.projection.runs.at(-1) ??
+    null;
+
+  async function resolveConflict(
+    nodeId: string,
+    resolution: "keep_current" | "apply_candidate",
+  ) {
+    if (!latestRun) {
+      return;
+    }
+    setPending(`${nodeId}:${resolution}`);
+    setMessage(null);
+    try {
+      const response = await fetch(
+        `/api/workflows/${props.workflowId}/runs/${latestRun.id}/memory/resolve`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nodeId, resolution }),
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as
+        | Record<string, unknown>
+        | null;
+      if (!response.ok) {
+        throw new Error(readActionError(payload));
+      }
+      setMessage("Memory conflict resolved; the next Tick has been queued.");
+      await props.onRefresh();
+      window.setTimeout(() => {
+        void props.onRefresh();
+      }, 750);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Memory conflict could not be resolved.",
+      );
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <div className="flow-runtime-memory-conflicts">
+      {conflicts.map((conflict) => (
+        <article key={`${conflict.cycleId}:${conflict.nodeId}`}>
+          <div className="flow-runtime-panel-title">
+            <strong>Conflict at {conflict.nodeId}</strong>
+            <span>{formatTimestamp(conflict.createdAt)}</span>
+          </div>
+          <div className="flow-runtime-memory-diff">
+            <div>
+              <strong>Keep current</strong>
+              <pre>{props.projection.memory?.markdown}</pre>
+            </div>
+            <div>
+              <strong>Apply candidate</strong>
+              <pre>{conflict.candidateMarkdown}</pre>
+            </div>
+          </div>
+          {props.canResolve ? (
+            <div className="flow-runtime-memory-actions">
+              <button
+                disabled={pending !== null}
+                onClick={() =>
+                  void resolveConflict(conflict.nodeId, "keep_current")
+                }
+                type="button"
+              >
+                {pending === `${conflict.nodeId}:keep_current`
+                  ? "Resolving…"
+                  : "Keep current"}
+              </button>
+              <button
+                disabled={pending !== null}
+                onClick={() =>
+                  void resolveConflict(conflict.nodeId, "apply_candidate")
+                }
+                type="button"
+              >
+                {pending === `${conflict.nodeId}:apply_candidate`
+                  ? "Resolving…"
+                  : "Apply candidate"}
+              </button>
+            </div>
+          ) : null}
+        </article>
+      ))}
+      {message ? <p role="status">{message}</p> : null}
     </div>
   );
 }
@@ -997,8 +1293,7 @@ function resolveFlowAction(
   }
   if (
     cycle.status === "paused_failed" ||
-    cycle.status === "paused_uncertain" ||
-    cycle.status === "paused_conflict"
+    cycle.status === "paused_uncertain"
   ) {
     return "retry";
   }

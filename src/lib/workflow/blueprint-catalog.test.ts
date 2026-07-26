@@ -119,10 +119,12 @@ describe("workflow blueprint catalog", () => {
         "complete_cycle",
       ],
       "map-fan-out-demo-v1": [
+        "effect",
         "agent",
         "map",
         "agent",
         "complete_cycle",
+        "finally",
       ],
       "repo-migration-sweep-v1": [
         "effect",

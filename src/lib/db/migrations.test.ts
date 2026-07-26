@@ -46,7 +46,13 @@ describe("migrateDb", () => {
         ]),
       );
       expect(readColumnNames(database, "workflows")).toEqual(
-        expect.arrayContaining(["lifecycle", "params_revision"]),
+        expect.arrayContaining([
+          "lifecycle",
+          "params_revision",
+          "default_agent",
+          "default_model",
+          "default_permission_mode",
+        ]),
       );
       expect(readColumnNames(database, "workflow_cycles")).toContain(
         "outcome",
@@ -215,6 +221,62 @@ describe("migrateDb", () => {
           "executor_kind",
         ]),
       );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves Flow v1 data while migrating schema 18 to 19", () => {
+    const database = new Database(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        INSERT INTO schema_migrations (version, applied_at)
+        VALUES (18, '2026-01-01T00:00:00.000Z');
+
+        CREATE TABLE workflows (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL,
+          current_version_id TEXT,
+          lifecycle TEXT NOT NULL DEFAULT 'draft',
+          params_revision INTEGER NOT NULL DEFAULT 0,
+          project_cwd TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO workflows (
+          id, name, description, lifecycle, created_at, updated_at
+        ) VALUES (
+          'flow-18', 'Preserved Flow', 'Existing Flow v1 data', 'active',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+        );
+      `);
+
+      migrateDb(database);
+
+      expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(
+        database
+          .prepare(
+            `
+            SELECT name, lifecycle, default_agent, default_model,
+              default_permission_mode
+            FROM workflows
+            WHERE id = ?
+          `,
+          )
+          .get("flow-18"),
+      ).toEqual({
+        name: "Preserved Flow",
+        lifecycle: "active",
+        default_agent: null,
+        default_model: null,
+        default_permission_mode: null,
+      });
     } finally {
       database.close();
     }

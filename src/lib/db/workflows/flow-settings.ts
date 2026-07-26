@@ -245,6 +245,14 @@ export function getFlowV1Schedule(
   return row ? mapSchedule(row) : null;
 }
 
+export function deleteFlowV1Schedule(flowId: string): boolean {
+  return (
+    getDb()
+      .prepare("DELETE FROM workflow_schedules WHERE flow_id = ?")
+      .run(flowId).changes > 0
+  );
+}
+
 export function listFlowV1SchedulesReady(
   now: string,
 ): FlowV1ScheduleRecord[] {

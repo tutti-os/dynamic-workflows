@@ -31,6 +31,17 @@ export type FlowV1MemoryApplyResult =
       candidateMarkdown: string;
     };
 
+export type FlowV1MemoryConflict = {
+  flowId: string;
+  cycleId: string;
+  nodeId: string;
+  baseHash: string;
+  currentHash: string;
+  candidateHash: string;
+  candidateMarkdown: string;
+  createdAt: string;
+};
+
 export class FlowV1MemoryError extends Error {
   readonly code: string;
 
@@ -188,6 +199,126 @@ export function getLatestFlowV1MemoryHashForCycle(
     )
     .get(cycleId) as { result_hash: string } | undefined;
   return row?.result_hash ?? null;
+}
+
+export function listFlowV1MemoryConflicts(input: {
+  flowId: string;
+  cycleId?: string;
+}): FlowV1MemoryConflict[] {
+  const rows = getDb()
+    .prepare(
+      `
+      SELECT flow_id, cycle_id, node_id, base_hash, result_hash,
+        candidate_markdown, created_at
+      FROM workflow_memory_updates
+      WHERE flow_id = ? AND status = 'conflict'
+        AND (? IS NULL OR cycle_id = ?)
+      ORDER BY created_at ASC, rowid ASC
+    `,
+    )
+    .all(
+      input.flowId,
+      input.cycleId ?? null,
+      input.cycleId ?? null,
+    ) as Array<{
+    flow_id: string;
+    cycle_id: string | null;
+    node_id: string;
+    base_hash: string;
+    result_hash: string | null;
+    candidate_markdown: string | null;
+    created_at: string;
+  }>;
+  const conflicts = new Map<string, FlowV1MemoryConflict>();
+  for (const row of rows) {
+    if (
+      !row.cycle_id ||
+      !row.result_hash ||
+      !row.candidate_markdown
+    ) {
+      continue;
+    }
+    const key = `${row.cycle_id}:${row.node_id}`;
+    conflicts.set(key, {
+      flowId: row.flow_id,
+      cycleId: row.cycle_id,
+      nodeId: row.node_id,
+      baseHash: row.base_hash,
+      currentHash: row.result_hash,
+      candidateHash: hashMarkdown(row.candidate_markdown),
+      candidateMarkdown: row.candidate_markdown,
+      createdAt: row.created_at,
+    });
+  }
+  return [...conflicts.values()];
+}
+
+export function resolveFlowV1MemoryConflict(input: {
+  flowId: string;
+  cycleId: string;
+  nodeId: string;
+  definition: FlowV1MemoryDefinition;
+  resolution: "keep_current" | "apply_candidate";
+}): {
+  resolution: "keep_current" | "apply_candidate";
+  resultHash: string;
+} {
+  const conflict = listFlowV1MemoryConflicts({
+    flowId: input.flowId,
+    cycleId: input.cycleId,
+  }).find((entry) => entry.nodeId === input.nodeId);
+  if (!conflict) {
+    throw new FlowV1MemoryError(
+      "flow_memory_conflict_not_found",
+      `No unresolved Memory conflict exists for ${input.nodeId}.`,
+    );
+  }
+  const current = readFlowV1Memory(input.flowId, input.definition);
+  let resultHash = current.hash;
+  if (input.resolution === "apply_candidate") {
+    parseMemoryDocument(conflict.candidateMarkdown, input.definition);
+    if (
+      current.hash !== conflict.currentHash &&
+      current.hash !== conflict.candidateHash
+    ) {
+      throw new FlowV1MemoryError(
+        "flow_memory_conflict_stale",
+        "Canonical Memory changed again after this conflict was recorded.",
+      );
+    }
+    if (current.hash !== conflict.candidateHash) {
+      writeMemoryAtomically(current.path, conflict.candidateMarkdown);
+    }
+    resultHash = conflict.candidateHash;
+  } else if (current.hash !== conflict.currentHash) {
+    throw new FlowV1MemoryError(
+      "flow_memory_conflict_stale",
+      "Canonical Memory changed again after this conflict was recorded.",
+    );
+  }
+  const updated = getDb()
+    .prepare(
+      `
+      UPDATE workflow_memory_updates
+      SET status = 'completed', result_hash = ?, applied_at = ?
+      WHERE flow_id = ? AND cycle_id = ? AND node_id = ?
+        AND status = 'conflict'
+    `,
+    )
+    .run(
+      resultHash,
+      new Date().toISOString(),
+      input.flowId,
+      input.cycleId,
+      input.nodeId,
+    ).changes;
+  if (updated === 0) {
+    throw new FlowV1MemoryError(
+      "flow_memory_conflict_not_found",
+      `Memory conflict for ${input.nodeId} was already resolved.`,
+    );
+  }
+  return { resolution: input.resolution, resultHash };
 }
 
 function parseMemoryDocument(

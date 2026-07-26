@@ -586,6 +586,14 @@ function importCommand(input: CliInput) {
     bundle: readFlowV1BundleDirectory(directory),
     params: readFlowV1JsonObject(input, ["params", "params-json", "paramsJson"]),
     projectCwd: readOptionalString(input, ["cwd", "project-cwd", "projectCwd"]),
+    defaultAgent: readOptionalString(input, ["agent", "default-agent", "defaultAgent"]),
+    defaultModel: readOptionalString(input, ["model", "default-model", "defaultModel"]),
+    defaultPermissionMode: readOptionalString(input, [
+      "permission-mode",
+      "permissionMode",
+      "default-permission-mode",
+      "defaultPermissionMode",
+    ]),
     secretBindings: readSecretBindings(input),
     publish: readOptionalBoolean(input, ["publish"]) ?? true,
     activate: readOptionalBoolean(input, ["activate"]) ?? false,
@@ -704,7 +712,7 @@ async function authoringReviewWaitCommand(input: CliInput) {
 
 async function runCommand(input: CliInput) {
   const workflowId = readRequiredString(input, ["workflow-id", "workflowId"]);
-  const agent = readOptionalString(input, ["agent"]) ?? "mock";
+  const agent = readOptionalString(input, ["agent"]);
   const model = readOptionalString(input, ["model"]);
   const permissionMode = readOptionalString(input, [
     "permission-mode",
@@ -823,6 +831,22 @@ function configureCommand(input: CliInput) {
           "cwd",
           "project-cwd",
           "projectCwd",
+        ]),
+        defaultAgent: readOptionalString(input, [
+          "agent",
+          "default-agent",
+          "defaultAgent",
+        ]),
+        defaultModel: readOptionalString(input, [
+          "model",
+          "default-model",
+          "defaultModel",
+        ]),
+        defaultPermissionMode: readOptionalString(input, [
+          "permission-mode",
+          "permissionMode",
+          "default-permission-mode",
+          "defaultPermissionMode",
         ]),
         secretBindings: readSecretBindings(input),
       }),

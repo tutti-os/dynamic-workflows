@@ -702,14 +702,14 @@ completeCycle({ id: "complete", outcome: "reviewed", inputs: { synthesis } });
       id: "map-fan-out-demo-v1",
       title: "Dynamic Fan-Out Demo",
       description:
-        "Discover a JSON work list, process and adversarially verify each item in parallel, then synthesize results without hiding failures.",
+        "Discover a JSON work list, process and adversarially verify each item in an isolated worktree, then synthesize results without hiding failures.",
       category: "coding",
-      tags: ["map", "fan-out", "dynamic", "json-output", "pipeline", "synthesis", "cwd"],
+      tags: ["map", "fan-out", "dynamic", "json-output", "pipeline", "synthesis", "worktree", "cwd"],
       difficulty: "starter",
       requiresCwd: true,
-      capabilities: ["agent", "map", "parallel", "json-output", "cwd"],
+      capabilities: ["agent", "map", "json-output", "worktree", "effect", "cwd"],
       patternSummary:
-        "A discovery Agent returns bounded JSON items, Map expands each into a process-and-verify pipeline with per-item failure isolation, and the final report receives completed and failed records explicitly.",
+        "A discovery Agent returns bounded JSON items, a host-provisioned cycle worktree keeps writes off the parent checkout, Map expands each item into a safely serialized process-and-verify pipeline, and the final report receives completed and failed records explicitly.",
       useCases: [
         "Process a runtime-discovered list item by item.",
         "Demonstrate dynamic Map expansion and per-item pipelines.",
@@ -725,6 +725,9 @@ export const meta = {
 export const inputs = defineInputs({
   discovery_focus: stringInput({ required: true }),
 });
+export const params = defineParams({
+  targetBranch: stringParam({ default: "main" }),
+});
 export const cycles = defineCycles({ mode: "singleton" });
 export const runtime = {
   maxNodeExecutionsPerTick: 80,
@@ -732,6 +735,12 @@ export const runtime = {
   maxParallelNodes: 4,
 };
 
+const workspace = effect({
+  id: "prepare_workspace",
+  file: "scripts/prepare-delivery-workspace.mjs",
+  inputs: { targetBranch: ref("params.targetBranch") },
+  idempotencyKey: template("{{cycle.id}}:prepare-workspace"),
+});
 const discover = agent({
   id: "discover",
   label: "Discover work items",
@@ -743,6 +752,8 @@ const process = map({
   id: "process",
   label: "Process and verify each item",
   source: discover,
+  inputs: { workspace },
+  workspace,
   maxItems: 12,
   execution: { access: "write", isolation: "required" },
   onItemFailure: "skip",
@@ -773,6 +784,12 @@ const synthesis = agent({
   prompt: "Summarize completed items, rejected items, failed items, checks, and uncovered scope. Never present partial coverage as complete. Map record: {{process}}",
 });
 completeCycle({ id: "complete", outcome: "processed", inputs: { synthesis } });
+finalize({
+  id: "cleanup_workspace",
+  file: "scripts/cleanup-delivery-workspace.mjs",
+  runOn: ["completed", "canceled", "failed"],
+  retainOnFailure: true,
+});
 `,
   ),
   flowBlueprint(

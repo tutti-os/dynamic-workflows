@@ -1757,6 +1757,108 @@ a {
   border-color: color-mix(in srgb, var(--state-danger) 55%, var(--border-1));
 }
 
+.flow-runtime-graph {
+  width: 100%;
+  height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border-1);
+  border-radius: 9px;
+  background: var(--background);
+}
+
+.react-flow__node.flow-graph-node {
+  width: 210px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--background-fronted);
+  padding: 0;
+  color: var(--foreground);
+  box-shadow: 0 3px 12px color-mix(in srgb, #000 8%, transparent);
+  text-align: left;
+}
+
+.react-flow__node.flow-graph-node.is-current {
+  border-color: var(--status-blue, #3b82f6);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-blue, #3b82f6) 18%, transparent);
+}
+
+.react-flow__node.flow-graph-node-running,
+.react-flow__node.flow-graph-node-queued {
+  border-color: color-mix(in srgb, var(--status-blue, #3b82f6) 65%, var(--border-1));
+}
+
+.react-flow__node.flow-graph-node-waiting {
+  border-color: color-mix(in srgb, var(--state-warning) 65%, var(--border-1));
+}
+
+.react-flow__node.flow-graph-node-completed {
+  border-color: color-mix(in srgb, var(--state-success) 60%, var(--border-1));
+}
+
+.react-flow__node.flow-graph-node-failed,
+.react-flow__node.flow-graph-node-uncertain {
+  border-color: color-mix(in srgb, var(--state-danger) 70%, var(--border-1));
+}
+
+.react-flow__node.flow-graph-node-not_selected {
+  opacity: 0.45;
+}
+
+.flow-graph-node-content {
+  display: grid;
+  gap: 4px;
+  padding: 9px 11px;
+}
+
+.flow-graph-node-content > span {
+  color: var(--status-blue, #3b82f6);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 8px;
+}
+
+.flow-graph-node-content > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.flow-graph-node-content > small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+
+.react-flow__edge.flow-graph-edge .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+  stroke-width: 1.4;
+}
+
+.react-flow__edge.flow-graph-edge-control .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+}
+
+.react-flow__edge.flow-graph-edge.is-selected .react-flow__edge-path {
+  stroke: var(--status-blue, #3b82f6);
+  stroke-width: 2.2;
+}
+
+.react-flow__edge.flow-graph-edge.is-not-selected {
+  opacity: 0.2;
+}
+
+.react-flow__edge-text {
+  fill: var(--text-secondary);
+  font-size: 9px;
+}
+
+.react-flow__edge-textbg {
+  fill: var(--background);
+}
+
 .flow-runtime-panel {
   display: grid;
   gap: 10px;
@@ -2057,6 +2159,33 @@ a {
   margin-top: 8px;
 }
 
+.flow-runtime-memory-conflicts {
+  display: grid;
+  gap: 10px;
+}
+
+.flow-runtime-memory-conflicts > article {
+  border: 1px solid color-mix(in srgb, var(--state-warning) 45%, var(--border-1));
+  border-radius: 7px;
+  padding: 8px;
+}
+
+.flow-runtime-memory-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flow-runtime-memory-diff > div {
+  min-width: 0;
+}
+
+.flow-runtime-memory-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
 .flow-runtime-memory pre {
   max-height: 160px;
   overflow: auto;
@@ -2073,7 +2202,8 @@ a {
   }
 
   .flow-runtime-history-grid,
-  .flow-runtime-review {
+  .flow-runtime-review,
+  .flow-runtime-memory-diff {
     grid-template-columns: 1fr;
   }
 }

@@ -1,10 +1,13 @@
 import type Database from "better-sqlite3";
 
 /**
- * Version 17 is the Flow v1 cutover. It intentionally rebuilds workflow
+ * Version 17 is the Flow v1 cutover. It intentionally rebuilt workflow
  * storage instead of migrating the removed script workflow runtime.
+ *
+ * Version 19 is the first incremental Flow v1 migration. From this version
+ * forward, existing Flow data must be preserved.
  */
-export const CURRENT_SCHEMA_VERSION = 18;
+export const CURRENT_SCHEMA_VERSION = 19;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -13,25 +16,46 @@ export function migrateDb(database: Database.Database): void {
       applied_at TEXT NOT NULL
     );
   `);
-  if (getCurrentSchemaVersion(database) >= CURRENT_SCHEMA_VERSION) {
+  const currentVersion = getCurrentSchemaVersion(database);
+  if (currentVersion >= CURRENT_SCHEMA_VERSION) {
     return;
   }
 
   database.pragma("foreign_keys = OFF");
   try {
     database.transaction(() => {
-      dropWorkflowSchema(database);
-      createFlowV1Schema(database);
-      database.prepare("DELETE FROM schema_migrations").run();
-      database
-        .prepare(
-          `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
-        )
-        .run(CURRENT_SCHEMA_VERSION, new Date().toISOString());
+      if (currentVersion === 18) {
+        migrateFlowV1Schema18To19(database);
+        recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
+      } else {
+        dropWorkflowSchema(database);
+        createFlowV1Schema(database);
+        database.prepare("DELETE FROM schema_migrations").run();
+        recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
+      }
     })();
   } finally {
     database.pragma("foreign_keys = ON");
   }
+}
+
+function recordSchemaVersion(
+  database: Database.Database,
+  version: number,
+): void {
+  database
+    .prepare(
+      `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+    )
+    .run(version, new Date().toISOString());
+}
+
+function migrateFlowV1Schema18To19(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflows ADD COLUMN default_agent TEXT;
+    ALTER TABLE workflows ADD COLUMN default_model TEXT;
+    ALTER TABLE workflows ADD COLUMN default_permission_mode TEXT;
+  `);
 }
 
 function getCurrentSchemaVersion(database: Database.Database): number {
@@ -75,6 +99,9 @@ function createFlowV1Schema(database: Database.Database): void {
       lifecycle TEXT NOT NULL DEFAULT 'draft',
       params_revision INTEGER NOT NULL DEFAULT 0,
       project_cwd TEXT,
+      default_agent TEXT,
+      default_model TEXT,
+      default_permission_mode TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

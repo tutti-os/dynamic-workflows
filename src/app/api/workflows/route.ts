@@ -29,6 +29,9 @@ export async function POST(request: Request) {
     publish?: boolean;
     activate?: boolean;
     projectCwd?: string;
+    defaultAgent?: string;
+    defaultModel?: string;
+    defaultPermissionMode?: string;
     secretBindings?: Record<string, FlowV1SecretBinding>;
   };
 
@@ -41,6 +44,9 @@ export async function POST(request: Request) {
         publish: body.publish,
         activate: body.activate,
         projectCwd: body.projectCwd,
+        defaultAgent: body.defaultAgent,
+        defaultModel: body.defaultModel,
+        defaultPermissionMode: body.defaultPermissionMode,
         secretBindings: body.secretBindings,
       });
       return NextResponse.json(created, { status: 201 });

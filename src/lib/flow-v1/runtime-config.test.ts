@@ -69,6 +69,9 @@ describe("Flow v1 runtime configuration", () => {
     );
     expect(runtimeConfig.getFlowV1RuntimeConfig(created.flowId)).toEqual({
       projectCwd: resolvedProjectCwd,
+      defaultAgent: null,
+      defaultModel: null,
+      defaultPermissionMode: null,
       secretBindings: {
         GH_TOKEN: {
           kind: "environment",

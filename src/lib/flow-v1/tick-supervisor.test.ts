@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -83,6 +84,60 @@ describe("Flow v1 Tick supervisor", () => {
           agentSessionId: "agent-session-1",
         }),
       ]),
+    );
+  });
+
+  it("loads the persisted Agent execution profile for a later Tick", async () => {
+    runAgentMock.mockImplementation(async function* () {
+      yield { type: "text_delta", text: "implemented" };
+      yield { type: "done", status: "completed" };
+    });
+    const { createFlowV1 } = await import("./flow-service");
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const created = createFlowV1({
+      bundle: createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const implement = agent({
+              id: "implement",
+              prompt: "Implement the approved plan.",
+            });
+            completeCycle({ id: "done", inputs: { implement } });
+          `,
+        },
+      ]),
+      projectCwd: dataDir,
+      defaultAgent: "local:codex",
+      defaultModel: "gpt-5",
+      defaultPermissionMode: "workspace-write",
+    });
+    const started = runtime.startFlowV1Cycle({
+      flowId: created.flowId,
+      flowVersionId: created.versionId,
+      origin: {
+        kind: "schedule",
+        scheduleId: "schedule-1",
+        scheduledAt: "2026-01-01T00:00:00.000Z",
+      },
+      idempotencyKey: "scheduled-agent-profile",
+      inputSnapshot: {},
+      paramsRevision: 1,
+      paramsSnapshot: {},
+    });
+
+    expect((await runFlowV1Tick({ runId: started.run.id })).stopReason).toBe(
+      "cycle_completed",
+    );
+    expect(runAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "local:codex",
+        model: "gpt-5",
+        permissionMode: "workspace-write",
+        cwd: realpathSync(dataDir),
+      }),
     );
   });
 
@@ -800,7 +855,7 @@ describe("Flow v1 Tick supervisor", () => {
     );
   });
 
-  it("safely serializes write Maps when the local host cannot isolate items", async () => {
+  it("safely serializes write Maps inside a host-provided Workspace", async () => {
     let activeAgents = 0;
     let maxActiveAgents = 0;
     runAgentMock.mockImplementation(async function* (input) {
@@ -1169,13 +1224,23 @@ function mapBundle(requireIsolation = false) {
           id: "discover",
           file: "scripts/discover.mjs",
         });
+        ${
+          requireIsolation
+            ? `const workspace = script({
+          id: "workspace",
+          file: "scripts/workspace.mjs",
+        });`
+            : ""
+        }
         const migrate = map({
           id: "migrate",
           source: ref("discover.items"),
           maxItems: 10,
           ${
             requireIsolation
-              ? 'execution: { access: "write", isolation: "required" },'
+              ? `inputs: { workspace },
+          workspace,
+          execution: { access: "write", isolation: "required" },`
               : ""
           }
           onItemFailure: "skip",
@@ -1206,6 +1271,18 @@ function mapBundle(requireIsolation = false) {
       content: `
         export async function run() {
           return { items: ["good-a", "bad", "good-b"] };
+        }
+      `,
+    },
+    {
+      path: "scripts/workspace.mjs",
+      content: `
+        import fs from "node:fs";
+        import path from "node:path";
+        export async function run() {
+          const workspace = path.join(process.cwd(), "isolated");
+          fs.mkdirSync(workspace, { recursive: true });
+          return { path: workspace };
         }
       `,
     },

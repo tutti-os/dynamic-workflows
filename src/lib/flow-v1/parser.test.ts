@@ -164,6 +164,87 @@ describe("flow v1 parser", () => {
     );
   });
 
+  it("rejects unknown schema helpers and invalid helper constraints", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            export const params = defineParams({
+              typo: mysteryParam({ default: "value" }),
+              rounds: numberParam({ default: 11, min: 1, max: 10 }),
+            });
+            export const inputs = defineInputs({
+              target: stringInput({ required: "yes" }),
+              count: numberInput({ min: "one" }),
+            });
+            export const secrets = defineSecrets({
+              github: connectionSecret({ required: true }),
+            });
+            completeCycle({ id: "done" });
+          `,
+        },
+      ]),
+    );
+
+    expect(parsed.diagnostics.map((entry) => entry.code)).toEqual(
+      expect.arrayContaining([
+        "flow.schema_helper_unknown",
+        "flow.schema_default_constraint_invalid",
+        "flow.schema_required_invalid",
+        "flow.schema_number_constraint_invalid",
+        "flow.schema_secret_provider_invalid",
+      ]),
+    );
+  });
+
+  it("rejects malformed execution contracts and isolated writes without a Workspace", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const malformed = agent({
+              id: "malformed",
+              prompt: "Inspect.",
+              execution: { access: "edit", isolation: "sometimes" },
+            });
+            const unsafe = agent({
+              id: "unsafe",
+              prompt: "Implement.",
+              execution: { access: "write", isolation: "required" },
+            });
+            const review = agent({
+              id: "review",
+              prompt: "Review.",
+              execution: { access: "review", isolation: "required" },
+            });
+            completeCycle({
+              id: "done",
+              inputs: { malformed, unsafe, review },
+            });
+          `,
+        },
+      ]),
+    );
+
+    expect(parsed.diagnostics.map((entry) => entry.code)).toEqual(
+      expect.arrayContaining([
+        "flow.execution_contract_invalid",
+        "flow.workspace_required",
+      ]),
+    );
+    expect(
+      parsed.diagnostics.filter(
+        (entry) =>
+          entry.code === "flow.workspace_required" &&
+          entry.path?.includes("review"),
+      ),
+    ).toEqual([]);
+  });
+
   it("parses Transform, typed output retry, and isolated review contracts", () => {
     const parsed = parseFlowV1Bundle(
       createFlowV1Bundle([

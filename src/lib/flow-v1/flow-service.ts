@@ -10,6 +10,7 @@ import {
   resolveWorkflowHumanTask,
 } from "@/lib/db/workflows/human-tasks";
 import {
+  deleteFlowV1Schedule,
   getCurrentFlowV1Params,
   setFlowV1Params,
   upsertFlowV1Schedule,
@@ -39,7 +40,10 @@ import {
   getFlowV1BundleFile,
 } from "./bundle";
 import { nextFlowV1CronFire } from "./cron";
-import { initializeFlowV1Memory } from "./memory";
+import {
+  initializeFlowV1Memory,
+  resolveFlowV1MemoryConflict as resolveMemoryConflict,
+} from "./memory";
 import {
   createFlowV1GraphCheckpoint,
   invalidateFlowV1NodeAndDownstream,
@@ -81,6 +85,9 @@ export function createFlowV1(input: {
   bundle: FlowV1Bundle;
   params?: FlowV1JsonObject;
   projectCwd?: string;
+  defaultAgent?: string;
+  defaultModel?: string;
+  defaultPermissionMode?: string;
   secretBindings?: Record<string, FlowV1SecretBinding>;
   publish?: boolean;
   activate?: boolean;
@@ -92,6 +99,16 @@ export function createFlowV1(input: {
   bundleHash: string;
 } {
   const flow = requireValidBundle(input.bundle);
+  if (
+    input.activate &&
+    flowRequiresDefaultAgent(flow) &&
+    !input.defaultAgent?.trim()
+  ) {
+    throw new FlowV1ServiceError(
+      "flow_default_agent_missing",
+      "Flow contains Agent nodes without an explicit Agent and requires a configured default Agent before activation.",
+    );
+  }
   const database = getDb();
   const created = database.transaction(() => {
     const now = input.now ?? new Date().toISOString();
@@ -123,6 +140,22 @@ export function createFlowV1(input: {
     const params = resolveParams(flow, input.params ?? {});
     setFlowV1Params({ flowId, values: params, expectedRevision: 0 });
     configureSchedule(flowId, flow, params, input.now ?? now);
+    if (
+      input.projectCwd !== undefined ||
+      input.defaultAgent !== undefined ||
+      input.defaultModel !== undefined ||
+      input.defaultPermissionMode !== undefined ||
+      input.secretBindings
+    ) {
+      setFlowV1RuntimeConfig({
+        flowId,
+        projectCwd: input.projectCwd,
+        defaultAgent: input.defaultAgent,
+        defaultModel: input.defaultModel,
+        defaultPermissionMode: input.defaultPermissionMode,
+        secretBindings: input.secretBindings,
+      });
+    }
     return {
       flowId,
       versionId: version.versionId,
@@ -130,13 +163,6 @@ export function createFlowV1(input: {
       bundleHash: input.bundle.hash,
     };
   })();
-  if (input.projectCwd !== undefined || input.secretBindings) {
-    setFlowV1RuntimeConfig({
-      flowId: created.flowId,
-      projectCwd: input.projectCwd,
-      secretBindings: input.secretBindings,
-    });
-  }
   initializeMemoryIfDeclared(created.flowId, flow, input.bundle);
   if (input.activate) {
     setFlowV1Lifecycle({
@@ -156,7 +182,7 @@ export function createFlowV1Version(input: {
 }): { versionId: string; version: number; bundleHash: string } {
   const flow = requireValidBundle(input.bundle);
   const database = getDb();
-  return database.transaction(() => {
+  const created = database.transaction(() => {
     const existing = database
       .prepare("SELECT id FROM workflows WHERE id = ?")
       .get(input.flowId) as { id: string } | undefined;
@@ -182,7 +208,7 @@ export function createFlowV1Version(input: {
       flow,
       bundle: input.bundle,
       version,
-      publish: input.publish ?? false,
+      publish: false,
       semanticReview: input.semanticReview,
       now: input.now ?? new Date().toISOString(),
     });
@@ -192,6 +218,14 @@ export function createFlowV1Version(input: {
       bundleHash: input.bundle.hash,
     };
   })();
+  if (input.publish) {
+    publishFlowV1Version({
+      flowId: input.flowId,
+      versionId: created.versionId,
+      now: input.now,
+    });
+  }
+  return created;
 }
 
 export async function invokeFlowV1(input: {
@@ -404,8 +438,13 @@ export function publishFlowV1Version(input: {
   const flow = requireValidBundle(bundle);
   const database = getDb();
   const now = input.now ?? new Date().toISOString();
-  const params = getCurrentFlowV1Params(input.flowId)?.values ?? {};
-  resolveParams(flow, params);
+  const currentParams = getCurrentFlowV1Params(input.flowId);
+  const compatibleParams = Object.fromEntries(
+    Object.keys(flow.params)
+      .filter((name) => currentParams?.values[name] !== undefined)
+      .map((name) => [name, currentParams!.values[name]!]),
+  ) as FlowV1JsonObject;
+  const params = resolveParams(flow, compatibleParams);
   database.transaction(() => {
     const version = database
       .prepare(
@@ -455,8 +494,18 @@ export function publishFlowV1Version(input: {
         now,
         input.flowId,
       );
+    if (
+      !currentParams ||
+      !isDeepStrictEqual(currentParams.values, params)
+    ) {
+      setFlowV1Params({
+        flowId: input.flowId,
+        values: params,
+        expectedRevision: currentParams?.revision ?? 0,
+      });
+    }
+    configureSchedule(input.flowId, flow, params, now);
   })();
-  configureSchedule(input.flowId, flow, params, now);
   initializeMemoryIfDeclared(input.flowId, flow, bundle);
   return { versionId: input.versionId, bundleHash: bundle.hash };
 }
@@ -501,6 +550,12 @@ export function setFlowV1Lifecycle(input: {
         `Flow is missing required Secret bindings: ${config.missingSecretNames.join(", ")}.`,
       );
     }
+    if (flowRequiresDefaultAgent(flow) && !config.defaultAgent) {
+      throw new FlowV1ServiceError(
+        "flow_default_agent_missing",
+        "Flow contains Agent nodes without an explicit Agent and requires a configured default Agent before activation.",
+      );
+    }
   }
   const updated = getDb()
     .prepare(
@@ -524,11 +579,17 @@ export function configureFlowV1(input: {
   params?: FlowV1JsonObject;
   expectedParamsRevision?: number;
   projectCwd?: string | null;
+  defaultAgent?: string | null;
+  defaultModel?: string | null;
+  defaultPermissionMode?: string | null;
   secretBindings?: Record<string, FlowV1SecretBinding>;
 }): {
   params: FlowV1JsonObject;
   paramsRevision: number;
   projectCwd: string | null;
+  defaultAgent: string | null;
+  defaultModel: string | null;
+  defaultPermissionMode: string | null;
   secretBindings: Record<string, FlowV1SecretBinding>;
 } {
   const row = getDb()
@@ -550,36 +611,48 @@ export function configureFlowV1(input: {
     );
   }
   const flow = requireValidBundle(bundle);
-  let paramsRecord = getCurrentFlowV1Params(input.flowId);
-  if (input.params) {
-    const values = resolveParams(flow, input.params);
-    paramsRecord = setFlowV1Params({
+  const database = getDb();
+  return database.transaction(() => {
+    let paramsRecord = getCurrentFlowV1Params(input.flowId);
+    if (input.params) {
+      const values = resolveParams(flow, input.params);
+      paramsRecord = setFlowV1Params({
+        flowId: input.flowId,
+        values,
+        expectedRevision:
+          input.expectedParamsRevision ?? paramsRecord?.revision ?? 0,
+      });
+      configureSchedule(
+        input.flowId,
+        flow,
+        values,
+        new Date().toISOString(),
+      );
+    }
+    const runtimeConfig = setFlowV1RuntimeConfig({
       flowId: input.flowId,
-      values,
-      expectedRevision:
-        input.expectedParamsRevision ?? paramsRecord?.revision ?? 0,
+      ...(input.projectCwd !== undefined
+        ? { projectCwd: input.projectCwd }
+        : {}),
+      ...(input.defaultAgent !== undefined
+        ? { defaultAgent: input.defaultAgent }
+        : {}),
+      ...(input.defaultModel !== undefined
+        ? { defaultModel: input.defaultModel }
+        : {}),
+      ...(input.defaultPermissionMode !== undefined
+        ? { defaultPermissionMode: input.defaultPermissionMode }
+        : {}),
+      ...(input.secretBindings
+        ? { secretBindings: input.secretBindings }
+        : {}),
     });
-    configureSchedule(
-      input.flowId,
-      flow,
-      values,
-      new Date().toISOString(),
-    );
-  }
-  const runtimeConfig = setFlowV1RuntimeConfig({
-    flowId: input.flowId,
-    ...(input.projectCwd !== undefined
-      ? { projectCwd: input.projectCwd }
-      : {}),
-    ...(input.secretBindings
-      ? { secretBindings: input.secretBindings }
-      : {}),
-  });
-  return {
-    params: paramsRecord?.values ?? {},
-    paramsRevision: paramsRecord?.revision ?? 0,
-    ...runtimeConfig,
-  };
+    return {
+      params: paramsRecord?.values ?? {},
+      paramsRevision: paramsRecord?.revision ?? 0,
+      ...runtimeConfig,
+    };
+  })();
 }
 
 export function cancelFlowV1Cycle(input: {
@@ -878,6 +951,64 @@ export async function retryFlowV1Node(input: {
   };
 }
 
+export async function resolveFlowV1MemoryConflict(input: {
+  flowId: string;
+  cycleId: string;
+  nodeId: string;
+  resolution: "keep_current" | "apply_candidate";
+  executeTick?: boolean;
+}): Promise<{
+  resolution: "keep_current" | "apply_candidate";
+  resultHash: string;
+  tick: FlowV1TickBundle;
+  execution: FlowV1TickExecutionResult | null;
+}> {
+  const cycle = getFlowV1Cycle(input.cycleId);
+  if (
+    !cycle ||
+    cycle.flowId !== input.flowId ||
+    cycle.status !== "paused_conflict" ||
+    cycle.currentNodeId !== input.nodeId
+  ) {
+    throw new FlowV1ServiceError(
+      "flow_memory_conflict_not_resolvable",
+      "The requested node is not the active Memory conflict for this Flow.",
+    );
+  }
+  const bundle = getFlowV1BundleForVersion(cycle.flowVersionId);
+  if (!bundle) {
+    throw new FlowV1ServiceError(
+      "flow_bundle_missing",
+      "Memory conflict Cycle has no pinned Bundle.",
+    );
+  }
+  const flow = requireValidBundle(bundle);
+  if (!flow.memory) {
+    throw new FlowV1ServiceError(
+      "flow_memory_not_declared",
+      "Memory conflict Cycle has no Memory declaration.",
+    );
+  }
+  const resolved = resolveMemoryConflict({
+    flowId: input.flowId,
+    cycleId: input.cycleId,
+    nodeId: input.nodeId,
+    definition: flow.memory,
+    resolution: input.resolution,
+  });
+  const retried = await retryFlowV1Node({
+    flowId: input.flowId,
+    cycleId: input.cycleId,
+    nodeId: input.nodeId,
+    executeTick: input.executeTick,
+  });
+  return {
+    ...resolved,
+    tick: retried.tick,
+    execution: retried.execution,
+  };
+}
+
 function readServiceCheckpoint(
   flow: ParsedFlowV1,
   value: FlowV1JsonObject,
@@ -997,13 +1128,23 @@ function resolveSchemaValues(
   supplied: FlowV1JsonObject,
   kind: string,
 ): FlowV1JsonObject {
+  for (const name of Object.keys(supplied)) {
+    if (!schema[name]) {
+      throw new FlowV1ServiceError(
+        "flow_unknown_value",
+        `${kind} "${name}" is not declared by this Flow.`,
+      );
+    }
+  }
   const result: FlowV1JsonObject = {};
   for (const entry of Object.values(schema)) {
     const suppliedValue = supplied[entry.name];
     const defaultValue = entry.config.default;
     if (suppliedValue !== undefined) {
+      validateResolvedSchemaValue(entry, suppliedValue, kind);
       result[entry.name] = suppliedValue;
     } else if (defaultValue !== undefined) {
+      validateResolvedSchemaValue(entry, defaultValue, kind);
       result[entry.name] = defaultValue;
     } else if (entry.required) {
       throw new FlowV1ServiceError(
@@ -1015,6 +1156,92 @@ function resolveSchemaValues(
   return result;
 }
 
+function validateResolvedSchemaValue(
+  entry: ParsedFlowV1["params"][string],
+  value: FlowV1JsonValue,
+  kind: string,
+): void {
+  const helperType = schemaHelperValueType(entry.helper);
+  const valueLabel = `${kind} "${entry.name}"`;
+  if (
+    (helperType === "string" && typeof value !== "string") ||
+    (helperType === "number" &&
+      (typeof value !== "number" || !Number.isFinite(value))) ||
+    (helperType === "boolean" && typeof value !== "boolean")
+  ) {
+    throw new FlowV1ServiceError(
+      "flow_value_type_invalid",
+      `${valueLabel} must be ${articleFor(helperType)} ${helperType}.`,
+    );
+  }
+  if (helperType === "number" && typeof value === "number") {
+    if (
+      (typeof entry.config.min === "number" &&
+        value < entry.config.min) ||
+      (typeof entry.config.max === "number" &&
+        value > entry.config.max) ||
+      (entry.config.integer === true && !Number.isInteger(value))
+    ) {
+      throw new FlowV1ServiceError(
+        "flow_value_constraint_invalid",
+        `${valueLabel} violates its numeric constraints.`,
+      );
+    }
+  }
+  if (helperType === "string" && typeof value === "string") {
+    const pattern =
+      typeof entry.config.pattern === "string"
+        ? new RegExp(entry.config.pattern, "u")
+        : null;
+    if (
+      (typeof entry.config.minLength === "number" &&
+        value.length < entry.config.minLength) ||
+      (typeof entry.config.maxLength === "number" &&
+        value.length > entry.config.maxLength) ||
+      (pattern && !pattern.test(value))
+    ) {
+      throw new FlowV1ServiceError(
+        "flow_value_constraint_invalid",
+        `${valueLabel} violates its string constraints.`,
+      );
+    }
+  }
+}
+
+function schemaHelperValueType(
+  helper: string,
+): "string" | "number" | "boolean" | "json" {
+  if (helper === "stringParam" || helper === "stringInput" || helper === "cronParam") {
+    return "string";
+  }
+  if (helper === "numberParam" || helper === "numberInput") {
+    return "number";
+  }
+  if (helper === "booleanParam" || helper === "booleanInput") {
+    return "boolean";
+  }
+  return "json";
+}
+
+function articleFor(value: string): string {
+  return /^[aeiou]/u.test(value) ? "an" : "a";
+}
+
+function flowRequiresDefaultAgent(flow: ParsedFlowV1): boolean {
+  return flow.nodes.some(
+    (node) =>
+      (node.kind === "agent" && !node.agent) ||
+      (node.kind === "loop" &&
+        node.loop?.steps.some(
+          (step) => step.kind === "agent" && !step.agent,
+        )) ||
+      (node.kind === "map" &&
+        node.map?.steps.some(
+          (step) => step.kind === "agent" && !step.agent,
+        )),
+  );
+}
+
 function configureSchedule(
   flowId: string,
   flow: ParsedFlowV1,
@@ -1022,6 +1249,7 @@ function configureSchedule(
   now: string,
 ): void {
   if (!flow.schedule) {
+    deleteFlowV1Schedule(flowId);
     return;
   }
   const expression = resolveScheduleValue(

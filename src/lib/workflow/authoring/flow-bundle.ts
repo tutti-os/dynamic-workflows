@@ -21,7 +21,6 @@ import {
 import {
   configureFlowV1,
   createFlowV1Version,
-  publishFlowV1Version,
 } from "@/lib/flow-v1/flow-service";
 import {
   AuthoringSubmitError,
@@ -153,10 +152,8 @@ export async function submitAuthoringFlowBundle(input: {
     flowId: generation.workflowId,
     params: {},
     projectCwd: generation.cwd ?? undefined,
-  });
-  publishFlowV1Version({
-    flowId: generation.workflowId,
-    versionId: created.versionId,
+    defaultAgent: generation.agent ?? "mock",
+    defaultModel: generation.model,
   });
   completeWorkflowFlowGeneration({
     generationId: input.jobId,

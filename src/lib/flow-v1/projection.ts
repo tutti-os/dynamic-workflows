@@ -15,7 +15,10 @@ import {
 } from "@/lib/db/workflows/flow-settings";
 import { listFlowV1HumanTasks } from "@/lib/db/workflows/human-tasks";
 import { parseFlowV1Bundle } from "./parser";
-import { readFlowV1Memory } from "./memory";
+import {
+  listFlowV1MemoryConflicts,
+  readFlowV1Memory,
+} from "./memory";
 import { getFlowV1RuntimeConfig } from "./runtime-config";
 import type {
   FlowV1DetailProjection,
@@ -65,14 +68,21 @@ export function getFlowV1DetailProjection(
       const document = readFlowV1Memory(flowId, flow.memory);
       memory = {
         path: document.path,
+        markdown: document.markdown,
         hash: document.hash,
         sections: document.sections,
+        conflicts: listFlowV1MemoryConflicts({
+          flowId,
+          cycleId: selectedCycle?.id,
+        }),
       };
     } catch (error) {
       memory = {
         path: "",
+        markdown: "",
         hash: "",
         sections: {},
+        conflicts: [],
         error: error instanceof Error ? error.message : String(error),
       };
     }

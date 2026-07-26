@@ -48,6 +48,19 @@ export const runtime = {
 };
 ```
 
+Schema helpers are strict contracts:
+
+- Params: `stringParam`, `numberParam`, `booleanParam`, `jsonParam`,
+  `cronParam`.
+- Inputs: `stringInput`, `numberInput`, `booleanInput`, `jsonInput`.
+- Secrets: `stringSecret`, `connectionSecret`.
+- Number helpers accept `min`, `max`, and `integer`.
+- String helpers accept `minLength`, `maxLength`, and `pattern`.
+- `connectionSecret` requires a non-empty `provider`.
+
+Unknown helpers, unknown configuration keys, wrong defaults, out-of-range
+Params, and undeclared Cycle input fields are rejected before execution.
+
 One optional recurring Schedule is supported:
 
 ```js

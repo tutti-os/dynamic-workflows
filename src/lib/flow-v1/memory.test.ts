@@ -104,6 +104,65 @@ describe("Flow v1 canonical Markdown Memory", () => {
         ),
       },
     ]);
+
+    const resolved = await service.resolveFlowV1MemoryConflict({
+      flowId: created.flowId,
+      cycleId: second.tick.cycle.id,
+      nodeId: "record",
+      resolution: "apply_candidate",
+    });
+    expect(resolved.execution?.stopReason).toBe("cycle_completed");
+    expect(runtime.getFlowV1Cycle(second.tick.cycle.id)?.status).toBe(
+      "completed",
+    );
+    expect(
+      memory.readFlowV1Memory(created.flowId, MEMORY_DEFINITION).sections,
+    ).toEqual({
+      currentUnderstanding: "The second understanding.",
+      timeline:
+        "Initial timeline.\n\nCycle one completed.\n\nCycle two completed.",
+    });
+    expect(
+      memory.listFlowV1MemoryConflicts({
+        flowId: created.flowId,
+        cycleId: second.tick.cycle.id,
+      }),
+    ).toEqual([]);
+
+    const third = await service.invokeFlowV1({
+      flowId: created.flowId,
+      invocationInput: {
+        understanding: "The third understanding.",
+        timeline: "Cycle three completed.",
+      },
+      idempotencyKey: "memory-cycle-3",
+      executeTick: false,
+    });
+    const beforeThird = memory.readFlowV1Memory(
+      created.flowId,
+      MEMORY_DEFINITION,
+    );
+    const secondManualEdit = beforeThird.markdown.replace(
+      "The second understanding.",
+      "A newer manual understanding.",
+    );
+    fs.writeFileSync(
+      memory.getFlowV1MemoryPath(created.flowId),
+      secondManualEdit,
+      "utf8",
+    );
+    await runFlowV1Tick({ runId: third.tick.run.id });
+
+    const kept = await service.resolveFlowV1MemoryConflict({
+      flowId: created.flowId,
+      cycleId: third.tick.cycle.id,
+      nodeId: "record",
+      resolution: "keep_current",
+    });
+    expect(kept.execution?.stopReason).toBe("cycle_completed");
+    expect(
+      fs.readFileSync(memory.getFlowV1MemoryPath(created.flowId), "utf8"),
+    ).toBe(secondManualEdit);
   });
 
   it("injects only explicitly selected Memory sections into an Agent prompt", async () => {
@@ -114,6 +173,7 @@ describe("Flow v1 canonical Markdown Memory", () => {
     const service = await import("./flow-service");
     const created = service.createFlowV1({
       bundle: memoryAgentBundle(),
+      defaultAgent: "mock",
       activate: true,
     });
 

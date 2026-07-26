@@ -48,12 +48,18 @@ export async function PATCH(
     params?: FlowV1JsonObject;
     expectedParamsRevision?: number;
     projectCwd?: string | null;
+    defaultAgent?: string | null;
+    defaultModel?: string | null;
+    defaultPermissionMode?: string | null;
     secretBindings?: Record<string, FlowV1SecretBinding>;
   };
 
   if (
     body.params ||
     body.projectCwd !== undefined ||
+    body.defaultAgent !== undefined ||
+    body.defaultModel !== undefined ||
+    body.defaultPermissionMode !== undefined ||
     body.secretBindings
   ) {
     try {
@@ -62,6 +68,9 @@ export async function PATCH(
         params: body.params,
         expectedParamsRevision: body.expectedParamsRevision,
         projectCwd: body.projectCwd,
+        defaultAgent: body.defaultAgent,
+        defaultModel: body.defaultModel,
+        defaultPermissionMode: body.defaultPermissionMode,
         secretBindings: body.secretBindings,
       });
       return NextResponse.json({

@@ -67,7 +67,11 @@ export function createAgentCatalogLoadCoordinator() {
   };
 }
 
-export function useWorkflowRunSettings(): {
+export function useWorkflowRunSettings(initial?: {
+  agent?: string;
+  model?: string;
+  permissionMode?: string;
+}): {
   agents: AgentTargetOption[];
   effectiveAgent: string;
   model: string;
@@ -85,14 +89,17 @@ export function useWorkflowRunSettings(): {
   setCwd: (value: string) => void;
 } {
   const [agents, setAgents] = useState<AgentTargetOption[]>(FALLBACK_AGENTS);
-  const [agent, setAgentState] = useState("mock");
-  const [model, setModel] = useState("");
-  const [permissionMode, setPermissionMode] = useState("");
+  const [agent, setAgentState] = useState(initial?.agent ?? "mock");
+  const [model, setModel] = useState(initial?.model ?? "");
+  const [permissionMode, setPermissionMode] = useState(
+    initial?.permissionMode ?? "",
+  );
   const [cwd, setCwd] = useState("");
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState<string | undefined>();
   const [agentsWarning, setAgentsWarning] = useState<string | undefined>();
   const hasLoadedCatalogRef = useRef(false);
+  const preserveInitialAgentRef = useRef(Boolean(initial?.agent));
   const agentRef = useRef(agent);
   const loadCoordinatorRef = useRef<
     ReturnType<typeof createAgentCatalogLoadCoordinator>
@@ -112,7 +119,8 @@ export function useWorkflowRunSettings(): {
           if (preferredAgent) {
             const currentAgent = agentRef.current;
             const nextAgent =
-              hasLoadedCatalogRef.current &&
+              (hasLoadedCatalogRef.current ||
+                preserveInitialAgentRef.current) &&
               nextAgents.some(
                 (item) => item.id === currentAgent && item.supported,
               )

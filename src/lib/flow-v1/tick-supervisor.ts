@@ -180,6 +180,13 @@ export async function runFlowV1Tick(input: {
   }
   const executionProjectCwd =
     input.projectCwd ?? storedExecutionConfig.projectCwd;
+  const executionDefaultAgent =
+    input.defaultAgent ?? storedExecutionConfig.defaultAgent;
+  const executionDefaultModel =
+    input.defaultModel ?? storedExecutionConfig.defaultModel;
+  const executionDefaultPermissionMode =
+    input.defaultPermissionMode ??
+    storedExecutionConfig.defaultPermissionMode;
   if (flow.meta.requiresCwd && !executionProjectCwd) {
     throw new FlowV1TickSupervisorError(
       "flow_project_cwd_missing",
@@ -278,9 +285,9 @@ export async function runFlowV1Tick(input: {
         ownerToken: token,
         attemptId: attempt.id,
         projectCwd: executionProjectCwd,
-        defaultAgent: input.defaultAgent,
-        defaultModel: input.defaultModel,
-        defaultPermissionMode: input.defaultPermissionMode,
+        defaultAgent: executionDefaultAgent,
+        defaultModel: executionDefaultModel,
+        defaultPermissionMode: executionDefaultPermissionMode,
         environment: input.environment,
         secrets: executionSecrets,
         signal:
@@ -466,9 +473,9 @@ export async function runFlowV1Tick(input: {
             ownerToken: token,
             attemptId: job.attempt.id,
             projectCwd: executionProjectCwd,
-            defaultAgent: input.defaultAgent,
-            defaultModel: input.defaultModel,
-            defaultPermissionMode: input.defaultPermissionMode,
+            defaultAgent: executionDefaultAgent,
+            defaultModel: executionDefaultModel,
+            defaultPermissionMode: executionDefaultPermissionMode,
             agentPrompt: job.agentPrompt,
             environment: input.environment,
             secrets: executionSecrets,
@@ -568,9 +575,9 @@ export async function runFlowV1Tick(input: {
           ownerToken: token,
           attemptId: attempt.id,
           projectCwd: executionProjectCwd,
-          defaultAgent: input.defaultAgent,
-          defaultModel: input.defaultModel,
-          defaultPermissionMode: input.defaultPermissionMode,
+          defaultAgent: executionDefaultAgent,
+          defaultModel: executionDefaultModel,
+          defaultPermissionMode: executionDefaultPermissionMode,
           agentPrompt:
             baseAgentPrompt && validationError
               ? appendStructuredOutputCorrection(
@@ -726,10 +733,10 @@ export async function runFlowV1Tick(input: {
                     flowId: cycle.flowId,
                     inputSnapshot: cycle.inputSnapshot,
                     projectCwd: executionProjectCwd,
-                    defaultAgent: input.defaultAgent,
-                    defaultModel: input.defaultModel,
+                    defaultAgent: executionDefaultAgent,
+                    defaultModel: executionDefaultModel,
                     defaultPermissionMode:
-                      input.defaultPermissionMode,
+                      executionDefaultPermissionMode,
                     environment: input.environment,
                     secrets: executionSecrets,
                     signal: executionSignal,
@@ -834,9 +841,9 @@ export async function runFlowV1Tick(input: {
                 flowId: cycle.flowId,
                 inputSnapshot: cycle.inputSnapshot,
                 projectCwd: executionProjectCwd,
-                defaultAgent: input.defaultAgent,
-                defaultModel: input.defaultModel,
-                defaultPermissionMode: input.defaultPermissionMode,
+                defaultAgent: executionDefaultAgent,
+                defaultModel: executionDefaultModel,
+                defaultPermissionMode: executionDefaultPermissionMode,
                 environment: input.environment,
                 secrets: executionSecrets,
                 signal: executionSignal,
@@ -1686,11 +1693,26 @@ async function executeCompositeAgentStep(input: {
       };
     }
   }
-  const parentWorkspaceCwd = resolveWorkspaceCwd(
+  let parentWorkspaceCwd = resolveWorkspaceCwd(
     input.parent.node,
     input.parent.nodeInput,
     input.parent.projectCwd,
   );
+  if (input.step.workspace) {
+    parentWorkspaceCwd = resolveWorkspaceCwd(
+      {
+        ...input.parent.node,
+        workspace: input.step.workspace,
+        execution: input.step.execution,
+      },
+      {
+        ...input.parent.nodeInput,
+        $workspace:
+          input.parent.nodeInput[`$workspace.${input.step.id}`],
+      },
+      input.parent.projectCwd,
+    );
+  }
   const cwd = input.step.cwd
     ? path.resolve(
         parentWorkspaceCwd,
@@ -1894,6 +1916,16 @@ function resolveWorkspaceCwd(
 ): string {
   const base = path.resolve(projectCwd ?? process.cwd());
   if (!node.workspace) {
+    if (
+      node.execution &&
+      node.execution.access !== "review" &&
+      node.execution.isolation === "required"
+    ) {
+      throw new FlowV1TickSupervisorError(
+        "flow_workspace_required",
+        `Node ${node.id} requires an isolated Workspace for ${node.execution.access} execution.`,
+      );
+    }
     return base;
   }
   const workspace = nodeInput["$workspace"];

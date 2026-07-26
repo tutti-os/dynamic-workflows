@@ -259,7 +259,159 @@ describe("Flow v1 creation, publication, and direct Invocation", () => {
       { id: second.versionId, version_status: "published" },
     ]);
   });
+
+  it("enforces declared Param and Cycle input types, ranges, and keys", async () => {
+    const service = await import("./flow-service");
+    const created = service.createFlowV1({
+      bundle: constrainedSchemaBundle(),
+      activate: true,
+    });
+
+    expect(() =>
+      service.configureFlowV1({
+        flowId: created.flowId,
+        params: { rounds: 11 },
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "flow_value_constraint_invalid" }),
+    );
+    expect(() =>
+      service.configureFlowV1({
+        flowId: created.flowId,
+        params: { rounds: "three" },
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: "flow_value_type_invalid" }),
+    );
+    await expect(
+      service.invokeFlowV1({
+        flowId: created.flowId,
+        invocationInput: { target: "src", extra: true },
+      }),
+    ).rejects.toMatchObject({ code: "flow_unknown_value" });
+    await expect(
+      service.invokeFlowV1({
+        flowId: created.flowId,
+        invocationInput: { target: "" },
+      }),
+    ).rejects.toMatchObject({
+      code: "flow_value_constraint_invalid",
+    });
+  });
+
+  it("removes a persisted Schedule when the published Version removes its Trigger", async () => {
+    const service = await import("./flow-service");
+    const settings = await import("@/lib/db/workflows/flow-settings");
+    const created = service.createFlowV1({
+      bundle: scheduledBundle(),
+      now: "2026-07-26T00:00:00.000Z",
+    });
+    expect(settings.getFlowV1Schedule(created.flowId)).not.toBeNull();
+    const next = service.createFlowV1Version({
+      flowId: created.flowId,
+      bundle: unscheduledBundle(),
+    });
+
+    service.publishFlowV1Version({
+      flowId: created.flowId,
+      versionId: next.versionId,
+      now: "2026-07-26T00:10:00.000Z",
+    });
+
+    expect(settings.getFlowV1Schedule(created.flowId)).toBeNull();
+    expect(settings.getCurrentFlowV1Params(created.flowId)).toEqual(
+      expect.objectContaining({ revision: 2, values: {} }),
+    );
+  });
+
+  it("rolls back Params and Schedule when runtime configuration is invalid", async () => {
+    const service = await import("./flow-service");
+    const settings = await import("@/lib/db/workflows/flow-settings");
+    const created = service.createFlowV1({
+      bundle: scheduledBundle(),
+      now: "2026-07-26T00:00:00.000Z",
+    });
+
+    expect(() =>
+      service.configureFlowV1({
+        flowId: created.flowId,
+        params: {
+          cron: "0 10 * * *",
+          timezone: "UTC",
+          target: "packages/app",
+        },
+        projectCwd: path.join(dataDir, "missing"),
+      }),
+    ).toThrow();
+
+    expect(settings.getCurrentFlowV1Params(created.flowId)).toEqual(
+      expect.objectContaining({
+        revision: 1,
+        values: {
+          cron: "0 9 * * *",
+          timezone: "Asia/Singapore",
+          target: "src",
+        },
+      }),
+    );
+    expect(settings.getFlowV1Schedule(created.flowId)).toEqual(
+      expect.objectContaining({
+        cronExpression: "0 9 * * *",
+        timezone: "Asia/Singapore",
+        input: { target: "src" },
+        revision: 0,
+      }),
+    );
+  });
+
+  it("requires an explicit default Agent before activating Agent nodes", async () => {
+    const service = await import("./flow-service");
+    const bundle = createFlowV1Bundle([
+      {
+        path: "flow.js",
+        content: `
+          export const schemaVersion = "tutti.flow.v1";
+          const implement = agent({
+            id: "implement",
+            prompt: "Implement the plan.",
+          });
+          completeCycle({ id: "done", inputs: { implement } });
+        `,
+      },
+    ]);
+
+    expect(() =>
+      service.createFlowV1({ bundle, activate: true }),
+    ).toThrowError(
+      expect.objectContaining({ code: "flow_default_agent_missing" }),
+    );
+    expect(
+      service.createFlowV1({
+        bundle,
+        defaultAgent: "local:codex",
+        activate: true,
+      }).flowId,
+    ).toEqual(expect.any(String));
+  });
 });
+
+function constrainedSchemaBundle() {
+  return createFlowV1Bundle([
+    {
+      path: "flow.js",
+      content: `
+        export const schemaVersion = "tutti.flow.v1";
+        export const params = defineParams({
+          rounds: numberParam({ default: 3, min: 1, max: 10, integer: true }),
+        });
+        export const inputs = defineInputs({
+          target: stringInput({ required: true, minLength: 1 }),
+        });
+        completeCycle({ id: "done" });
+      `,
+    },
+  ]);
+}
 
 function scheduledBundle() {
   return createFlowV1Bundle([
@@ -295,6 +447,22 @@ function scheduledBundle() {
     {
       path: "scripts/scan.mjs",
       content: "export async function run(ctx) { return { target: ctx.target }; }",
+    },
+  ]);
+}
+
+function unscheduledBundle() {
+  return createFlowV1Bundle([
+    {
+      path: "flow.js",
+      content: `
+        export const schemaVersion = "tutti.flow.v1";
+        export const meta = {
+          name: "manual-large-files",
+          description: "Manually invoked large file governance",
+        };
+        completeCycle({ id: "done" });
+      `,
     },
   ]);
 }
