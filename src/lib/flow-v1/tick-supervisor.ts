@@ -739,7 +739,6 @@ export async function runFlowV1Tick(input: {
                       executionDefaultPermissionMode,
                     environment: input.environment,
                     secrets: executionSecrets,
-                    signal: executionSignal,
                     depth:
                       (input.immediateContinuationDepth ?? 0) + 1,
                   })
@@ -846,7 +845,6 @@ export async function runFlowV1Tick(input: {
                 defaultPermissionMode: executionDefaultPermissionMode,
                 environment: input.environment,
                 secrets: executionSecrets,
-                signal: executionSignal,
                 depth: (input.immediateContinuationDepth ?? 0) + 1,
               })
             : undefined;
@@ -990,7 +988,6 @@ async function runImmediateContinuation(input: {
   defaultPermissionMode?: string;
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
-  signal?: AbortSignal;
   depth: number;
 }): Promise<string> {
   const row = getDb()
@@ -1059,7 +1056,6 @@ async function runImmediateContinuation(input: {
       defaultPermissionMode: input.defaultPermissionMode,
       environment: input.environment,
       secrets: input.secrets,
-      signal: input.signal,
       immediateContinuationDepth: input.depth,
     });
   }

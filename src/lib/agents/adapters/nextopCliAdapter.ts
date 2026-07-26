@@ -60,6 +60,10 @@ type NextopSessionOutput = {
   session?: unknown;
 };
 
+type NextopSessionsOutput = {
+  sessions?: unknown;
+};
+
 type NextopSessionSummaryOutput = {
   agentSessionId?: unknown;
   hasMore?: unknown;
@@ -474,22 +478,45 @@ export function createNextopCliAgentAdapter(
             message: `Starting ${target.name} agent session through Nextop CLI.`,
           };
 
-          const startOutput = await runner(
-            [
-              ...startCommand(target),
-              "--model",
-              model,
-              ...(input.permissionMode
-                ? ["--permission-mode", input.permissionMode]
-                : []),
-              "--prompt",
-              input.prompt,
-              ...(input.title ? ["--title", input.title] : []),
-              "--cwd",
-              input.cwd,
-            ],
-            { signal: input.signal },
-          );
+          const startedAt = now();
+          let startOutput: unknown;
+          try {
+            startOutput = await runner(
+              [
+                ...startCommand(target),
+                "--model",
+                model,
+                ...(input.permissionMode
+                  ? ["--permission-mode", input.permissionMode]
+                  : []),
+                "--prompt",
+                input.prompt,
+                ...(input.title ? ["--title", input.title] : []),
+                "--cwd",
+                input.cwd,
+              ],
+              { signal: input.signal },
+            );
+          } catch (error) {
+            if (!isSubmitDeliveryUnknown(error)) {
+              throw error;
+            }
+            const recovered = await recoverStartedSession({
+              cwd: input.cwd,
+              recoveredAt: now(),
+              runner,
+              startedAt,
+              target,
+              title: input.title,
+            });
+            if (!recovered) {
+              throw error;
+            }
+            console.warn(
+              `[agent-runtime:${adapter.id}] recovered Nextop session ${recovered.agentSessionId} after uncertain start delivery`,
+            );
+            startOutput = { session: recovered };
+          }
           initialSession = parseSessionFromOutput(startOutput, target.id);
         }
 
@@ -1017,6 +1044,48 @@ function isTransientCatalogFailure(error: unknown): boolean {
     message.includes("resource busy") ||
     /\b(eagain|econnrefused|econnreset|epipe|etimedout)\b/.test(message)
   );
+}
+
+function isSubmitDeliveryUnknown(error: unknown): boolean {
+  return errorMessage(error).includes("agent_submit_delivery_unknown");
+}
+
+async function recoverStartedSession(input: {
+  cwd: string;
+  recoveredAt: number;
+  runner: NextopCliRunner;
+  startedAt: number;
+  target: NextopAgentTargetSpec;
+  title?: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const output = (await input.runner([
+    "--json",
+    "agent",
+    "sessions",
+  ])) as NextopSessionsOutput;
+  const sessions = Array.isArray(output.sessions) ? output.sessions : [];
+  const candidates = sessions.flatMap((value): Record<string, unknown>[] => {
+    const session = readRecord(value);
+    if (!session) {
+      return [];
+    }
+    const createdAt = readNumber(session.createdAtUnixMs);
+    const targetId = readOptionalString(session.agentTargetId);
+    const cwd = readOptionalString(session.cwd);
+    const title = readOptionalString(session.title);
+    if (
+      targetId !== input.target.id ||
+      cwd !== input.cwd ||
+      createdAt === undefined ||
+      createdAt < input.startedAt - 1_000 ||
+      createdAt > input.recoveredAt + 5_000 ||
+      (input.title && title !== input.title)
+    ) {
+      return [];
+    }
+    return [session];
+  });
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 export function isUnknownAgentListCommand(error: unknown): boolean {

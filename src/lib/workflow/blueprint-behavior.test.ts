@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -69,7 +69,14 @@ describe("official Blueprint behavior", () => {
     git(["config", "user.name", "Flow Test"], projectCwd);
     git(["config", "user.email", "flow@example.test"], projectCwd);
     writeFileSync(path.join(projectCwd, "small.ts"), "export const ok = true;\n");
-    git(["add", "small.ts"], projectCwd);
+    writeFileSync(
+      path.join(projectCwd, "at-threshold.ts"),
+      `${Array.from(
+        { length: 10 },
+        (_, index) => `export const exact${index} = ${index};`,
+      ).join("\n")}\n`,
+    );
+    git(["add", "small.ts", "at-threshold.ts"], projectCwd);
     git(["commit", "-m", "small"], projectCwd);
     const smallCommit = git(["rev-parse", "HEAD"], projectCwd);
 
@@ -78,7 +85,7 @@ describe("official Blueprint behavior", () => {
       bundle: blueprint.bundle,
       file: "scripts/find-large-file.mjs",
       exportName: "run",
-      context: { threshold: 10, sync: { commit: smallCommit } },
+      context: { threshold: 10, root: "", sync: { commit: smallCommit } },
       projectCwd,
     });
     expect(empty.value).toEqual({
@@ -94,7 +101,25 @@ describe("official Blueprint behavior", () => {
         "\n",
       ),
     );
-    git(["add", "large.ts"], projectCwd);
+    writeFileSync(
+      path.join(projectCwd, "larger.test.ts"),
+      Array.from(
+        { length: 20 },
+        (_, index) => `export const test${index} = ${index};`,
+      ).join("\n"),
+    );
+    mkdirSync(path.join(projectCwd, "generated"));
+    writeFileSync(
+      path.join(projectCwd, "generated", "largest.ts"),
+      Array.from(
+        { length: 30 },
+        (_, index) => `export const generated${index} = ${index};`,
+      ).join("\n"),
+    );
+    git(
+      ["add", "large.ts", "larger.test.ts", "generated/largest.ts"],
+      projectCwd,
+    );
     git(["commit", "-m", "large"], projectCwd);
     const largeCommit = git(["rev-parse", "HEAD"], projectCwd);
     const found = await runFlowV1CodeModule({
@@ -102,7 +127,7 @@ describe("official Blueprint behavior", () => {
       bundle: blueprint.bundle,
       file: "scripts/find-large-file.mjs",
       exportName: "run",
-      context: { threshold: 10, sync: { commit: largeCommit } },
+      context: { threshold: 10, root: "", sync: { commit: largeCommit } },
       projectCwd,
     });
     expect(found.value).toEqual({

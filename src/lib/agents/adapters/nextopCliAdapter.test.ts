@@ -774,6 +774,97 @@ describe("nextop cli adapter", () => {
     });
   });
 
+  it("recovers a uniquely matching session after uncertain start delivery", async () => {
+    const calls: string[][] = [];
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      now: () => 10_000,
+      runner: async (args) => {
+        calls.push(args);
+        if (isAgentListCall(args)) return currentAgentCatalog();
+        if (args.includes("start")) {
+          throw new Error(
+            'Nextop CLI failed: {"error":{"reasonCode":"agent_submit_delivery_unknown"}}',
+          );
+        }
+        if (args.includes("sessions")) {
+          return {
+            sessions: [
+              {
+                agentSessionId: "session-recovered",
+                agentTargetId: "local:codex",
+                provider: "codex",
+                cwd: "/tmp/project",
+                title: "Scan repository",
+                createdAtUnixMs: 10_100,
+                status: "running",
+              },
+            ],
+          };
+        }
+        if (args.includes("session-summary")) {
+          return {
+            hasMore: false,
+            latestVersion: 2,
+            session: {
+              agentSessionId: "session-recovered",
+              provider: "codex",
+              status: "completed",
+            },
+            messages: [{ role: "assistant", text: "done", version: 2 }],
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "completed",
+            hasMore: false,
+            latestVersion: 2,
+            session: {
+              agentSessionId: "session-recovered",
+              provider: "codex",
+              status: "completed",
+            },
+            messages: [],
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:scan",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "scan",
+      title: "Scan repository",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toContainEqual(["--json", "agent", "sessions"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "session_ref",
+          session: expect.objectContaining({
+            agentSessionId: "session-recovered",
+            agent: "local:codex",
+            model: "gpt-5",
+            status: "running",
+          }),
+        }),
+      ]),
+    );
+    expect(events).toContainEqual({ type: "text_delta", text: "done" });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "completed",
+      reason: "completed",
+    });
+  });
+
   it("fails the run when the session stops with a pending interaction", async () => {
     // A quota prompt / approval request / question blocks the agent on user
     // input; harvesting the interaction prose as the node output would feed it

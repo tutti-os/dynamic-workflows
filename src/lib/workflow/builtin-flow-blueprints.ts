@@ -46,9 +46,10 @@ export const params = defineParams({
   timezone: stringParam({ default: "UTC" }),
   mainBranch: stringParam({ default: "main" }),
   lineThreshold: numberParam({ default: 1200 }),
+  scanRoot: stringParam({ default: "" }),
 });
 export const secrets = defineSecrets({
-  GH_TOKEN: connectionSecret({ provider: "github", required: true }),
+  GH_TOKEN: connectionSecret({ provider: "github", required: false }),
 });
 export const cycles = defineCycles({ mode: "singleton" });
 export const runtime = {
@@ -93,6 +94,7 @@ const candidate = script({
   inputs: {
     sync,
     threshold: ref("params.lineThreshold"),
+    root: ref("params.scanRoot"),
   },
 });
 const noWork = completeCycle({
@@ -111,13 +113,13 @@ const plan = agent({
     properties: {
       title: { type: "string" },
       rationale: { type: "string" },
-      boundaries: { type: "array" },
-      orderedSteps: { type: "array" },
-      tests: { type: "array" },
-      risks: { type: "array" },
+      boundaries: { type: "array", items: { type: "string" } },
+      orderedSteps: { type: "array", items: { type: "string" } },
+      tests: { type: "array", items: { type: "string" } },
+      risks: { type: "array", items: { type: "string" } },
     },
   } }),
-  prompt: "Inspect {{candidate.path}} ({{candidate.lines}} lines). Return JSON with title, rationale, boundaries, orderedSteps, tests, and risks. Do not edit files.",
+  prompt: "Inspect {{candidate.path}} ({{candidate.lines}} lines). Return one JSON object with string fields title and rationale, plus boundaries, orderedSteps, tests, and risks as arrays of strings. Do not edit files.",
 });
 const issue = effect({
   id: "create_issue",
@@ -144,11 +146,16 @@ const workspace = effect({
 });
 const implement = agent({
   id: "implement_plan",
-  inputs: { candidate, plan, approval, workspace },
+  inputs: {
+    candidate,
+    plan,
+    approval,
+    workspace,
+    lineThreshold: ref("params.lineThreshold"),
+  },
   workspace,
   execution: { access: "write", isolation: "required" },
-  permissionMode: "workspace-write",
-  prompt: "Work only inside the prepared git worktree at {{workspace.path}} on branch {{workspace.branch}}. Implement the approved refactor plan for {{candidate.path}}. Follow {{plan}}, run focused tests there, and leave that worktree ready for review. Do not modify the parent checkout.",
+  prompt: "Work only inside the prepared git worktree at {{workspace.path}} on branch {{workspace.branch}}. Implement the approved refactor plan for {{candidate.path}} and reduce it to at most {{lineThreshold}} lines without weakening behavior. Follow {{plan}} and run the smallest focused tests that cover the change. Do not install dependencies or run repository-wide checks unless the focused test cannot otherwise run. Leave the worktree ready for review and do not modify the parent checkout.",
 });
 const changes = script({
   id: "check_changes",
@@ -344,19 +351,34 @@ export async function reconcile(ctx) {
         content: `import { execFileSync } from "node:child_process";
 import path from "node:path";
 const extensions = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java"]);
-const ignored = /^(?:node_modules|\\.next|dist|build|coverage)\\//u;
+const ignoredDirectory = /(?:^|\\/)(?:node_modules|\\.next|dist|build|coverage|vendor|generated|__tests__|tests?)(?:\\/|$)/u;
+const ignoredFile = /(?:^|\\/)[^/]+\\.(?:test|spec|gen|generated)\\.[^/]+$/u;
 function git(args) { return execFileSync("git", args, { encoding: "utf8" }); }
+function lineCount(content) {
+  if (!content) return 0;
+  const lines = content.split(/\\r?\\n/u);
+  return lines.at(-1) === "" ? lines.length - 1 : lines.length;
+}
 export async function run(ctx) {
+  const root = String(ctx.root ?? "")
+    .replace(/^\\.\\//u, "")
+    .replace(/\\/+$/u, "");
   const paths = git(["ls-tree", "-r", "--name-only", ctx.sync.commit])
     .trim()
     .split(/\\r?\\n/u)
-    .filter((file) => file && !ignored.test(file) && extensions.has(path.extname(file)));
+    .filter((file) =>
+      file &&
+      (!root || file === root || file.startsWith(root + "/")) &&
+      !ignoredDirectory.test(file) &&
+      !ignoredFile.test(file) &&
+      extensions.has(path.extname(file))
+    );
   const files = paths.map((file) => ({
     path: file,
-    lines: git(["show", ctx.sync.commit + ":" + file]).split(/\\r?\\n/u).length,
+    lines: lineCount(git(["show", ctx.sync.commit + ":" + file])),
   }));
   const candidate = files
-    .filter((file) => file.lines >= ctx.threshold)
+    .filter((file) => file.lines > ctx.threshold)
     .sort((left, right) => right.lines - left.lines || left.path.localeCompare(right.path))[0];
   return candidate
     ? { outcome: "found", output: candidate }
@@ -388,12 +410,18 @@ export async function reconcile(ctx) {
       {
         path: "scripts/issue-approval.mjs",
         content: `import { execFileSync } from "node:child_process";
+function issueApiPath(url) {
+  const [owner, repo, kind, number] = new URL(url).pathname.split("/").filter(Boolean);
+  if (!owner || !repo || kind !== "issues" || !number) throw new Error("Invalid GitHub Issue URL: " + url);
+  return "repos/" + owner + "/" + repo + "/issues/" + number;
+}
 export async function check(ctx) {
-  const issue = JSON.parse(execFileSync("gh", ["issue", "view", ctx.issue.url, "--json", "state,labels,url"], { encoding: "utf8" }));
-  if (issue.state === "CLOSED") return { status: "completed", outcome: "rejected", output: issue };
+  const issue = JSON.parse(execFileSync("gh", ["api", issueApiPath(ctx.issue.url)], { encoding: "utf8" }));
+  const output = { state: issue.state, labels: issue.labels, url: issue.html_url };
+  if (issue.state === "closed") return { status: "completed", outcome: "rejected", output };
   const approved = issue.labels.some((label) => label.name === "flow-approved");
   return approved
-    ? { status: "completed", outcome: "approved", output: issue }
+    ? { status: "completed", outcome: "approved", output }
     : { status: "waiting", reason: "Add the flow-approved label to approve the Issue plan." };
 }
 `,
@@ -477,7 +505,7 @@ function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim
 function marker(ctx) { return "Flow-Cycle: " + ctx.cycle.id; }
 export async function apply(ctx) {
   git(["add", "-A"]);
-  git(["commit", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
+  git(["commit", "-s", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
   return { externalRef: git(["rev-parse", "HEAD"]), output: { sha: git(["rev-parse", "HEAD"]) } };
 }
 export async function reconcile(ctx) {
@@ -537,6 +565,11 @@ export async function reconcile(ctx) {
         path: "scripts/resolve-issue.mjs",
         content: `import { execFileSync } from "node:child_process";
 function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
+function issueApiPath(url) {
+  const [owner, repo, kind, number] = new URL(url).pathname.split("/").filter(Boolean);
+  if (!owner || !repo || kind !== "issues" || !number) throw new Error("Invalid GitHub Issue URL: " + url);
+  return "repos/" + owner + "/" + repo + "/issues/" + number;
+}
 function reason(ctx) {
   return ctx.pullRequest?.url
     ? "Pull request was closed without merge: " + ctx.pullRequest.url
@@ -547,9 +580,9 @@ export async function apply(ctx) {
   return { externalRef: ctx.issue.url, output: { url: ctx.issue.url, closed: true, reason: reason(ctx) } };
 }
 export async function reconcile(ctx) {
-  const issue = JSON.parse(gh(["issue", "view", ctx.issue.url, "--json", "state,url"]));
-  return issue.state === "CLOSED"
-    ? { status: "completed", externalRef: issue.url, output: { url: issue.url, closed: true } }
+  const issue = JSON.parse(gh(["api", issueApiPath(ctx.issue.url)]));
+  return issue.state === "closed"
+    ? { status: "completed", externalRef: issue.html_url, output: { url: issue.html_url, closed: true } }
     : { status: "not_applied" };
 }
 `,
@@ -586,10 +619,16 @@ export async function run(ctx) {
       {
         path: "scripts/pr-merged.mjs",
         content: `import { execFileSync } from "node:child_process";
+function pullRequestApiPath(url) {
+  const [owner, repo, kind, number] = new URL(url).pathname.split("/").filter(Boolean);
+  if (!owner || !repo || kind !== "pull" || !number) throw new Error("Invalid GitHub Pull Request URL: " + url);
+  return "repos/" + owner + "/" + repo + "/pulls/" + number;
+}
 export async function check(ctx) {
-  const pr = JSON.parse(execFileSync("gh", ["pr", "view", ctx.pullRequest.url, "--json", "state,mergedAt,url"], { encoding: "utf8" }));
-  if (pr.mergedAt) return { status: "completed", outcome: "merged", output: pr };
-  if (pr.state === "CLOSED") return { status: "completed", outcome: "closed", output: pr };
+  const pr = JSON.parse(execFileSync("gh", ["api", pullRequestApiPath(ctx.pullRequest.url)], { encoding: "utf8" }));
+  const output = { state: pr.state, mergedAt: pr.merged_at, url: pr.html_url };
+  if (pr.merged_at) return { status: "completed", outcome: "merged", output };
+  if (pr.state === "closed") return { status: "completed", outcome: "closed", output };
   return { status: "waiting", reason: "Pull request is still open." };
 }
 `,
@@ -598,14 +637,19 @@ export async function check(ctx) {
         path: "scripts/close-issue.mjs",
         content: `import { execFileSync } from "node:child_process";
 function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
+function issueApiPath(url) {
+  const [owner, repo, kind, number] = new URL(url).pathname.split("/").filter(Boolean);
+  if (!owner || !repo || kind !== "issues" || !number) throw new Error("Invalid GitHub Issue URL: " + url);
+  return "repos/" + owner + "/" + repo + "/issues/" + number;
+}
 export async function apply(ctx) {
   gh(["issue", "close", ctx.issue.url, "--comment", "Merged via " + ctx.pullRequest.url]);
   return { externalRef: ctx.issue.url, output: { url: ctx.issue.url, closed: true } };
 }
 export async function reconcile(ctx) {
-  const issue = JSON.parse(gh(["issue", "view", ctx.issue.url, "--json", "state,url"]));
-  return issue.state === "CLOSED"
-    ? { status: "completed", externalRef: issue.url, output: { url: issue.url, closed: true } }
+  const issue = JSON.parse(gh(["api", issueApiPath(ctx.issue.url)]));
+  return issue.state === "closed"
+    ? { status: "completed", externalRef: issue.html_url, output: { url: issue.html_url, closed: true } }
     : { status: "not_applied" };
 }
 `,
