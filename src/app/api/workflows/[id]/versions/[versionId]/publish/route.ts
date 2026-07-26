@@ -7,7 +7,10 @@ import {
 import { getFlowV1BundleForVersion } from "@/lib/db/workflows/flow-bundles";
 import { publishFlowV1Version } from "@/lib/flow-v1/flow-service";
 import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
-import { getLatestFlowV1DraftReview } from "@/lib/flow-v1/draft-projection";
+import {
+  getFlowV1VersionReview,
+  getLatestFlowV1DraftReview,
+} from "@/lib/flow-v1/version-projection";
 import type { FlowV1JsonObject } from "@/lib/flow-v1/types";
 
 export async function POST(
@@ -41,6 +44,7 @@ export async function POST(
         ...getWorkflowDetail(id),
         flowV1: getFlowV1DetailProjection(id),
         draftReview: getLatestFlowV1DraftReview(id),
+        versionReview: getFlowV1VersionReview(id),
       },
     });
   } catch (error) {

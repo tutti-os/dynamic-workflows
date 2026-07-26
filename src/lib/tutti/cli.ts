@@ -62,7 +62,7 @@ import {
 } from "@/lib/db/workflows/flow-attempts";
 import { listFlowV1HumanTasks } from "@/lib/db/workflows/human-tasks";
 import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
-import { getLatestFlowV1DraftReview } from "@/lib/flow-v1/draft-projection";
+import { getLatestFlowV1DraftReview } from "@/lib/flow-v1/version-projection";
 import {
   readFlowV1BundleDirectory,
 } from "@/lib/flow-v1/bundle";

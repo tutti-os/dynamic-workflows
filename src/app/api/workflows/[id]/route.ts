@@ -7,7 +7,10 @@ import {
   updateWorkflowMetadata,
 } from "@/lib/db/workflows/workflow-repository";
 import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
-import { getLatestFlowV1DraftReview } from "@/lib/flow-v1/draft-projection";
+import {
+  getFlowV1VersionReview,
+  getLatestFlowV1DraftReview,
+} from "@/lib/flow-v1/version-projection";
 import {
   configureFlowV1,
   setFlowV1Lifecycle,
@@ -26,15 +29,27 @@ export async function GET(
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
 
-  const cycleId = new URL(request.url).searchParams.get("cycleId") ?? undefined;
+  const searchParams = new URL(request.url).searchParams;
+  const cycleId = searchParams.get("cycleId") ?? undefined;
+  const versionId = searchParams.get("versionId") ?? undefined;
   const flowV1 = getFlowV1DetailProjection(id, cycleId);
   if (detail.currentVersion && !flowV1) {
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
+  const versionReview = getFlowV1VersionReview(id, versionId);
+  const latestDraftId = detail.versions.find(
+    (version) => version.status === "draft",
+  )?.id;
+  const draftReview = latestDraftId
+    ? versionReview?.version.id === latestDraftId
+      ? versionReview
+      : getLatestFlowV1DraftReview(id)
+    : null;
   return NextResponse.json({
     ...detail,
     flowV1,
-    draftReview: getLatestFlowV1DraftReview(id),
+    draftReview,
+    versionReview,
   });
 }
 

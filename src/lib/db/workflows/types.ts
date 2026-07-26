@@ -69,7 +69,14 @@ export type WorkflowVersionRecord = {
   createdAt: string;
 };
 
-export type WorkflowDraftReview = {
+export type WorkflowVersionDiffLine = {
+  kind: "context" | "added" | "removed";
+  content: string;
+  beforeLine: number | null;
+  afterLine: number | null;
+};
+
+export type WorkflowVersionReview = {
   version: WorkflowVersionRecord;
   bundle: {
     hash: string;
@@ -90,7 +97,25 @@ export type WorkflowDraftReview = {
     defaultPermissionMode: string | null;
   };
   diagnostics: WorkflowDiagnostic[];
+  comparison: {
+    baseVersion: WorkflowVersionRecord;
+    files: Array<{
+      path: string;
+      status: "added" | "removed" | "modified" | "unchanged";
+      lines: WorkflowVersionDiffLine[];
+    }>;
+    graph: {
+      addedNodeIds: string[];
+      removedNodeIds: string[];
+      changedNodeIds: string[];
+      addedEdgeIds: string[];
+      removedEdgeIds: string[];
+      changedEdgeIds: string[];
+    };
+  } | null;
 };
+
+export type WorkflowDraftReview = WorkflowVersionReview;
 
 export type WorkflowGenerationStatus =
   | "pending"
@@ -136,4 +161,5 @@ export type WorkflowDetail = {
   generation: WorkflowGenerationRecord | null;
   flowV1?: FlowV1DetailProjection | null;
   draftReview?: WorkflowDraftReview | null;
+  versionReview?: WorkflowVersionReview | null;
 };

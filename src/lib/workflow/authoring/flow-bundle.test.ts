@@ -104,8 +104,11 @@ describe("Flow v1 authoring validation", () => {
     const { getWorkflowVersion } = await import(
       "@/lib/db/workflows/versions"
     );
-    const { getLatestFlowV1DraftReview } = await import(
-      "@/lib/flow-v1/draft-projection"
+    const {
+      getFlowV1VersionReview,
+      getLatestFlowV1DraftReview,
+    } = await import(
+      "@/lib/flow-v1/version-projection"
     );
     const { publishFlowV1Version } = await import(
       "@/lib/flow-v1/flow-service"
@@ -171,15 +174,58 @@ describe("Flow v1 authoring validation", () => {
       }),
     );
 
+    writeFileSync(
+      path.join(bundleDir, "scripts", "scan.mjs"),
+      "export async function run() { return { revised: true }; }",
+    );
+    const revised = await submitAuthoringFlowBundle({
+      jobId,
+      skipSemanticReview: true,
+      reason: "Second immutable authoring Version",
+    });
+    expect(revised).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        version: 2,
+        versionStatus: "draft",
+      }),
+    );
+    expect(getLatestFlowV1DraftReview(pending.workflow.id)).toEqual(
+      expect.objectContaining({
+        version: expect.objectContaining({ id: revised.versionId }),
+        comparison: expect.objectContaining({
+          baseVersion: expect.objectContaining({
+            id: submitted.versionId,
+          }),
+          files: expect.arrayContaining([
+            expect.objectContaining({
+              path: "scripts/scan.mjs",
+              status: "modified",
+              lines: expect.arrayContaining([
+                expect.objectContaining({ kind: "removed" }),
+                expect.objectContaining({ kind: "added" }),
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
+    expect(
+      getFlowV1VersionReview(
+        pending.workflow.id,
+        submitted.versionId,
+      )?.version.version,
+    ).toBe(1);
+
     publishFlowV1Version({
       flowId: pending.workflow.id,
-      versionId: submitted.versionId!,
+      versionId: revised.versionId!,
       params: {},
     });
     expect(getLatestFlowV1DraftReview(pending.workflow.id)).toBeNull();
     expect(getWorkflowDetail(pending.workflow.id)?.currentVersion).toEqual(
       expect.objectContaining({
-        id: submitted.versionId,
+        id: revised.versionId,
         status: "published",
       }),
     );

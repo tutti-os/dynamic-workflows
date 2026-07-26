@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WorkflowErrorBoundary } from "@/components/workflow/WorkflowErrorBoundary";
 import { FlowRuntimeOverview } from "@/components/workflow/FlowRuntimeOverview";
-import { FlowDraftReview } from "@/components/workflow/FlowDraftReview";
+import { FlowVersionReviewPanel } from "@/components/workflow/FlowVersionReview";
 import {
   hasCurrentVersion,
   WorkflowGenerationState,
@@ -21,6 +21,7 @@ import type { FlowV1DetailProjection } from "@/lib/flow-v1/types";
 type FlowWorkflowDetail = WorkflowDetail & {
   flowV1: FlowV1DetailProjection | null;
   draftReview: NonNullable<WorkflowDetail["draftReview"]> | null;
+  versionReview: NonNullable<WorkflowDetail["versionReview"]> | null;
 };
 
 export function WorkflowWorkbench(props: { workflowId: string }) {
@@ -36,13 +37,21 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
   const [detail, setDetail] = useState<FlowWorkflowDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
+    null,
+  );
+  const [surface, setSurface] = useState<"runtime" | "versions">("runtime");
+  const initialSurfaceResolved = useRef(false);
   const [mutating, setMutating] = useState<"duplicate" | "delete" | null>(
     null,
   );
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const response = await fetch(`/api/workflows/${props.workflowId}`, {
+    const query = selectedVersionId
+      ? `?versionId=${encodeURIComponent(selectedVersionId)}`
+      : "";
+    const response = await fetch(`/api/workflows/${props.workflowId}${query}`, {
       cache: "no-store",
     });
     if (!response.ok) {
@@ -54,9 +63,16 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     }
     const next = (await response.json()) as FlowWorkflowDetail;
     setDetail(next);
+    if (!next.flowV1 && next.versionReview) {
+      setSurface("versions");
+      initialSurfaceResolved.current = true;
+    } else if (!initialSurfaceResolved.current) {
+      setSurface(next.draftReview ? "versions" : "runtime");
+      initialSurfaceResolved.current = true;
+    }
     setError(null);
     return next;
-  }, [props.workflowId]);
+  }, [props.workflowId, selectedVersionId]);
 
   useEffect(() => {
     let active = true;
@@ -81,17 +97,19 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
   }, [load]);
 
   useEffect(() => {
+    if (!detail || detail.generation?.status === "failed") {
+      return;
+    }
+    const delay = detail.generation?.agentSessionId ? 3_000 : 2_000;
     if (
-      !detail ||
-      detail.currentVersion ||
-      detail.draftReview ||
-      detail.generation?.status === "failed"
+      !detail.generation?.agentSessionId &&
+      (detail.currentVersion || detail.versionReview)
     ) {
       return;
     }
     const interval = window.setInterval(() => {
       void load().catch(() => undefined);
-    }, 2_000);
+    }, delay);
     return () => window.clearInterval(interval);
   }, [detail, load]);
 
@@ -212,7 +230,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     );
   }
 
-  if (!hasCurrentVersion(detail) && !detail.draftReview) {
+  if (!hasCurrentVersion(detail) && !detail.versionReview) {
     return (
       <WorkflowGenerationState
         detail={detail}
@@ -239,10 +257,14 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
     );
   }
   const displayName =
-    detail.draftReview?.version.meta.name ?? detail.workflow.name;
+    surface === "versions"
+      ? detail.versionReview?.version.meta.name ?? detail.workflow.name
+      : detail.workflow.name;
   const displayDescription =
-    detail.draftReview?.version.meta.description ??
-    detail.workflow.description;
+    surface === "versions"
+      ? detail.versionReview?.version.meta.description ??
+        detail.workflow.description
+      : detail.workflow.description;
 
   return (
     <main className="app-shell">
@@ -264,6 +286,22 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
         </div>
         <div className="flow-detail-actions">
           <button
+            className={surface === "versions" ? "is-active" : undefined}
+            disabled={!detail.versionReview}
+            onClick={() => setSurface("versions")}
+            type="button"
+          >
+            Versions
+          </button>
+          <button
+            className={surface === "runtime" ? "is-active" : undefined}
+            disabled={!detail.flowV1}
+            onClick={() => setSurface("runtime")}
+            type="button"
+          >
+            Runtime
+          </button>
+          <button
             disabled={mutating !== null || !detail.currentVersion}
             onClick={() => void duplicateFlow()}
             type="button"
@@ -281,15 +319,17 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
         </div>
       </header>
       {error ? <p className="flow-detail-error">{error}</p> : null}
-      {detail.draftReview ? (
-        <FlowDraftReview
-          draft={detail.draftReview}
+      {surface === "versions" && detail.versionReview ? (
+        <FlowVersionReviewPanel
+          authoringSessionId={detail.generation?.agentSessionId}
           onRefresh={load}
+          onSelectVersion={setSelectedVersionId}
+          review={detail.versionReview}
           versions={detail.versions}
           workflowId={props.workflowId}
         />
       ) : null}
-      {detail.flowV1 ? (
+      {surface === "runtime" && detail.flowV1 ? (
         <FlowRuntimeOverview
           workflowId={props.workflowId}
           projection={detail.flowV1}

@@ -1641,6 +1641,11 @@ a {
   opacity: 0.58;
 }
 
+.flow-detail-actions button.is-active {
+  border-color: var(--status-blue, #3b82f6);
+  color: var(--foreground);
+}
+
 .flow-detail-error {
   margin: 12px 24px 0;
   color: var(--state-danger);
@@ -1891,16 +1896,28 @@ a {
   gap: 6px;
 }
 
-.flow-draft-version-strip span {
+.flow-draft-version-strip span,
+.flow-draft-version-strip button {
   border: 1px solid var(--border-1);
   border-radius: 999px;
+  background: transparent;
   padding: 4px 8px;
   color: var(--text-secondary);
   font-size: 10px;
 }
 
-.flow-draft-version-strip span.is-current {
+.flow-draft-version-strip span.is-current,
+.flow-draft-version-strip button.is-current {
   border-color: var(--state-warning);
+  color: var(--foreground);
+}
+
+.flow-draft-version-strip button {
+  cursor: pointer;
+}
+
+.flow-draft-version-strip button:hover {
+  background: var(--background);
   color: var(--foreground);
 }
 
@@ -1973,8 +1990,132 @@ a {
   white-space: nowrap;
 }
 
+.flow-version-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flow-version-heading-actions button {
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 7px 10px;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.flow-version-changes {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-1);
+  padding-top: 12px;
+}
+
+.flow-version-changes select {
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 7px 9px;
+  color: var(--foreground);
+}
+
+.flow-version-graph-diff {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flow-version-graph-diff > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 8px 10px;
+}
+
+.flow-version-graph-diff span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.flow-version-graph-diff strong {
+  font-size: 15px;
+}
+
+.flow-version-graph-diff small {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-version-diff {
+  max-height: 460px;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--background);
+  font: 10px/1.5 var(--font-geist-mono);
+}
+
+.flow-version-diff-line {
+  display: grid;
+  grid-template-columns: 42px 42px minmax(max-content, 1fr);
+  min-width: max-content;
+}
+
+.flow-version-diff-line > span {
+  border-right: 1px solid var(--border-1);
+  padding: 0 6px;
+  color: var(--text-secondary);
+  text-align: right;
+  user-select: none;
+}
+
+.flow-version-diff-line code {
+  padding: 0 8px;
+  white-space: pre;
+}
+
+.flow-version-diff-line.is-added {
+  background: color-mix(in srgb, var(--state-success) 13%, transparent);
+}
+
+.flow-version-diff-line.is-removed {
+  background: color-mix(in srgb, var(--state-danger) 12%, transparent);
+}
+
+.flow-version-empty-diff {
+  border: 1px dashed var(--border-1);
+  border-radius: 8px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.flow-version-footer {
+  grid-template-columns: minmax(220px, 0.7fr) minmax(280px, 1.3fr);
+  align-items: start;
+}
+
+.flow-version-publish {
+  display: grid;
+  gap: 8px;
+}
+
 @media (max-width: 900px) {
   .flow-draft-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-version-graph-diff,
+  .flow-version-footer {
     grid-template-columns: 1fr;
   }
 }
