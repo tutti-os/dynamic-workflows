@@ -1,15 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertWorkflowScriptValid } from "./parser";
+import { parseFlowV1Bundle } from "@/lib/flow-v1/parser";
 import {
-  getWorkflowBlueprintScriptPath,
   WORKFLOW_BLUEPRINT_CATEGORIES,
   WORKFLOW_BLUEPRINT_DIFFICULTIES,
   WORKFLOW_BLUEPRINT_ID_PATTERN,
   WORKFLOW_BLUEPRINT_TAG_PATTERN,
 } from "./blueprint-contract";
-import { BUILTIN_WORKFLOW_BLUEPRINTS } from "./builtin-blueprints";
+import { BUILTIN_FLOW_V1_BLUEPRINTS } from "./builtin-flow-blueprints";
 import {
   getWorkflowBlueprint,
   listWorkflowBlueprints,
@@ -22,20 +19,12 @@ describe("workflow blueprint catalog", () => {
     const ids = blueprints.map((blueprint) => blueprint.id);
 
     expect(ids).toEqual([
-      "human-feedback-loop-v1",
-      "loop-primitive-rd-acceptance-test-v1",
-      "rd-human-acceptance-delivery-v1",
-      "parallel-review-synthesis-v1",
-      "map-fan-out-demo-v1",
-      "repo-migration-sweep-v1",
-      "research-fanout-report-v1",
-      "release-readiness-check-v1",
-      "epic-breakdown-plan-v1",
+      "large-file-governance-v1",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(BUILTIN_WORKFLOW_BLUEPRINTS.map((blueprint) => blueprint.id)).toEqual(
-      ids,
-    );
+    expect(
+      BUILTIN_FLOW_V1_BLUEPRINTS.map((blueprint) => blueprint.id),
+    ).toEqual(ids);
 
     for (const blueprint of blueprints) {
       const detail = getWorkflowBlueprint(blueprint.id);
@@ -68,72 +57,47 @@ describe("workflow blueprint catalog", () => {
         expect(useCase.length).toBeGreaterThanOrEqual(12);
         expect(useCase).not.toMatch(/\bTODO\b/i);
       }
-      expect(detail?.script.trimStart()).toBe(detail?.script);
-      expect(detail?.script.trimEnd()).toBe(
-        detail?.script.replace(/\n$/, ""),
-      );
-
-      const parsed = assertWorkflowScriptValid(detail?.script ?? "");
-      expect(parsed.meta.requiresCwd ?? false).toBe(blueprint.requiresCwd);
+      expect(detail?.schemaVersion).toBe("tutti.flow.v1");
+      if (detail?.schemaVersion !== "tutti.flow.v1") {
+        throw new Error("Blueprint must be a Flow v1 Bundle.");
+      }
+      const parsed = parseFlowV1Bundle(detail.bundle);
+      expect(parsed.diagnostics).toEqual([]);
+      expect(parsed.meta.requiresCwd).toBe(blueprint.requiresCwd);
       expect(parsed.meta.name).toBe(blueprint.title);
-      expect(parsed.meta.description.trim()).toBeTruthy();
-      expect(parsed.meta.description).not.toMatch(/\bTODO\b/i);
       expect(parsed.nodes.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("loads the built-in blueprint script from a workflow file", () => {
-    const detail = getWorkflowBlueprint("loop-primitive-rd-acceptance-test-v1");
-    const fileScript = fs.readFileSync(
-      path.join(process.cwd(), getWorkflowBlueprintScriptPath(detail?.id ?? "")),
-      "utf8",
-    );
-
-    expect(detail?.script).toBe(fileScript);
-  });
-
-  it("keeps every built-in blueprint id aligned with a checked-in script file", () => {
-    for (const blueprint of BUILTIN_WORKFLOW_BLUEPRINTS) {
-      const scriptPath = getWorkflowBlueprintScriptPath(blueprint.id);
-      const absoluteScriptPath = path.join(process.cwd(), scriptPath);
-
-      expect(path.basename(scriptPath)).toBe(`${blueprint.id}.workflow.js`);
-      expect(fs.existsSync(absoluteScriptPath)).toBe(true);
-      expect(fs.readFileSync(absoluteScriptPath, "utf8")).toBe(blueprint.script);
     }
   });
 
   it("searches built-in blueprints by pattern terms", () => {
     const results = searchWorkflowBlueprints({
-      query: "acceptance loop pass",
+      query: "large file issue pull request loop",
       includeScript: true,
     });
 
     expect(results[0]).toMatchObject({
-      id: "loop-primitive-rd-acceptance-test-v1",
+      id: "large-file-governance-v1",
       category: "coding",
       requiresCwd: true,
     });
-    expect(results[0]?.script).toContain("delivery_loop");
+    expect(results[0]?.bundle?.schemaVersion).toBe("tutti.flow.v1");
   });
 
   it("filters blueprints and omits scripts unless requested", () => {
     const results = searchWorkflowBlueprints({
       category: "coding",
-      tags: ["acceptance"],
+      tags: ["schedule"],
       requiresCwd: true,
     });
 
     expect(results.map((result) => result.id)).toEqual([
-      "loop-primitive-rd-acceptance-test-v1",
-      "rd-human-acceptance-delivery-v1",
-      "repo-migration-sweep-v1",
+      "large-file-governance-v1",
     ]);
     expect(results[0]).not.toHaveProperty("script");
     expect(
       searchWorkflowBlueprints({
         category: "research",
-        tags: ["acceptance"],
+        tags: ["schedule"],
       }),
     ).toEqual([]);
   });

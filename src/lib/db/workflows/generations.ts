@@ -1,17 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { workflowNotFoundError } from "@/lib/api/app-error";
-import { assertWorkflowScriptValid } from "@/lib/workflow/parser";
 import { getDb } from "../client";
 import { getWorkflowDetail } from "./workflow-repository";
 import {
-  stringifyAuthoringSemanticReviewColumn,
   stringifyJsonValueColumn,
   stringifyWorkflowGenerationErrorColumn,
-  stringifyWorkflowMetaColumn,
 } from "./json-schemas";
 import { mapGeneration, type GenerationRow } from "./mappers";
 import type {
-  AuthoringSemanticReview,
   WorkflowDetail,
   WorkflowGenerationError,
   WorkflowGenerationRecord,
@@ -205,100 +201,39 @@ export function resetWorkflowGenerationForRetry(
   })();
 }
 
-export function completeWorkflowGeneration(input: {
+export function completeWorkflowFlowGeneration(input: {
   generationId: string;
-  script: string;
   generation: unknown;
-  semanticReview: AuthoringSemanticReview;
 }): WorkflowDetail {
   const generation = getWorkflowGeneration(input.generationId);
   if (!generation) {
     throw new Error("Workflow generation not found");
   }
 
-  const parsed = assertWorkflowScriptValid(input.script);
   const database = getDb();
   const now = new Date().toISOString();
-  const versionId = randomUUID();
-  const version = database
+  database
     .prepare(
       `
-      SELECT COALESCE(MAX(version), 0) + 1 AS next_version
-      FROM workflow_versions
-      WHERE workflow_id = ?
+      UPDATE workflow_generations
+      SET status = 'completed',
+        generation_json = ?,
+        error_json = NULL,
+        started_at = COALESCE(started_at, ?),
+        finished_at = ?
+      WHERE id = ?
     `,
     )
-    .get(generation.workflowId) as { next_version: number };
-
-  database
-    .transaction(() => {
-      database
-        .prepare(
-          `
-          INSERT INTO workflow_versions (
-            id, workflow_id, version, script, meta_json, source,
-            base_version_id, note, semantic_review_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-        )
-        .run(
-          versionId,
-          generation.workflowId,
-          version.next_version,
-          input.script,
-          stringifyWorkflowMetaColumn(parsed.meta, {
-            table: "workflow_versions",
-            column: "meta_json",
-            id: versionId,
-          }),
-          "generation",
-          null,
-          null,
-          stringifyAuthoringSemanticReviewColumn(input.semanticReview, {
-            table: "workflow_versions",
-            column: "semantic_review_json",
-            id: versionId,
-          }),
-          now,
-        );
-
-      database
-        .prepare(
-          `
-          UPDATE workflows
-          SET name = ?, description = ?, current_version_id = ?, updated_at = ?
-          WHERE id = ?
-        `,
-        )
-        .run(
-          parsed.meta.name,
-          parsed.meta.description,
-          versionId,
-          now,
-          generation.workflowId,
-        );
-
-      database
-        .prepare(
-          `
-          UPDATE workflow_generations
-          SET status = 'completed',
-            generation_json = ?,
-            error_json = NULL,
-            finished_at = ?
-          WHERE id = ?
-        `,
-        )
-        .run(
-          stringifyJsonValueColumn(input.generation, {
-            table: "workflow_generations",
-            column: "generation_json",
-            id: input.generationId,
-          }),
-          now,
-          input.generationId,
-        );
-    })();
+    .run(
+      stringifyJsonValueColumn(input.generation, {
+        table: "workflow_generations",
+        column: "generation_json",
+        id: input.generationId,
+      }),
+      now,
+      now,
+      input.generationId,
+    );
 
   const detail = getWorkflowDetail(generation.workflowId);
   if (!detail) {

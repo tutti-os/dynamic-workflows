@@ -11,7 +11,6 @@ import type {
   RenderedWorkflowHumanSpec,
   WorkflowHumanAction,
   WorkflowHumanTask,
-  WorkflowHumanTaskRequest,
   WorkflowHumanTaskResponse,
   WorkflowHumanTaskStatus,
   WorkflowValue,
@@ -20,9 +19,8 @@ import type {
 type HumanTaskRow = {
   id: string;
   run_id: string;
+  cycle_id: string | null;
   node_id: string;
-  parent_node_id: string | null;
-  iteration: number | null;
   execution_key: string;
   status: WorkflowHumanTaskStatus;
   spec_json: string;
@@ -37,14 +35,18 @@ type HumanTaskRow = {
 export class HumanTaskValidationError extends Error {}
 export class HumanTaskConflictError extends Error {}
 
-export function createOrGetWorkflowHumanTask(
-  request: WorkflowHumanTaskRequest,
-): WorkflowHumanTask {
+export function createOrGetFlowV1HumanTask(input: {
+  cycleId: string;
+  runId: string;
+  nodeId: string;
+  executionKey: string;
+  spec: RenderedWorkflowHumanSpec;
+}): WorkflowHumanTask {
   const database = getDb();
   return database.transaction(() => {
-    const existing = getWorkflowHumanTaskByExecutionKey(
-      request.runId,
-      request.executionKey,
+    const existing = getFlowV1HumanTaskByExecutionKey(
+      input.cycleId,
+      input.executionKey,
     );
     if (existing) {
       return existing;
@@ -52,42 +54,50 @@ export function createOrGetWorkflowHumanTask(
     const id = randomUUID();
     const now = new Date().toISOString();
     const spec = {
-      ...(request.spec.description !== undefined
-        ? { description: request.spec.description }
+      ...(input.spec.description !== undefined
+        ? { description: input.spec.description }
         : {}),
-      actions: request.spec.actions,
+      actions: input.spec.actions,
     };
-    database.prepare(`
-      INSERT OR IGNORE INTO workflow_run_human_tasks (
-        id, run_id, node_id, parent_node_id, iteration, execution_key,
-        status, spec_json, context_json, response_json, revision,
-        created_at, resolved_at, resolved_by
+    database
+      .prepare(
+        `
+        INSERT OR IGNORE INTO workflow_run_human_tasks (
+          id, run_id, cycle_id, node_id, execution_key, status,
+          spec_json, context_json, response_json,
+          revision, created_at, resolved_at, resolved_by
+        )
+        SELECT ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, 1, ?,
+          NULL, NULL
+        WHERE EXISTS (
+          SELECT 1 FROM workflow_runs runs
+          WHERE runs.id = ? AND runs.cycle_id = ?
+            AND runs.status = 'running'
+        )
+      `,
       )
-      SELECT ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, 1, ?, NULL, NULL
-      WHERE EXISTS (
-        SELECT 1 FROM workflow_runs runs
-        WHERE runs.id = ?
-          AND runs.status IN ('running', 'waiting_for_human', 'interrupted')
-      )
-    `).run(
-      id,
-      request.runId,
-      request.nodeId,
-      request.parentNodeId ?? null,
-      request.iteration ?? null,
-      request.executionKey,
-      stringifyJsonObjectColumn(spec, context(id, "spec_json")),
-      stringifyJsonValueColumn(request.spec.context, context(id, "context_json")),
-      now,
-      request.runId,
-    );
-    const task = getWorkflowHumanTaskByExecutionKey(
-      request.runId,
-      request.executionKey,
+      .run(
+        id,
+        input.runId,
+        input.cycleId,
+        input.nodeId,
+        input.executionKey,
+        stringifyJsonObjectColumn(spec, context(id, "spec_json")),
+        stringifyJsonValueColumn(
+          input.spec.context,
+          context(id, "context_json"),
+        ),
+        now,
+        input.runId,
+        input.cycleId,
+      );
+    const task = getFlowV1HumanTaskByExecutionKey(
+      input.cycleId,
+      input.executionKey,
     );
     if (!task) {
       throw new HumanTaskConflictError(
-        "Workflow run no longer accepts human tasks.",
+        "Flow Tick no longer accepts human tasks.",
       );
     }
     return task;
@@ -101,44 +111,45 @@ export function getWorkflowHumanTask(taskId: string): WorkflowHumanTask | null {
   return row ? mapHumanTask(row) : null;
 }
 
-export function getWorkflowHumanTaskByExecutionKey(
-  runId: string,
+export function getFlowV1HumanTaskByExecutionKey(
+  cycleId: string,
   executionKey: string,
 ): WorkflowHumanTask | null {
   const row = getDb()
-    .prepare(`
+    .prepare(
+      `
       SELECT * FROM workflow_run_human_tasks
-      WHERE run_id = ? AND execution_key = ?
-    `)
-    .get(runId, executionKey) as HumanTaskRow | undefined;
+      WHERE cycle_id = ? AND execution_key = ?
+    `,
+    )
+    .get(cycleId, executionKey) as HumanTaskRow | undefined;
   return row ? mapHumanTask(row) : null;
 }
 
-export function listWorkflowHumanTasks(
-  runId: string,
+export function listFlowV1HumanTasks(
+  cycleId: string,
   status?: WorkflowHumanTaskStatus,
 ): WorkflowHumanTask[] {
   const rows = status
-    ? getDb().prepare(`
-        SELECT * FROM workflow_run_human_tasks
-        WHERE run_id = ? AND status = ?
-        ORDER BY created_at ASC, rowid ASC
-      `).all(runId, status)
-    : getDb().prepare(`
-        SELECT * FROM workflow_run_human_tasks
-        WHERE run_id = ?
-        ORDER BY created_at ASC, rowid ASC
-      `).all(runId);
+    ? getDb()
+        .prepare(
+          `
+          SELECT * FROM workflow_run_human_tasks
+          WHERE cycle_id = ? AND status = ?
+          ORDER BY created_at ASC, rowid ASC
+        `,
+        )
+        .all(cycleId, status)
+    : getDb()
+        .prepare(
+          `
+          SELECT * FROM workflow_run_human_tasks
+          WHERE cycle_id = ?
+          ORDER BY created_at ASC, rowid ASC
+        `,
+        )
+        .all(cycleId);
   return (rows as HumanTaskRow[]).map(mapHumanTask);
-}
-
-export function countPendingWorkflowHumanTasks(runId: string): number {
-  const row = getDb().prepare(`
-    SELECT COUNT(*) AS count
-    FROM workflow_run_human_tasks
-    WHERE run_id = ? AND status = 'pending'
-  `).get(runId) as { count: number };
-  return row.count;
 }
 
 export function resolveWorkflowHumanTask(input: {
@@ -168,7 +179,8 @@ export function resolveWorkflowHumanTask(input: {
         AND EXISTS (
           SELECT 1 FROM workflow_runs runs
           WHERE runs.id = workflow_run_human_tasks.run_id
-            AND runs.status IN ('running', 'waiting_for_human', 'interrupted')
+            AND runs.status = 'completed'
+            AND runs.stop_reason = 'waiting_human'
         )
     `).run(
       stringifyJsonObjectColumn(response, context(task.id, "response_json")),
@@ -189,16 +201,6 @@ export function resolveWorkflowHumanTask(input: {
     }
     return resolved;
   })();
-}
-
-export function cancelPendingWorkflowHumanTasks(runId: string): number {
-  const result = getDb().prepare(`
-    UPDATE workflow_run_human_tasks
-    SET status = 'canceled', revision = revision + 1,
-      resolved_at = COALESCE(resolved_at, ?)
-    WHERE run_id = ? AND status = 'pending'
-  `).run(new Date().toISOString(), runId);
-  return result.changes;
 }
 
 function validateResponse(
@@ -259,9 +261,8 @@ function mapHumanTask(row: HumanTaskRow): WorkflowHumanTask {
   return {
     id: row.id,
     runId: row.run_id,
+    ...(row.cycle_id ? { cycleId: row.cycle_id } : {}),
     nodeId: row.node_id,
-    ...(row.parent_node_id ? { parentNodeId: row.parent_node_id } : {}),
-    ...(row.iteration !== null ? { iteration: row.iteration } : {}),
     executionKey: row.execution_key,
     status: row.status,
     spec: {

@@ -2,7 +2,6 @@
 
 import { DashboardIcon, TuttiMark } from "@tutti-os/ui-system";
 import { CreateWorkflowPanel } from "@/components/workflow/CreateWorkflowPanel";
-import { ImportWorkflowDialog } from "@/components/workflow/ImportWorkflowPanel";
 import { useWorkflowHomeController } from "@/components/workflow/useWorkflowHomeController";
 import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
 import { WorkflowGrid } from "@/components/workflow/WorkflowGrid";
@@ -40,12 +39,6 @@ export function HomePage() {
     createError,
     createDiagnostics,
     createWorkflow,
-    importFile,
-    setImportFile,
-    isImporting,
-    importError,
-    importDiagnostics,
-    importWorkflow,
     duplicatingId,
     deletingId,
     actionError,
@@ -126,14 +119,6 @@ export function HomePage() {
               statusFilter={statusFilter}
               onQueryChange={setQuery}
               onStatusFilterChange={setStatusFilter}
-            />
-            <ImportWorkflowDialog
-              file={importFile}
-              isImporting={isImporting}
-              importError={importError}
-              importDiagnostics={importDiagnostics}
-              onFileChange={setImportFile}
-              onImport={importWorkflow}
             />
           </div>
         </div>

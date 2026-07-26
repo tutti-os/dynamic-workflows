@@ -11,7 +11,6 @@ import {
   getAuthoringSemanticReview,
   setAuthoringSemanticReview,
 } from "@/lib/db/workflows/semantic-reviews";
-import { getWorkflowEditJob } from "@/lib/db/workflows/edit-jobs";
 import { getWorkflowGeneration } from "@/lib/db/workflows/generations";
 import type {
   AuthoringSemanticReview,
@@ -293,7 +292,10 @@ async function executeReview(input: {
     cwd: input.job.cwd,
     permissionMode,
     title: "Workflow design review",
-    prompt: buildReviewPrompt(input.conversation, input.script),
+    prompt: buildReviewPrompt(
+      input.conversation,
+      input.script,
+    ),
     signal: input.signal,
   })) {
     if (event.type === "text_delta") {
@@ -419,21 +421,19 @@ function finishReview(
 
 function resolveReviewJob(jobId: string): ReviewJob {
   const generation = getWorkflowGeneration(jobId);
-  const edit = generation ? null : getWorkflowEditJob(jobId);
-  const job = generation ?? edit;
-  if (!job) {
+  if (!generation) {
     throw new Error("Authoring job not found.");
   }
-  if (!job.agent || !job.agentSessionId) {
+  if (!generation.agent || !generation.agentSessionId) {
     throw new Error("Authoring agent session is unavailable.");
   }
   return {
     jobId,
-    agent: job.agent,
-    model: job.model ?? undefined,
+    agent: generation.agent,
+    model: generation.model ?? undefined,
     cwd: "",
-    authorSessionId: job.agentSessionId,
-    fallbackIntent: "prompt" in job ? job.prompt : job.instruction,
+    authorSessionId: generation.agentSessionId,
+    fallbackIntent: generation.prompt,
   };
 }
 
@@ -468,11 +468,11 @@ function buildReviewPrompt(
   script: string,
 ): string {
   return [
-    "Review this Dynamic Workflows design against the user's stated goal.",
-    "Do not edit files, run the workflow, repair the script, or ask questions.",
-    "Check end-to-end closure: reachability, loop entry/order, gate criteria, feedback paths, skipped branches, session continuity, information boundaries, and side-effect timing.",
-    "Execution semantics: dataflow nodes start only after referenced inputs complete; loop steps run in declared order, firstIteration.startAt changes only initial entry, later rounds restart normally, until is checked after a round, and onMaxIterations determines exhaustion. Human actions and structured outputs are data; inherited sessions carry role history, independent sessions do not.",
-    "Fail if a gate requires downstream evidence that cannot exist before that gate, if a blocker cannot be changed by its preceding repair path, or if the graph can validate yet deadlock or falsely complete.",
+    "Review this persistent Flow Bundle against the user's stated goal.",
+    "Do not edit files, run the Flow, repair the Bundle, or ask questions.",
+    "The candidate is a tutti.flow.v1 Bundle rendered as path-delimited source files.",
+    "Check Cycle/Tick boundaries, Schedule behavior, singleton progression, data/control reachability, Script versus Effect side-effect boundaries, Gate/Human waiting points, terminal continuation, bounded Loop/Map behavior, Finally coverage, Memory usage, Params/Inputs/Secrets boundaries, and idempotency/recovery behavior.",
+    "Fail if recurring schedules can duplicate side effects, a waiting condition cannot change between Ticks, a terminal path is missing, or a required value cannot reach the node that consumes it.",
     "PASS only when every check closes; uncertainty is a failure with a concrete finding.",
     "Return only JSON: {\"verdict\":\"pass|fail\",\"summary\":\"...\",\"findings\":[{\"reason\":\"...\",\"nodePath\":[\"node ids in order\"],\"suggestion\":\"...\"}]}",
     "Use an empty findings array only for pass.",
@@ -480,7 +480,7 @@ function buildReviewPrompt(
     "VISIBLE AUTHORING CONVERSATION THROUGH THE LATEST USER MESSAGE:",
     JSON.stringify(conversation.map(({ role, text }) => ({ role, text }))),
     "",
-    "CURRENT WORKFLOW SCRIPT:",
+    "CURRENT FLOW BUNDLE:",
     script,
   ].join("\n");
 }

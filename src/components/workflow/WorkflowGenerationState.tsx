@@ -13,7 +13,6 @@ import type {
   WorkflowDetail,
   WorkflowVersionRecord,
 } from "@/lib/db/workflows/types";
-import { openWorkflowAgentSession } from "./workflowApiService";
 
 export function hasCurrentVersion(
   detail: WorkflowDetail,
@@ -40,9 +39,11 @@ export function WorkflowGenerationState(props: {
       return;
     }
     setOpeningSession(true);
-    void openWorkflowAgentSession(agentSessionId).finally(() => {
-      setOpeningSession(false);
-    });
+    void fetch("/api/agent-sessions/open", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agentSessionId }),
+    }).finally(() => setOpeningSession(false));
   }, [agentSessionId]);
 
   return (
@@ -102,7 +103,7 @@ export function WorkflowGenerationState(props: {
               {failed
                 ? errorMessage
                 : agentSessionId
-                  ? "The authoring agent is working in its own session. Open it to follow along or answer its questions; the workflow opens here as soon as the agent submits a script."
+                  ? "The authoring agent is working in its own session. Open it to follow along or answer its questions; the Flow opens here as soon as the agent submits a Bundle."
                   : "Launching the authoring agent session..."}
             </p>
           </div>

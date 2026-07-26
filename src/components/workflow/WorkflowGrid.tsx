@@ -25,10 +25,11 @@ import {
   WorkflowGridSkeleton,
 } from "@/components/workflow/WorkflowStates";
 import { writeClipboardText } from "@/components/workflow/workflowClientUtils";
+import type { WorkflowListItem } from "@/lib/db/workflows/types";
 import type {
-  WorkflowListItem,
-  WorkflowRunStatus,
-} from "@/lib/db/workflows/types";
+  FlowV1CycleStatus,
+  FlowV1RunStatus,
+} from "@/lib/flow-v1/types";
 
 type WorkflowGridProps = {
   workflows: WorkflowListItem[];
@@ -91,7 +92,7 @@ export function WorkflowGrid(props: WorkflowGridProps) {
           >
             {props.hasAnyWorkflow
               ? "Try a different search or status filter."
-              : "Create your first local workflow from a prompt, or import an existing script."}
+              : "Create your first local Flow from a prompt or instantiate a Blueprint."}
           </EmptyState>
         )}
       </div>
@@ -119,7 +120,9 @@ function WorkflowCard(props: {
   const { item } = props;
   const workflowUrl = `/workflows/${item.workflow.id}`;
   const generationStatus = item.generation?.status;
-  const latestRunStatus = item.latestRun?.status;
+  const latestRunStatus = item.flowV1Runtime?.latestRun?.status;
+  const flowCycleStatus = item.flowV1Runtime?.activeCycle?.status;
+  const displayedStatus = flowCycleStatus ?? latestRunStatus;
 
   return (
     <article className="workflow-card-shell">
@@ -146,17 +149,27 @@ function WorkflowCard(props: {
                   : "Draft"}
               </span>
               <span>
-                {item.runCount} {item.runCount === 1 ? "run" : "runs"}
+                {item.flowV1Runtime
+                  ? `${item.flowV1Runtime.cycleCount} cycles · ${item.flowV1Runtime.runCount} ticks`
+                  : "No cycles yet"}
               </span>
             </span>
           </span>
           <span className="workflow-card-state">
-            {latestRunStatus ? (
+            {displayedStatus ? (
               <Badge
-                className={latestRunStatus === "running" ? "status-pulse" : undefined}
-                variant={runStatusBadge(latestRunStatus)}
+                className={
+                  displayedStatus === "running"
+                    ? "status-pulse"
+                    : undefined
+                }
+                variant={
+                  flowCycleStatus
+                    ? flowCycleStatusBadge(flowCycleStatus)
+                    : runStatusBadge(latestRunStatus!)
+                }
               >
-                {formatStatusLabel(latestRunStatus)}
+                {formatStatusLabel(displayedStatus)}
               </Badge>
             ) : item.currentVersion ? (
               <Badge variant="success">Ready</Badge>
@@ -200,7 +213,10 @@ function WorkflowCard(props: {
               </DropdownMenuItem>
               <DropdownMenuItem
                 onSelect={() => void props.onDuplicateWorkflow(item.workflow.id)}
-                disabled={props.duplicating || !item.currentVersion}
+                disabled={
+                  props.duplicating ||
+                  !item.currentVersion
+                }
               >
                 {props.duplicating ? (
                   <LoadingIcon className="spin" data-icon="inline-start" />
@@ -239,15 +255,12 @@ function formatShortDate(value: string): string {
   }).format(new Date(value));
 }
 
-function runStatusBadge(status: WorkflowRunStatus) {
+function runStatusBadge(status: FlowV1RunStatus) {
   if (status === "completed") {
     return "success" as const;
   }
   if (status === "running") {
     return "pending" as const;
-  }
-  if (status === "waiting_for_human") {
-    return "warning" as const;
   }
   if (status === "interrupted") {
     return "warning" as const;
@@ -261,6 +274,24 @@ function runStatusBadge(status: WorkflowRunStatus) {
   return "default" as const;
 }
 
-function formatStatusLabel(status: WorkflowRunStatus): string {
+function flowCycleStatusBadge(status: FlowV1CycleStatus) {
+  if (status === "completed") {
+    return "success" as const;
+  }
+  if (status === "running" || status === "runnable") {
+    return "pending" as const;
+  }
+  if (status.startsWith("waiting_") || status === "paused_budget") {
+    return "warning" as const;
+  }
+  if (status.startsWith("paused_")) {
+    return "destructive" as const;
+  }
+  return "default" as const;
+}
+
+function formatStatusLabel(
+  status: FlowV1RunStatus | FlowV1CycleStatus,
+): string {
   return status.replaceAll("_", " ");
 }

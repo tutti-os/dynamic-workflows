@@ -1,4 +1,4 @@
-import { BUILTIN_WORKFLOW_BLUEPRINTS } from "./builtin-blueprints";
+import { BUILTIN_FLOW_V1_BLUEPRINTS } from "./builtin-flow-blueprints";
 import type {
   WorkflowBlueprintCategory,
   WorkflowBlueprintDetail,
@@ -16,13 +16,13 @@ export type WorkflowBlueprintSearchInput = {
 };
 
 export function listWorkflowBlueprints(): WorkflowBlueprintSummary[] {
-  return BUILTIN_WORKFLOW_BLUEPRINTS.map(toWorkflowBlueprintSummary);
+  return allBlueprints().map(toWorkflowBlueprintSummary);
 }
 
 export function getWorkflowBlueprint(
   blueprintId: string,
 ): WorkflowBlueprintDetail | undefined {
-  return BUILTIN_WORKFLOW_BLUEPRINTS.find((blueprint) => blueprint.id === blueprintId);
+  return allBlueprints().find((blueprint) => blueprint.id === blueprintId);
 }
 
 export function searchWorkflowBlueprints(
@@ -33,7 +33,7 @@ export function searchWorkflowBlueprints(
     (input.tags ?? []).map((tag) => normalizeSearchText(tag)).filter(Boolean),
   );
 
-  return BUILTIN_WORKFLOW_BLUEPRINTS.map((blueprint) => ({
+  return allBlueprints().map((blueprint) => ({
     blueprint,
     score: scoreWorkflowBlueprint(blueprint, queryTokens),
   }))
@@ -65,7 +65,9 @@ export function searchWorkflowBlueprints(
     .map(({ blueprint, score }) => ({
       ...toWorkflowBlueprintSummary(blueprint),
       score,
-      ...(input.includeScript ? { script: blueprint.script } : {}),
+      ...(input.includeScript && blueprint.bundle
+        ? { bundle: blueprint.bundle }
+        : {}),
     }));
 }
 
@@ -82,7 +84,17 @@ function toWorkflowBlueprintSummary(
     requiresCwd: blueprint.requiresCwd,
     patternSummary: blueprint.patternSummary,
     useCases: [...blueprint.useCases],
+    ...(blueprint.schemaVersion
+      ? { schemaVersion: blueprint.schemaVersion }
+      : {}),
+    ...(blueprint.capabilities
+      ? { capabilities: [...blueprint.capabilities] }
+      : {}),
   };
+}
+
+function allBlueprints(): WorkflowBlueprintDetail[] {
+  return BUILTIN_FLOW_V1_BLUEPRINTS;
 }
 
 function scoreWorkflowBlueprint(

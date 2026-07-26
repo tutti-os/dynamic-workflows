@@ -2,40 +2,25 @@ import type { WorkflowDiagnostic } from "@/lib/workflow/types";
 
 export type ApiErrorCode =
   | "PROMPT_REQUIRED"
-  | "SCRIPT_REQUIRED"
   | "WORKFLOW_NAME_REQUIRED"
   | "WORKFLOW_NAME_TOO_LONG"
   | "WORKFLOW_DESCRIPTION_TOO_LONG"
   | "WORKFLOW_NOT_FOUND"
-  | "WORKFLOW_VERSION_NOT_FOUND"
   | "WORKFLOW_BLUEPRINT_NOT_FOUND"
   | "RUN_NOT_FOUND"
   | "HUMAN_TASK_NOT_FOUND"
   | "HUMAN_TASK_INVALID"
   | "HUMAN_TASK_CONFLICT"
-  | "RUN_NOTE_INVALID"
-  | "RUN_NOTE_RUN_NOT_ACTIVE"
-  | "RUN_NOTE_NO_LIVE_SESSION"
-  | "WORKFLOW_SCRIPT_INVALID"
-  | "WORKFLOW_INPUTS_INVALID"
   | "WORKFLOW_CWD_INVALID"
-  | "WORKFLOW_MAP_NODE_INVALID"
-  | "WORKFLOW_MAP_RETRY_INVALID"
-  | "WORKFLOW_RETRY_NODE_INVALID"
-  | "WORKFLOW_RETRY_FROM_NODE_INVALID"
   | "WORKFLOW_RETRY_REQUEST_INVALID"
   | "WORKFLOW_GENERATION_FAILED"
-  | "WORKFLOW_EDIT_FAILED"
-  | "WORKFLOW_REPAIR_FAILED"
   | "WORKFLOW_IMPORT_FAILED"
   | "WORKFLOW_SAVE_FAILED"
   | "WORKFLOW_UPDATE_FAILED"
   | "WORKFLOW_DUPLICATE_FAILED"
   | "WORKFLOW_DELETE_FAILED"
   | "WORKFLOW_RUN_FAILED"
-  | "WORKFLOW_RUN_CWD_CONFLICT"
   | "AGENT_TARGET_DETECTION_FAILED"
-  | "LEGACY_RUN_ENDPOINT"
   | "UNKNOWN_ERROR";
 
 export type ApiError = {
@@ -51,50 +36,27 @@ export type ApiErrorResponse = {
 
 const ERROR_MESSAGES: Record<ApiErrorCode, string> = {
   PROMPT_REQUIRED: "Enter a prompt before creating a workflow.",
-  SCRIPT_REQUIRED: "Paste a workflow script before importing or saving.",
   WORKFLOW_NAME_REQUIRED: "Enter a workflow name.",
   WORKFLOW_NAME_TOO_LONG: "Workflow name must be 120 characters or less.",
   WORKFLOW_DESCRIPTION_TOO_LONG:
     "Workflow description must be 500 characters or less.",
   WORKFLOW_NOT_FOUND: "Workflow not found.",
-  WORKFLOW_VERSION_NOT_FOUND: "Workflow version not found.",
   WORKFLOW_BLUEPRINT_NOT_FOUND: "Workflow blueprint not found.",
   RUN_NOT_FOUND: "Run not found.",
   HUMAN_TASK_NOT_FOUND: "Human task not found.",
   HUMAN_TASK_INVALID: "Human task response is invalid.",
   HUMAN_TASK_CONFLICT: "Human task was already handled.",
-  RUN_NOTE_INVALID: "The operator note is invalid.",
-  RUN_NOTE_RUN_NOT_ACTIVE:
-    "Operator notes can only steer a run that is still active.",
-  RUN_NOTE_NO_LIVE_SESSION:
-    "No live agent session is available to steer right now; use a next-step note instead.",
-  WORKFLOW_SCRIPT_INVALID:
-    "The workflow script has syntax or workflow rule errors.",
-  WORKFLOW_INPUTS_INVALID: "Workflow inputs are invalid.",
   WORKFLOW_CWD_INVALID:
     "The working directory is invalid or outside the allowed workspace.",
-  WORKFLOW_MAP_NODE_INVALID: "The map node is unknown or not a map node.",
-  WORKFLOW_MAP_RETRY_INVALID:
-    "This run cannot retry failed map items in its current state.",
-  WORKFLOW_RETRY_NODE_INVALID:
-    "The node to retry from is unknown or not executable.",
-  WORKFLOW_RETRY_FROM_NODE_INVALID:
-    "This run cannot be retried from that node in its current state.",
   WORKFLOW_RETRY_REQUEST_INVALID: "The retry request is invalid.",
   WORKFLOW_GENERATION_FAILED: "Workflow generation failed.",
-  WORKFLOW_EDIT_FAILED: "Workflow edit failed.",
-  WORKFLOW_REPAIR_FAILED: "The agent could not repair this workflow script.",
   WORKFLOW_IMPORT_FAILED: "Workflow import failed.",
   WORKFLOW_SAVE_FAILED: "Workflow save failed.",
   WORKFLOW_UPDATE_FAILED: "Workflow update failed.",
   WORKFLOW_DUPLICATE_FAILED: "Workflow duplication failed.",
   WORKFLOW_DELETE_FAILED: "Workflow deletion failed.",
   WORKFLOW_RUN_FAILED: "Workflow run failed.",
-  WORKFLOW_RUN_CWD_CONFLICT:
-    "Another workflow run is already active in this working directory.",
   AGENT_TARGET_DETECTION_FAILED: "Agent target detection failed.",
-  LEGACY_RUN_ENDPOINT:
-    "Use the workflow detail page to run a versioned, logged workflow.",
   UNKNOWN_ERROR: "Something went wrong.",
 };
 

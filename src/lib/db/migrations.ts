@@ -1,6 +1,10 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 11;
+/**
+ * Version 17 is the Flow v1 cutover. It intentionally rebuilds workflow
+ * storage instead of migrating the removed script workflow runtime.
+ */
+export const CURRENT_SCHEMA_VERSION = 17;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -9,59 +13,25 @@ export function migrateDb(database: Database.Database): void {
       applied_at TEXT NOT NULL
     );
   `);
-
-  const currentVersion = getCurrentSchemaVersion(database);
-  if (currentVersion >= CURRENT_SCHEMA_VERSION) {
+  if (getCurrentSchemaVersion(database) >= CURRENT_SCHEMA_VERSION) {
     return;
   }
 
-  database
-    .transaction(() => {
-      if (currentVersion < 1) {
-        applySchemaV1(database);
-        recordSchemaMigration(database, 1);
-      }
-      if (currentVersion < 2) {
-        applySchemaV2(database);
-        recordSchemaMigration(database, 2);
-      }
-      if (currentVersion < 3) {
-        applySchemaV3(database);
-        recordSchemaMigration(database, 3);
-      }
-      if (currentVersion < 4) {
-        applySchemaV4(database);
-        recordSchemaMigration(database, 4);
-      }
-      if (currentVersion < 5) {
-        applySchemaV5(database);
-        recordSchemaMigration(database, 5);
-      }
-      if (currentVersion < 6) {
-        applySchemaV6(database);
-        recordSchemaMigration(database, 6);
-      }
-      if (currentVersion < 7) {
-        applySchemaV7(database);
-        recordSchemaMigration(database, 7);
-      }
-      if (currentVersion < 8) {
-        applySchemaV8(database);
-        recordSchemaMigration(database, 8);
-      }
-      if (currentVersion < 9) {
-        applySchemaV9(database);
-        recordSchemaMigration(database, 9);
-      }
-      if (currentVersion < 10) {
-        applySchemaV10(database);
-        recordSchemaMigration(database, 10);
-      }
-      if (currentVersion < 11) {
-        applySchemaV11(database);
-        recordSchemaMigration(database, 11);
-      }
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      dropWorkflowSchema(database);
+      createFlowV1Schema(database);
+      database.prepare("DELETE FROM schema_migrations").run();
+      database
+        .prepare(
+          `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+        )
+        .run(CURRENT_SCHEMA_VERSION, new Date().toISOString());
     })();
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
 }
 
 function getCurrentSchemaVersion(database: Database.Database): number {
@@ -71,192 +41,227 @@ function getCurrentSchemaVersion(database: Database.Database): number {
   return row.version;
 }
 
-function recordSchemaMigration(
-  database: Database.Database,
-  version: number,
-): void {
-  database
-    .prepare(
-      `
-      INSERT OR IGNORE INTO schema_migrations (version, applied_at)
-      VALUES (?, ?)
-    `,
-    )
-    .run(version, new Date().toISOString());
+function dropWorkflowSchema(database: Database.Database): void {
+  database.exec(`
+    DROP TABLE IF EXISTS workflow_run_notes;
+    DROP TABLE IF EXISTS workflow_run_checkpoints;
+    DROP TABLE IF EXISTS workflow_edit_jobs;
+    DROP TABLE IF EXISTS workflow_run_human_tasks;
+    DROP TABLE IF EXISTS workflow_effects;
+    DROP TABLE IF EXISTS workflow_node_attempts;
+    DROP TABLE IF EXISTS workflow_memory_updates;
+    DROP TABLE IF EXISTS workflow_cycle_checkpoints;
+    DROP TABLE IF EXISTS workflow_runs;
+    DROP TABLE IF EXISTS workflow_invocations;
+    DROP TABLE IF EXISTS workflow_cycles;
+    DROP TABLE IF EXISTS workflow_schedules;
+    DROP TABLE IF EXISTS workflow_secret_bindings;
+    DROP TABLE IF EXISTS workflow_params;
+    DROP TABLE IF EXISTS workflow_generations;
+    DROP TABLE IF EXISTS workflow_version_files;
+    DROP TABLE IF EXISTS workflow_version_bundles;
+    DROP TABLE IF EXISTS workflow_versions;
+    DROP TABLE IF EXISTS workflows;
+  `);
 }
 
-function applySchemaV1(database: Database.Database): void {
+function createFlowV1Schema(database: Database.Database): void {
   database.exec(`
-    CREATE TABLE IF NOT EXISTS workflows (
+    CREATE TABLE workflows (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       description TEXT NOT NULL,
       current_version_id TEXT,
+      lifecycle TEXT NOT NULL DEFAULT 'draft',
+      params_revision INTEGER NOT NULL DEFAULT 0,
+      project_cwd TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS workflow_versions (
+    CREATE TABLE workflow_versions (
       id TEXT PRIMARY KEY,
       workflow_id TEXT NOT NULL,
       version INTEGER NOT NULL,
-      script TEXT NOT NULL,
       meta_json TEXT NOT NULL,
+      semantic_review_json TEXT,
+      schema_version TEXT NOT NULL,
+      version_status TEXT NOT NULL,
+      bundle_hash TEXT NOT NULL,
+      published_at TEXT,
       created_at TEXT NOT NULL,
       FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
       UNIQUE (workflow_id, version)
     );
 
-    CREATE TABLE IF NOT EXISTS workflow_runs (
-      id TEXT PRIMARY KEY,
-      workflow_id TEXT NOT NULL,
-      workflow_version_id TEXT NOT NULL,
-      executor_kind TEXT NOT NULL,
-      external_run_id TEXT,
-      status TEXT NOT NULL,
-      provider TEXT,
-      model TEXT,
-      cwd TEXT,
-      input_json TEXT NOT NULL,
-      result_json TEXT,
-      log_path TEXT,
-      started_at TEXT NOT NULL,
-      finished_at TEXT,
-      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
-      FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions(id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_workflow_versions_workflow_id
+    CREATE INDEX idx_workflow_versions_workflow_id
       ON workflow_versions(workflow_id, version DESC);
 
-    CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id
-      ON workflow_runs(workflow_id, started_at DESC);
-  `);
-}
+    CREATE TABLE workflow_version_bundles (
+      version_id TEXT PRIMARY KEY,
+      schema_version TEXT NOT NULL,
+      bundle_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (version_id) REFERENCES workflow_versions(id)
+        ON DELETE CASCADE
+    );
 
-function applySchemaV2(database: Database.Database): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS workflow_generations (
+    CREATE TABLE workflow_version_files (
+      version_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      media_kind TEXT NOT NULL,
+      file_role TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (version_id, path),
+      FOREIGN KEY (version_id) REFERENCES workflow_versions(id)
+        ON DELETE CASCADE
+    );
+
+    CREATE TABLE workflow_generations (
       id TEXT PRIMARY KEY,
       workflow_id TEXT NOT NULL,
       prompt TEXT NOT NULL,
-      provider TEXT,
+      agent TEXT,
       model TEXT,
       cwd TEXT,
+      agent_session_id TEXT,
       status TEXT NOT NULL,
       generation_json TEXT,
       error_json TEXT,
+      semantic_review_json TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
       finished_at TEXT,
       FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
     );
 
-    CREATE INDEX IF NOT EXISTS idx_workflow_generations_workflow_id
+    CREATE INDEX idx_workflow_generations_workflow_id
       ON workflow_generations(workflow_id, created_at DESC);
-  `);
-}
 
-function applySchemaV3(database: Database.Database): void {
-  database.exec(`
-    ALTER TABLE workflow_versions ADD COLUMN source TEXT;
-    ALTER TABLE workflow_versions ADD COLUMN base_version_id TEXT;
-    ALTER TABLE workflow_versions ADD COLUMN note TEXT;
+    CREATE TABLE workflow_params (
+      flow_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      values_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (flow_id, revision),
+      FOREIGN KEY (flow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );
 
-    CREATE TABLE IF NOT EXISTS workflow_edit_jobs (
+    CREATE TABLE workflow_secret_bindings (
+      flow_id TEXT NOT NULL,
+      secret_name TEXT NOT NULL,
+      binding_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (flow_id, secret_name),
+      FOREIGN KEY (flow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE workflow_schedules (
       id TEXT PRIMARY KEY,
-      workflow_id TEXT NOT NULL,
-      base_version_id TEXT NOT NULL,
-      created_version_id TEXT,
-      instruction TEXT NOT NULL,
-      provider TEXT,
-      model TEXT,
-      cwd TEXT,
+      flow_id TEXT NOT NULL UNIQUE,
       status TEXT NOT NULL,
-      result_json TEXT,
-      error_json TEXT,
+      cron_expression TEXT NOT NULL,
+      timezone TEXT NOT NULL,
+      catch_up TEXT NOT NULL,
+      overlap_policy TEXT NOT NULL,
+      input_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      next_fire_at TEXT,
+      last_scheduled_at TEXT,
+      coalesced_scheduled_at TEXT,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (flow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE workflow_cycles (
+      id TEXT PRIMARY KEY,
+      flow_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      flow_version_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      current_node_id TEXT,
+      input_snapshot_json TEXT NOT NULL,
+      params_revision INTEGER NOT NULL,
+      params_snapshot_json TEXT NOT NULL,
+      memory_hash_at_start TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
-      finished_at TEXT,
-      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
-      FOREIGN KEY (base_version_id) REFERENCES workflow_versions(id),
-      FOREIGN KEY (created_version_id) REFERENCES workflow_versions(id)
+      completed_at TEXT,
+      FOREIGN KEY (flow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+      FOREIGN KEY (flow_version_id) REFERENCES workflow_versions(id),
+      UNIQUE (flow_id, sequence)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_workflow_edit_jobs_workflow_id
-      ON workflow_edit_jobs(workflow_id, created_at DESC);
-  `);
-}
+    CREATE UNIQUE INDEX idx_workflow_cycles_one_unfinished
+      ON workflow_cycles(flow_id)
+      WHERE status NOT IN ('completed', 'canceled');
 
-function applySchemaV4(database: Database.Database): void {
-  database.exec(`
-    ALTER TABLE workflow_edit_jobs ADD COLUMN agent_session_id TEXT;
-  `);
-}
-
-function applySchemaV5(database: Database.Database): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS workflow_run_checkpoints (
-      run_id TEXT NOT NULL,
-      node_id TEXT NOT NULL,
-      checkpoint_json TEXT NOT NULL,
+    CREATE TABLE workflow_cycle_checkpoints (
+      cycle_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL,
+      state_json TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY (run_id, node_id),
-      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE CASCADE
     );
 
-    CREATE INDEX IF NOT EXISTS idx_workflow_run_checkpoints_run_id
-      ON workflow_run_checkpoints(run_id);
-  `);
-}
+    CREATE TABLE workflow_invocations (
+      id TEXT PRIMARY KEY,
+      flow_id TEXT NOT NULL,
+      cycle_id TEXT,
+      run_id TEXT,
+      origin_kind TEXT NOT NULL,
+      origin_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      input_json TEXT NOT NULL,
+      error_json TEXT,
+      requested_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (flow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE SET NULL,
+      UNIQUE (flow_id, idempotency_key)
+    );
 
-function applySchemaV6(database: Database.Database): void {
-  database.exec(`
-    ALTER TABLE workflow_runs RENAME COLUMN provider TO agent;
-    ALTER TABLE workflow_generations RENAME COLUMN provider TO agent;
-    ALTER TABLE workflow_edit_jobs RENAME COLUMN provider TO agent;
-  `);
+    CREATE TABLE workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      workflow_version_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      input_json TEXT NOT NULL,
+      result_json TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      cycle_id TEXT NOT NULL,
+      invocation_id TEXT NOT NULL,
+      tick_sequence INTEGER NOT NULL,
+      stop_reason TEXT,
+      owner_token TEXT,
+      owner_claimed_at TEXT,
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+      FOREIGN KEY (workflow_version_id) REFERENCES workflow_versions(id),
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE CASCADE,
+      FOREIGN KEY (invocation_id) REFERENCES workflow_invocations(id)
+        ON DELETE CASCADE
+    );
 
-  // Stored values move from provider ids to agent target ids so retry and
-  // resume paths keep resolving after the rename.
-  for (const table of [
-    "workflow_runs",
-    "workflow_generations",
-    "workflow_edit_jobs",
-  ]) {
-    database.exec(`
-      UPDATE ${table} SET agent = 'local:codex' WHERE agent = 'codex';
-      UPDATE ${table} SET agent = 'local:claude-code'
-        WHERE agent IN ('claude-code', 'claude');
-    `);
-  }
-}
+    CREATE UNIQUE INDEX idx_workflow_runs_one_active_tick
+      ON workflow_runs(workflow_id)
+      WHERE status IN ('pending', 'running');
+    CREATE INDEX idx_workflow_runs_workflow_id
+      ON workflow_runs(workflow_id, started_at DESC);
+    CREATE INDEX idx_workflow_runs_cycle
+      ON workflow_runs(cycle_id, tick_sequence);
 
-function applySchemaV7(database: Database.Database): void {
-  database.exec(`
-    ALTER TABLE workflow_runs ADD COLUMN resume_token TEXT;
-    ALTER TABLE workflow_runs ADD COLUMN resume_claimed_at TEXT;
-
-    CREATE INDEX IF NOT EXISTS idx_workflow_runs_resume_token
-      ON workflow_runs(resume_token)
-      WHERE resume_token IS NOT NULL;
-  `);
-}
-
-function applySchemaV8(database: Database.Database): void {
-  database.exec(`
-    ALTER TABLE workflow_generations ADD COLUMN agent_session_id TEXT;
-  `);
-}
-
-function applySchemaV9(database: Database.Database): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS workflow_run_human_tasks (
+    CREATE TABLE workflow_run_human_tasks (
       id TEXT PRIMARY KEY,
       run_id TEXT NOT NULL,
+      cycle_id TEXT NOT NULL,
       node_id TEXT NOT NULL,
-      parent_node_id TEXT,
-      iteration INTEGER,
       execution_key TEXT NOT NULL,
       status TEXT NOT NULL,
       spec_json TEXT NOT NULL,
@@ -267,39 +272,76 @@ function applySchemaV9(database: Database.Database): void {
       resolved_at TEXT,
       resolved_by TEXT,
       FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
-      UNIQUE (run_id, execution_key)
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE CASCADE,
+      UNIQUE (cycle_id, execution_key)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_workflow_run_human_tasks_run_status
-      ON workflow_run_human_tasks(run_id, status, created_at);
-  `);
-}
+    CREATE INDEX idx_workflow_human_tasks_cycle_status
+      ON workflow_run_human_tasks(cycle_id, status, created_at);
 
-function applySchemaV10(database: Database.Database): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS workflow_run_notes (
+    CREATE TABLE workflow_node_attempts (
       id TEXT PRIMARY KEY,
+      cycle_id TEXT NOT NULL,
       run_id TEXT NOT NULL,
-      message TEXT NOT NULL,
-      target TEXT NOT NULL,
-      node_id TEXT,
+      node_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
       status TEXT NOT NULL,
-      consumed_execution_key TEXT,
-      delivery_json TEXT,
-      created_at TEXT NOT NULL,
-      consumed_at TEXT,
-      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+      input_json TEXT NOT NULL,
+      output_json TEXT,
+      error_json TEXT,
+      control_outcome TEXT,
+      agent_session_id TEXT,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE CASCADE,
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      UNIQUE (cycle_id, node_id, sequence)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_workflow_run_notes_run_status
-      ON workflow_run_notes(run_id, status, created_at);
-  `);
-}
+    CREATE INDEX idx_workflow_node_attempts_run
+      ON workflow_node_attempts(run_id, started_at);
 
-function applySchemaV11(database: Database.Database): void {
-  database.exec(`
-    ALTER TABLE workflow_generations ADD COLUMN semantic_review_json TEXT;
-    ALTER TABLE workflow_edit_jobs ADD COLUMN semantic_review_json TEXT;
-    ALTER TABLE workflow_versions ADD COLUMN semantic_review_json TEXT;
+    CREATE TABLE workflow_effects (
+      id TEXT PRIMARY KEY,
+      cycle_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      attempt_id TEXT,
+      idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL,
+      external_ref TEXT,
+      result_json TEXT,
+      error_json TEXT,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE CASCADE,
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (attempt_id) REFERENCES workflow_node_attempts(id)
+        ON DELETE SET NULL,
+      UNIQUE (cycle_id, node_id, idempotency_key)
+    );
+
+    CREATE TABLE workflow_memory_updates (
+      id TEXT PRIMARY KEY,
+      flow_id TEXT NOT NULL,
+      cycle_id TEXT,
+      run_id TEXT,
+      node_id TEXT NOT NULL,
+      section_id TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      base_hash TEXT NOT NULL,
+      result_hash TEXT,
+      status TEXT NOT NULL,
+      markdown TEXT NOT NULL,
+      candidate_markdown TEXT,
+      created_at TEXT NOT NULL,
+      applied_at TEXT,
+      FOREIGN KEY (flow_id) REFERENCES workflows(id) ON DELETE CASCADE,
+      FOREIGN KEY (cycle_id) REFERENCES workflow_cycles(id) ON DELETE SET NULL,
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE SET NULL,
+      UNIQUE (flow_id, idempotency_key)
+    );
   `);
 }

@@ -2,6 +2,12 @@ import type {
   WorkflowBlueprintCategory,
   WorkflowBlueprintDifficulty,
 } from "./blueprint-contract";
+import type {
+  FlowV1Bundle,
+  FlowV1Edge,
+  FlowV1Node,
+  FlowV1SchemaEntry,
+} from "@/lib/flow-v1/types";
 
 export type {
   WorkflowBlueprintCategory,
@@ -18,13 +24,23 @@ export type WorkflowBlueprintSummary = {
   requiresCwd: boolean;
   patternSummary: string;
   useCases: string[];
+  schemaVersion?: "tutti.flow.v1";
+  capabilities?: string[];
 };
 
 export type WorkflowBlueprintDetail = WorkflowBlueprintSummary & {
-  script: string;
+  schemaVersion: "tutti.flow.v1";
+  bundle: FlowV1Bundle;
+  preview?: {
+    nodes: FlowV1Node[];
+    edges: FlowV1Edge[];
+    params: Record<string, FlowV1SchemaEntry>;
+    inputs: Record<string, FlowV1SchemaEntry>;
+    secrets: Record<string, FlowV1SchemaEntry>;
+  };
 };
 
 export type WorkflowBlueprintSearchResult = WorkflowBlueprintSummary & {
   score: number;
-  script?: string;
+  bundle?: FlowV1Bundle;
 };

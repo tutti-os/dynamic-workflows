@@ -1,30 +1,15 @@
-import fs from "node:fs";
 import { NextResponse } from "next/server";
 import { listAgentTargets } from "@/lib/agents/runtime";
 import type { AgentTargetOption } from "@/lib/agents/types";
-import { isAppError } from "@/lib/api/app-error";
 import {
-  createWorkflowFromScript,
   getWorkflowDetail,
   listWorkflows,
 } from "@/lib/db/workflows/workflow-repository";
 import {
-  getWorkflowVersion,
-} from "@/lib/db/workflows/versions";
-import {
-  getWorkflowRun,
-} from "@/lib/db/workflows/runs";
-import {
   HumanTaskConflictError,
   HumanTaskValidationError,
   getWorkflowHumanTask,
-  listWorkflowHumanTasks,
-  resolveWorkflowHumanTask,
 } from "@/lib/db/workflows/human-tasks";
-import type {
-  WorkflowRunRecord,
-} from "@/lib/db/workflows/types";
-import { resolveWorkflowCwd } from "@/lib/workflow/cwd";
 import { createPendingWorkflowGeneration } from "@/lib/db/workflows/generations";
 import {
   ensureWorkflowGenerationStarted,
@@ -45,44 +30,47 @@ import {
 } from "@/lib/workflow/blueprint-contract";
 import {
   AuthoringSubmitError,
-  submitAuthoringScript,
-  validateAuthoringScript,
 } from "@/lib/workflow/authoring/submit";
 import {
   refreshAuthoringSemanticReview,
 } from "@/lib/workflow/authoring/semantic-review";
 import {
-  assertWorkflowScriptValid,
-  parseWorkflowScript,
-  WorkflowScriptSyntaxError,
-} from "@/lib/workflow/parser";
+  submitAuthoringFlowBundle,
+  validateAuthoringFlowBundleWithReview,
+} from "@/lib/workflow/authoring/flow-bundle";
 import {
-  readRunResult,
-} from "@/lib/workflow/run-state";
-import { createWorkflowExecutionPlan } from "@/lib/workflow/execution-plan";
-import { stringifyWorkflowValue } from "@/lib/workflow/templates";
+  FlowV1ServiceError,
+  cancelFlowV1Cycle,
+  configureFlowV1,
+  createFlowV1,
+  dispatchFlowV1,
+  setFlowV1Lifecycle,
+  respondToFlowV1HumanTask,
+} from "@/lib/flow-v1/flow-service";
 import {
-  normalizeWorkflowInputsForSchema,
-  readWorkflowInputsObject,
-} from "@/lib/workflow/input-schema";
-import { compactWorkflowRunInput } from "@/lib/workflow/run-input";
-import type { ParsedWorkflow, WorkflowInputValue } from "@/lib/workflow/types";
-import { summarizeWorkflow } from "@/lib/workflow/executor";
+  getFlowV1BundleForVersion,
+} from "@/lib/db/workflows/flow-bundles";
+import {
+  getFlowV1Cycle,
+  getFlowV1CycleCheckpoint,
+  getFlowV1Run,
+} from "@/lib/db/workflows/flow-runtime";
+import {
+  listFlowV1Effects,
+  listFlowV1NodeAttempts,
+} from "@/lib/db/workflows/flow-attempts";
+import { listFlowV1HumanTasks } from "@/lib/db/workflows/human-tasks";
+import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
+import {
+  readFlowV1BundleDirectory,
+} from "@/lib/flow-v1/bundle";
+import { parseFlowV1Bundle } from "@/lib/flow-v1/parser";
+import type { FlowV1JsonObject } from "@/lib/flow-v1/types";
+import type { FlowV1SecretBinding } from "@/lib/flow-v1/runtime-config";
 import {
   hasWorkflowDiagnosticErrors,
   summarizeWorkflowDiagnostics,
 } from "@/lib/workflow/validation";
-import {
-  markWorkflowRunInterruptedIfStale,
-  resumeWorkflowRunAfterHumanTask,
-  resumeWorkflowRunJob,
-  startWorkflowRunJob,
-} from "@/lib/workflow/run-jobs";
-import {
-  RunNoteError,
-  listWorkflowRunNotes,
-  recordRunNote,
-} from "@/lib/workflow/run-notes";
 import type { WorkflowValue } from "@/lib/workflow/types";
 
 type CliOutput =
@@ -132,10 +120,13 @@ export const DYNAMIC_WORKFLOWS_CLI_COMMAND_PATHS = [
   "create",
   "import",
   "run",
+  "configure",
+  "activate",
+  "pause",
+  "cancel-cycle",
   "runs/get",
   "runs/wait",
   "runs/respond",
-  "runs/note",
   "blueprints/list",
   "blueprints/search",
   "blueprints/get",
@@ -167,21 +158,27 @@ export async function handleDynamicWorkflowsCliRequest(
       case "show":
         return cliJson(showCommand(input));
       case "validate":
-        return cliJson(validateCommand(input));
+        return envelope(() => validateCommand(input));
       case "create":
         return cliJson(await createCommand(input));
       case "import":
         return envelope(() => importCommand(input));
       case "run":
         return envelope(() => runCommand(input));
+      case "configure":
+        return envelope(() => configureCommand(input));
+      case "activate":
+        return envelope(() => lifecycleCommand(input, "active"));
+      case "pause":
+        return envelope(() => lifecycleCommand(input, "paused"));
+      case "cancel-cycle":
+        return envelope(() => cancelCycleCommand(input));
       case "runs/get":
         return envelope(() => runsGetCommand(input));
       case "runs/wait":
         return waitEnvelope(() => runsWaitCommand(input));
       case "runs/respond":
         return envelope(() => runsRespondCommand(input));
-      case "runs/note":
-        return envelope(() => runsNoteCommand(input));
       case "resume":
         return cliJson(await resumeCommand(input));
       case "blueprints/list":
@@ -216,7 +213,7 @@ export async function handleDynamicWorkflowsCliRequest(
  * Run a command whose EXPECTED domain errors must survive the daemon's CLI
  * proxy. The proxy flattens any non-2xx handler response into a generic
  * `workspace_operation_failed`, destroying domain codes (run_cwd_conflict,
- * run_note_no_live_session, human_task_conflict, workflow_script_invalid, ...).
+ * human_task_conflict, flow_bundle_invalid, ...).
  * So expected domain errors (a CliHttpError or WorkflowScriptSyntaxError with a
  * client-side 4xx status) are returned as HTTP 200 carrying a structured error
  * envelope `{ ok: false, error: { code, status, message, details? } }`, and
@@ -271,14 +268,6 @@ function readDomainError(error: unknown):
       ...(error.details === undefined ? {} : { details: error.details }),
     };
   }
-  if (error instanceof WorkflowScriptSyntaxError) {
-    return {
-      code: "workflow_script_invalid",
-      status: 400,
-      message: error.message,
-      details: { diagnostics: error.diagnostics },
-    };
-  }
   return undefined;
 }
 
@@ -286,7 +275,7 @@ async function statusCommand(request?: Request) {
   const workflows = listWorkflows();
   const agents = await readAgentTargetsForStatus();
   const latestRuns = workflows.flatMap((item) =>
-    item.latestRun ? [item.latestRun] : [],
+    item.flowV1Runtime?.latestRun ? [item.flowV1Runtime.latestRun] : [],
   );
   const baseUrl = readBaseUrl(request);
 
@@ -332,15 +321,27 @@ function listCommand(input: CliInput, context: CliContext) {
   const limit = clampInteger(readOptionalInteger(input, ["limit"]) ?? 50, 1, 200);
   const rows = listWorkflows()
     .slice(0, limit)
-    .map((item) => ({
-      id: item.workflow.id,
-      name: item.workflow.name,
-      description: item.workflow.description,
-      version: item.currentVersion?.version ?? null,
-      runCount: item.runCount,
-      latestRunStatus: item.latestRun?.status ?? null,
-      updatedAt: item.workflow.updatedAt,
-    }));
+    .map((item) => {
+      const flowV1 =
+        item.currentVersion &&
+        getFlowV1BundleForVersion(item.currentVersion.id)
+          ? getFlowV1DetailProjection(item.workflow.id)?.runtime
+          : null;
+      return {
+        id: item.workflow.id,
+        name: item.workflow.name,
+        description: item.workflow.description,
+        version: item.currentVersion?.version ?? null,
+        lifecycle: flowV1?.lifecycle ?? null,
+        cycleStatus: flowV1?.activeCycle?.status ?? null,
+        cycleCount: flowV1?.cycleCount ?? null,
+        runCount: flowV1?.runCount ?? 0,
+        latestRunStatus: flowV1?.latestRun?.status ?? null,
+        nextFireAt: flowV1?.schedule?.nextFireAt ?? null,
+        attention: (flowV1?.attentionCycleCount ?? 0) > 0,
+        updatedAt: item.workflow.updatedAt,
+      };
+    });
 
   if (context.outputMode === "table") {
     return NextResponse.json({
@@ -379,15 +380,35 @@ function showCommand(input: CliInput) {
     );
   }
 
-  const parsed = assertWorkflowScriptValid(detail.currentVersion.script);
+  const bundle = getFlowV1BundleForVersion(detail.currentVersion.id);
+  if (!bundle) {
+    throw new CliHttpError(
+      "flow_bundle_not_found",
+      "Flow v1 Bundle not found.",
+      404,
+    );
+  }
+  const parsed = parseFlowV1Bundle(bundle);
   return {
     workflow: detail.workflow,
     currentVersion: {
       id: detail.currentVersion.id,
       version: detail.currentVersion.version,
-      meta: detail.currentVersion.meta,
+      meta: parsed.meta,
+      bundleHash: bundle.hash,
       createdAt: detail.currentVersion.createdAt,
-      ...(includeScript ? { script: detail.currentVersion.script } : {}),
+      ...(includeScript
+        ? {
+            bundle: {
+              schemaVersion: bundle.schemaVersion,
+              hash: bundle.hash,
+              files: bundle.files.map(({ path, content }) => ({
+                path,
+                content,
+              })),
+            },
+          }
+        : {}),
     },
     versions: detail.versions.map((version) => ({
       id: version.id,
@@ -395,22 +416,29 @@ function showCommand(input: CliInput) {
       meta: version.meta,
       createdAt: version.createdAt,
     })),
-    runs: detail.runs,
-    parsed: parsedSummary(parsed),
+    flow: getFlowV1DetailProjection(workflowId),
+    diagnostics: parsed.diagnostics,
   };
 }
 
 function validateCommand(input: CliInput) {
-  const script = readRequiredString(input, ["script"]);
-  const parsed = parseWorkflowScript(script);
-  const diagnostics = parsed.diagnostics;
-
+  const directory = readRequiredString(input, [
+    "directory",
+    "bundle-dir",
+    "bundleDir",
+  ]);
+  const bundle = readFlowV1BundleDirectory(directory);
+  const parsed = parseFlowV1Bundle(bundle);
   return {
-    valid: !hasWorkflowDiagnosticErrors(diagnostics),
-    ...parsedSummary(parsed),
-    diagnosticSummary: summarizeWorkflowDiagnostics(diagnostics),
-    diagnostics,
-    summary: summarizeWorkflow(parsed),
+    valid: !hasWorkflowDiagnosticErrors(parsed.diagnostics),
+    schemaVersion: bundle.schemaVersion,
+    bundleHash: bundle.hash,
+    files: bundle.files.map((file) => file.path),
+    meta: parsed.meta,
+    nodes: parsed.nodes,
+    edges: parsed.edges,
+    diagnosticSummary: summarizeWorkflowDiagnostics(parsed.diagnostics),
+    diagnostics: parsed.diagnostics,
   };
 }
 
@@ -444,13 +472,9 @@ async function createCommand(input: CliInput) {
     workflow: detail.workflow,
     currentVersion: detail.currentVersion,
     generation,
-    ...(detail.currentVersion
-      ? {
-          parsed: parsedSummary(
-            assertWorkflowScriptValid(detail.currentVersion.script),
-          ),
-        }
-      : {}),
+    flow: detail.currentVersion
+      ? getFlowV1DetailProjection(detail.workflow.id)
+      : null,
   };
 }
 
@@ -507,9 +531,14 @@ function blueprintsGetCommand(input: CliInput) {
     );
   }
 
-  const { script, ...summary } = blueprint;
+  const { bundle, ...summary } = blueprint;
   return {
-    blueprint: includeScript ? { ...summary, script } : summary,
+    blueprint: includeScript
+      ? {
+          ...summary,
+          bundle,
+        }
+      : summary,
   };
 }
 
@@ -548,28 +577,32 @@ function instantiateCommand(input: CliInput) {
  * DSL yourself, `validate`, then import).
  */
 function importCommand(input: CliInput) {
-  const script = readRequiredString(input, ["script"]);
-  let detail;
-  try {
-    detail = createWorkflowFromScript(script);
-  } catch (error) {
-    if (error instanceof WorkflowScriptSyntaxError) {
-      throw new CliHttpError("workflow_script_invalid", error.message, 400, {
-        diagnostics: error.diagnostics,
-      });
-    }
-    throw error;
-  }
+  const directory = readRequiredString(input, [
+    "directory",
+    "bundle-dir",
+    "bundleDir",
+  ]);
+  const created = createFlowV1({
+    bundle: readFlowV1BundleDirectory(directory),
+    params: readFlowV1JsonObject(input, ["params", "params-json", "paramsJson"]),
+    projectCwd: readOptionalString(input, ["cwd", "project-cwd", "projectCwd"]),
+    secretBindings: readSecretBindings(input),
+    publish: readOptionalBoolean(input, ["publish"]) ?? true,
+    activate: readOptionalBoolean(input, ["activate"]) ?? false,
+  });
   return {
-    workflow: detail.workflow,
-    currentVersion: detail.currentVersion,
+    flow: created,
+    runtime: getFlowV1DetailProjection(created.flowId)?.runtime ?? null,
   };
 }
 
 async function authoringSubmitCommand(input: CliInput) {
   const jobId = readRequiredString(input, ["job-id", "jobId"]);
-  const file = readOptionalString(input, ["file"]);
-  const script = readOptionalString(input, ["script"]);
+  const directory = readRequiredString(input, [
+    "directory",
+    "bundle-dir",
+    "bundleDir",
+  ]);
   const skipSemanticReview =
     readOptionalBoolean(input, [
       "skip-semantic-review",
@@ -578,10 +611,9 @@ async function authoringSubmitCommand(input: CliInput) {
   const reason = readOptionalString(input, ["reason"]);
 
   try {
-    return await submitAuthoringScript({
+    return await submitAuthoringFlowBundle({
       jobId,
-      file,
-      script,
+      directory,
       skipSemanticReview,
       reason,
     });
@@ -595,7 +627,11 @@ async function authoringSubmitCommand(input: CliInput) {
 
 async function authoringValidateCommand(input: CliInput) {
   const jobId = readRequiredString(input, ["job-id", "jobId"]);
-  const file = readRequiredString(input, ["file"]);
+  const directory = readRequiredString(input, [
+    "directory",
+    "bundle-dir",
+    "bundleDir",
+  ]);
   const reviewMode = readOptionalString(input, ["review-mode", "reviewMode"]);
   const reviewerAgent = readOptionalString(input, [
     "reviewer-agent",
@@ -614,13 +650,23 @@ async function authoringValidateCommand(input: CliInput) {
   }
 
   try {
-    return await validateAuthoringScript({
+    const validation = await validateAuthoringFlowBundleWithReview({
       jobId,
-      file,
+      directory,
       reviewMode: reviewMode ?? "none",
       reviewerAgent,
       reviewerModel,
     });
+    return {
+      ...validation,
+      bundle: validation.bundle
+        ? {
+            schemaVersion: validation.bundle.schemaVersion,
+            hash: validation.bundle.hash,
+            files: validation.bundle.files.map((entry) => entry.path),
+          }
+        : null,
+    };
   } catch (error) {
     if (error instanceof AuthoringSubmitError) {
       throw new CliHttpError(error.code, error.message, error.status);
@@ -665,34 +711,148 @@ async function runCommand(input: CliInput) {
     "permissionMode",
   ]);
   const cwd = readOptionalString(input, ["cwd"]);
-  const versionId = readOptionalString(input, ["version-id", "versionId"]);
-  const force = readOptionalBoolean(input, ["force"]) ?? false;
-  const inputs = readWorkflowInputs(input);
-  const result = await runWorkflowForCli({
-    workflowId,
-    versionId,
-    agent,
-    model,
-    permissionMode,
-    cwd,
-    force,
-    inputs,
-  });
+  const detail = getWorkflowDetail(workflowId);
+  if (
+    !detail?.currentVersion ||
+    !getFlowV1BundleForVersion(detail.currentVersion.id)
+  ) {
+    throw new CliHttpError(
+      "flow_bundle_not_found",
+      "Flow v1 Bundle not found.",
+      404,
+    );
+  }
+  try {
+    const result = await dispatchFlowV1({
+      flowId: workflowId,
+      invocationInput: readFlowV1JsonObject(input, [
+        "inputs",
+        "inputs-json",
+        "inputsJson",
+      ]),
+      idempotencyKey: readOptionalString(input, [
+        "idempotency-key",
+        "idempotencyKey",
+      ]),
+      projectCwd: cwd,
+      defaultAgent: agent,
+      defaultModel: model,
+      defaultPermissionMode: permissionMode,
+    });
+    return {
+      action: result.action,
+      cycle: result.tick.cycle,
+      run: result.tick.run,
+    };
+  } catch (error) {
+    if (error instanceof FlowV1ServiceError) {
+      throw new CliHttpError(error.code, error.message, 409);
+    }
+    throw error;
+  }
+}
 
+function lifecycleCommand(
+  input: CliInput,
+  lifecycle: "active" | "paused",
+) {
+  const flowId = readRequiredString(input, ["workflow-id", "workflowId"]);
+  try {
+    setFlowV1Lifecycle({ flowId, lifecycle });
+  } catch (error) {
+    if (error instanceof FlowV1ServiceError) {
+      throw new CliHttpError(error.code, error.message, 404);
+    }
+    throw error;
+  }
   return {
-    run: result.run,
-    result: readRunResult(result.run.result),
+    runtime: getFlowV1DetailProjection(flowId)?.runtime ?? null,
   };
+}
+
+function cancelCycleCommand(input: CliInput) {
+  const flowId = readRequiredString(input, ["workflow-id", "workflowId"]);
+  const runId = readOptionalString(input, ["run-id", "runId"]);
+  const cycleId = readOptionalString(input, ["cycle-id", "cycleId"]);
+  let resolvedCycleId = cycleId;
+  if (runId) {
+    const run = getFlowV1Run(runId);
+    if (!run || run.flowId !== flowId) {
+      throw new CliHttpError("run_not_found", "Tick not found.", 404);
+    }
+    if (cycleId && cycleId !== run.cycleId) {
+      throw new CliHttpError(
+        "invalid_input",
+        "The supplied Tick and Cycle do not belong together.",
+        400,
+      );
+    }
+    resolvedCycleId = run.cycleId;
+  }
+  try {
+    return {
+      cancellation: cancelFlowV1Cycle({
+        flowId,
+        ...(resolvedCycleId ? { cycleId: resolvedCycleId } : {}),
+      }),
+    };
+  } catch (error) {
+    if (error instanceof FlowV1ServiceError) {
+      throw new CliHttpError(error.code, error.message, 409);
+    }
+    throw error;
+  }
+}
+
+function configureCommand(input: CliInput) {
+  const flowId = readRequiredString(input, ["workflow-id", "workflowId"]);
+  try {
+    return {
+      config: configureFlowV1({
+        flowId,
+        params: readFlowV1JsonObject(input, [
+          "params",
+          "params-json",
+          "paramsJson",
+        ]),
+        expectedParamsRevision: readOptionalInteger(input, [
+          "expected-params-revision",
+          "expectedParamsRevision",
+        ]),
+        projectCwd: readOptionalString(input, [
+          "cwd",
+          "project-cwd",
+          "projectCwd",
+        ]),
+        secretBindings: readSecretBindings(input),
+      }),
+    };
+  } catch (error) {
+    if (
+      error instanceof FlowV1ServiceError ||
+      (error instanceof Error && "code" in error)
+    ) {
+      const code =
+        "code" in error && typeof error.code === "string"
+          ? error.code
+          : "flow_configuration_invalid";
+      throw new CliHttpError(code, error.message, 400);
+    }
+    throw error;
+  }
 }
 
 async function resumeCommand(input: CliInput) {
   const workflowId = readRequiredString(input, ["workflow-id", "workflowId"]);
   const runId = readRequiredString(input, ["run-id", "runId"]);
-  const run = await resumeWorkflowRunJob({ workflowId, runId });
-
+  const flowRun = getFlowV1Run(runId);
+  if (!flowRun || flowRun.flowId !== workflowId) {
+    throw new CliHttpError("run_not_found", "Tick not found.", 404);
+  }
+  const result = await dispatchFlowV1({ flowId: workflowId });
   return {
-    run,
-    result: readRunResult(run.result),
+    cycle: result.tick.cycle,
+    run: result.tick.run,
   };
 }
 
@@ -703,29 +863,35 @@ const RUNS_WAIT_CONTINUATION_RETRY_MS = 60_000;
 
 async function runsGetCommand(input: CliInput) {
   const runId = readRequiredString(input, ["run-id", "runId"]);
-  const existing = getWorkflowRun(runId);
-  if (!existing) {
-    throw new CliHttpError("run_not_found", "Run not found.", 404);
+  const flowRun = getFlowV1Run(runId);
+  if (!flowRun) {
+    throw new CliHttpError("run_not_found", "Tick not found.", 404);
   }
-  const run = await markWorkflowRunInterruptedIfStale(existing);
-  return buildRunDetail(run);
+  return buildFlowV1RunDetail(flowRun);
 }
 
 async function runsWaitCommand(input: CliInput) {
   const runId = readRequiredString(input, ["run-id", "runId"]);
-  const existing = getWorkflowRun(runId);
-  if (!existing) {
-    throw new CliHttpError("run_not_found", "Run not found.", 404);
+  const flowRun = getFlowV1Run(runId);
+  if (!flowRun) {
+    throw new CliHttpError("run_not_found", "Tick not found.", 404);
   }
-  // Reconcile first so a crashed "running" zombie resolves to `interrupted`
-  // (a real stop point) instead of producing another pending continuation.
-  const run = await markWorkflowRunInterruptedIfStale(existing);
-  const reason = runStopReason(run);
-  if (reason) {
-    return { value: { reason, ...buildRunDetail(run) } };
+  if (
+    flowRun.status !== "pending" &&
+    flowRun.status !== "running"
+  ) {
+    return {
+      value: {
+        reason: flowRun.stopReason ?? flowRun.status,
+        ...buildFlowV1RunDetail(flowRun),
+      },
+    };
   }
   return {
-    value: buildRunProgressFingerprint(run),
+    value: {
+      run: flowRun,
+      cycle: getFlowV1Cycle(flowRun.cycleId),
+    },
     continuation: {
       state: "pending" as const,
       retryAfterMs: RUNS_WAIT_CONTINUATION_RETRY_MS,
@@ -755,9 +921,9 @@ async function runsRespondCommand(input: CliInput) {
   const values = readHumanTaskValues(input);
   const providedRevision = readOptionalInteger(input, ["revision"]);
 
-  const run = getWorkflowRun(runId);
+  const run = getFlowV1Run(runId);
   if (!run) {
-    throw new CliHttpError("run_not_found", "Run not found.", 404);
+    throw new CliHttpError("run_not_found", "Tick not found.", 404);
   }
   const task = getWorkflowHumanTask(taskId);
   if (!task || task.runId !== runId) {
@@ -765,9 +931,9 @@ async function runsRespondCommand(input: CliInput) {
   }
   const revision = providedRevision ?? task.revision;
 
-  let resolved;
   try {
-    resolved = resolveWorkflowHumanTask({
+    const result = await respondToFlowV1HumanTask({
+      flowId: run.flowId,
       runId,
       taskId,
       action,
@@ -775,7 +941,19 @@ async function runsRespondCommand(input: CliInput) {
       revision,
       resolvedBy: "agent-cli",
     });
+    return {
+      task: result.task,
+      run: result.tick.run,
+      execution: result.execution,
+    };
   } catch (error) {
+    if (error instanceof FlowV1ServiceError) {
+      throw new CliHttpError(
+        error.code,
+        error.message,
+        error.code === "flow_human_task_not_found" ? 404 : 409,
+      );
+    }
     if (error instanceof HumanTaskConflictError) {
       throw new CliHttpError("human_task_conflict", error.message, 409);
     }
@@ -784,63 +962,6 @@ async function runsRespondCommand(input: CliInput) {
         throw new CliHttpError("human_task_not_found", error.message, 404);
       }
       throw new CliHttpError("human_task_invalid", error.message, 400);
-    }
-    throw error;
-  }
-
-  const resumedRun = await resumeWorkflowRunAfterHumanTask({
-    workflowId: run.workflowId,
-    runId,
-  });
-
-  return {
-    task: resolved,
-    ...buildRunDetail(resumedRun),
-  };
-}
-
-/**
- * Record an operator note steering a run. `next-step` (default) injects the
- * note into the next agent execution's rendered prompt; `current` delegates it
- * to the live agent session. Either way the note is recorded as a run event
- * first, so run review and replay stay truthful. Returns the recorded note and,
- * for current delivery, the live-delivery result.
- */
-async function runsNoteCommand(input: CliInput) {
-  const runId = readRequiredString(input, ["run-id", "runId"]);
-  const message = readRequiredString(input, ["message"]);
-  const nodeId = readOptionalString(input, ["node-id", "nodeId"]);
-  const targetRaw = readOptionalString(input, ["target"]) ?? "next-step";
-  if (targetRaw !== "current" && targetRaw !== "next-step") {
-    throw new CliHttpError(
-      "invalid_input",
-      'target must be "current" or "next-step".',
-      400,
-    );
-  }
-
-  if (!getWorkflowRun(runId)) {
-    throw new CliHttpError("run_not_found", "Run not found.", 404);
-  }
-
-  try {
-    const result = await recordRunNote({
-      runId,
-      message,
-      target: targetRaw,
-      nodeId,
-    });
-    return {
-      note: result.note,
-      ...(result.delivery ? { delivery: result.delivery } : {}),
-    };
-  } catch (error) {
-    if (error instanceof RunNoteError) {
-      throw new CliHttpError(
-        error.code === "RUN_NOT_FOUND" ? "run_not_found" : error.code.toLowerCase(),
-        error.message,
-        error.status,
-      );
     }
     throw error;
   }
@@ -872,308 +993,86 @@ function readHumanTaskValues(input: CliInput): Record<string, WorkflowValue> {
   return parsed as Record<string, WorkflowValue>;
 }
 
-type RunStopReason =
-  | "completed"
-  | "failed"
-  | "canceled"
-  | "interrupted"
-  | "waiting_human";
-
-/**
- * A run reaches a stop point when it is terminal (completed/failed/canceled/
- * interrupted) or has persisted the `waiting_for_human` status — the executor
- * transitions running -> waiting_for_human (markWorkflowRunWaitingOwned) only
- * once its pending human tasks are recorded, so that status is the reliable
- * "blocked on human input, no active job" signal. A still-`running` run has not
- * reached a stop point.
- */
-function runStopReason(run: WorkflowRunRecord): RunStopReason | undefined {
-  switch (run.status) {
-    case "completed":
-    case "failed":
-    case "canceled":
-    case "interrupted":
-      return run.status;
-    case "waiting_for_human":
-      return "waiting_human";
-    default:
-      return undefined;
-  }
-}
-
-/**
- * The structured, agent-facing view of a run returned by `runs get` and nested
- * into `runs wait`: the persisted run record, its structured result (outputs,
- * node statuses, rendered node inputs, error), the pending human tasks with
- * their rendered context so a caller can relay them, and a convenience `report`
- * built from the run's terminal node outputs.
- */
-function buildRunDetail(run: WorkflowRunRecord) {
-  const result = readRunResult(run.result);
-  return {
-    run,
-    result,
-    humanTasks: listWorkflowHumanTasks(run.id, "pending"),
-    notes: listWorkflowRunNotes(run.id),
-    report: buildRunReport(run, result.outputs),
-  };
-}
-
-/**
- * Compact payload for an internal pending continuation. The terminal CLI
- * suppresses it during a normal durable wait, but may expose it as lastResult
- * when its optional total wait deadline expires.
- */
-function buildRunProgressFingerprint(run: WorkflowRunRecord) {
-  let logBytes = 0;
-  if (run.logPath) {
-    try {
-      logBytes = fs.statSync(run.logPath).size;
-    } catch {
-      logBytes = 0;
-    }
-  }
-  return {
-    run: {
-      id: run.id,
-      workflowId: run.workflowId,
-      status: run.status,
-      startedAt: run.startedAt,
-      finishedAt: run.finishedAt,
-    },
-    progress: {
-      logBytes,
-      pendingHumanTasks: listWorkflowHumanTasks(run.id, "pending").length,
-    },
-  };
-}
-
-/**
- * The delivery report an agent caller reads without knowing node ids: the
- * outputs of the run's terminal nodes (executable nodes that no other node
- * consumes). `text` concatenates their stringified outputs for convenience.
- */
-function buildRunReport(
-  run: WorkflowRunRecord,
-  outputs: Record<string, WorkflowValue>,
+function buildFlowV1RunDetail(
+  run: NonNullable<ReturnType<typeof getFlowV1Run>>,
 ) {
-  const terminalNodeIds = terminalNodeIdsForRun(run);
-  const reportOutputs: Record<string, WorkflowValue> = {};
-  const texts: string[] = [];
-  for (const nodeId of terminalNodeIds) {
-    if (Object.prototype.hasOwnProperty.call(outputs, nodeId)) {
-      reportOutputs[nodeId] = outputs[nodeId];
-      texts.push(stringifyWorkflowValue(outputs[nodeId]));
-    }
-  }
-  return {
-    nodeIds: terminalNodeIds,
-    outputs: reportOutputs,
-    text: texts.join("\n\n"),
-  };
-}
-
-function terminalNodeIdsForRun(run: WorkflowRunRecord): string[] {
-  const version = getWorkflowVersion(run.workflowVersionId);
-  if (!version) {
-    return [];
-  }
-  let executableNodes;
-  try {
-    executableNodes = createWorkflowExecutionPlan(
-      assertWorkflowScriptValid(version.script),
-    ).executableNodes;
-  } catch {
-    return [];
-  }
-  const consumed = new Set<string>();
-  for (const node of executableNodes) {
-    for (const nodeInput of node.inputs) {
-      if (nodeInput.sourceNodeId) {
-        consumed.add(nodeInput.sourceNodeId);
-      }
-    }
-  }
-  return executableNodes
-    .filter((node) => !consumed.has(node.id))
-    .map((node) => node.id);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function runWorkflowForCli(input: {
-  workflowId: string;
-  versionId?: string;
-  agent: string;
-  model?: string;
-  permissionMode?: string;
-  cwd?: string;
-  force: boolean;
-  inputs: Record<string, WorkflowInputValue>;
-}): Promise<{
-  run: WorkflowRunRecord;
-}> {
-  const detail = getWorkflowDetail(input.workflowId);
-  if (!detail) {
-    throw new CliHttpError("workflow_not_found", "Workflow not found.", 404);
-  }
-  if (!detail.currentVersion) {
-    throw new CliHttpError(
-      "workflow_version_not_found",
-      "Workflow version not found.",
-      404,
-    );
-  }
-
-  const version = input.versionId
-    ? getWorkflowVersion(input.versionId)
-    : detail.currentVersion;
-  if (!version || version.workflowId !== input.workflowId) {
-    throw new CliHttpError(
-      "workflow_version_not_found",
-      "Workflow version not found.",
-      404,
-    );
-  }
-
-  const parsed = assertWorkflowScriptValid(version.script);
-  const inputs = normalizeCliWorkflowInputs(parsed, input.inputs);
-  assertRequiredWorkflowCwd(parsed, input.cwd);
-  const cwd = resolveWorkflowCwd(input.cwd);
-  let run: WorkflowRunRecord;
-  try {
-    run = startWorkflowRunJob({
-      workflowId: input.workflowId,
-      version,
-      executorKind: input.agent === "mock" ? "mock" : "local-agent",
-      agent: input.agent,
-      model: input.model,
-      permissionMode: input.permissionMode,
-      cwd,
-      force: input.force,
-      inputs,
-      input: compactWorkflowRunInput({
-        inputs,
-        agent: input.agent,
-        model: input.model,
-        permissionMode: input.permissionMode,
-        cwd,
-      }),
-    });
-  } catch (error) {
-    if (isAppError(error) && error.code === "WORKFLOW_RUN_CWD_CONFLICT") {
-      throw new CliHttpError("run_cwd_conflict", error.message, 409, error.details);
-    }
-    throw error;
-  }
-
   return {
     run,
+    cycle: getFlowV1Cycle(run.cycleId),
+    checkpoint: getFlowV1CycleCheckpoint(run.cycleId),
+    attempts: listFlowV1NodeAttempts(run.cycleId),
+    effects: listFlowV1Effects(run.cycleId),
+    humanTasks: listFlowV1HumanTasks(run.cycleId),
   };
 }
 
-function parsedSummary(parsed: ParsedWorkflow) {
-  return {
-    meta: parsed.meta,
-    inputSchema: parsed.inputSchema,
-    requiredInputNames: parsed.requiredInputNames,
-    optionalInputNames: parsed.optionalInputNames,
-    nodeCount: parsed.nodes.length,
-    phaseCount: parsed.phases.length,
-    nodes: parsed.nodes.map((node) => ({
-      id: node.id,
-      kind: node.kind,
-      label: node.label,
-      phase: node.phase,
-      agent: node.agent,
-      model: node.model,
-      cwd: node.cwd,
-      session: node.session,
-      human: node.human,
-      inputs: node.inputs,
-      loop: node.loop
-        ? {
-            maxIterations: node.loop.maxIterations,
-            onMaxIterations: node.loop.onMaxIterations,
-            firstIteration: node.loop.firstIteration,
-            cwd: node.cwd,
-            session: node.loop.session,
-            until: node.loop.until,
-            steps: node.loop.steps.map((step) => ({
-              id: step.id,
-              kind: step.kind,
-              label: step.label,
-              agent: step.agent,
-              model: step.model,
-              cwd: step.cwd,
-              session: step.session,
-              hasAppendPrompt: Boolean(step.appendPrompt),
-              human: step.kind === "human" ? step.human : undefined,
-            })),
-          }
-        : undefined,
-    })),
-  };
-}
-
-function readWorkflowInputs(input: CliInput): Record<string, WorkflowInputValue> {
-  const rawInputs =
-    readOptionalString(input, ["inputs", "inputs-json", "inputsJson"]) ??
-    undefined;
-  if (!rawInputs) {
-    return {};
+function readFlowV1JsonObject(
+  input: CliInput,
+  keys: string[],
+): FlowV1JsonObject | undefined {
+  let raw: unknown;
+  for (const key of keys) {
+    if (input[key] !== undefined) {
+      raw = input[key];
+      break;
+    }
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawInputs);
-  } catch (error) {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch (error) {
+      throw new CliHttpError(
+        "invalid_input",
+        `${keys[0]} must be a JSON object: ${
+          error instanceof Error ? error.message : "invalid JSON"
+        }`,
+        400,
+      );
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new CliHttpError(
       "invalid_input",
-      `inputs must be a JSON object: ${
-        error instanceof Error ? error.message : "invalid JSON"
-      }`,
+      `${keys[0]} must be a JSON object.`,
       400,
     );
   }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new CliHttpError("invalid_input", "inputs must be a JSON object.", 400);
-  }
-
-  return readWorkflowInputsObject(parsed);
+  return raw as FlowV1JsonObject;
 }
 
-function normalizeCliWorkflowInputs(
-  parsed: ParsedWorkflow,
-  inputs: Record<string, WorkflowInputValue>,
-): Record<string, WorkflowInputValue> {
-  try {
-    return normalizeWorkflowInputsForSchema(parsed.inputSchema, inputs);
-  } catch (error) {
-    throw new CliHttpError(
-      "invalid_workflow_inputs",
-      error instanceof Error ? error.message : "Invalid workflow inputs.",
-      400,
-    );
+function readSecretBindings(
+  input: CliInput,
+): Record<string, FlowV1SecretBinding> | undefined {
+  const raw = readFlowV1JsonObject(input, [
+    "secret-bindings",
+    "secretBindings",
+    "secret-bindings-json",
+    "secretBindingsJson",
+  ]);
+  if (!raw) {
+    return undefined;
   }
-}
-
-function assertRequiredWorkflowCwd(
-  parsed: ParsedWorkflow,
-  cwd: string | undefined,
-) {
-  if (parsed.meta.requiresCwd && !cwd?.trim()) {
-    throw new CliHttpError(
-      "missing_workflow_inputs",
-      "Workflow cwd is required.",
-      400,
-    );
+  const bindings: Record<string, FlowV1SecretBinding> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      value.kind !== "environment" ||
+      typeof value.env !== "string"
+    ) {
+      throw new CliHttpError(
+        "invalid_input",
+        `Secret binding ${name} must be {"kind":"environment","env":"ENV_NAME"}.`,
+        400,
+      );
+    }
+    bindings[name] = { kind: "environment", env: value.env };
   }
+  return bindings;
 }
 
 /**
@@ -1311,21 +1210,6 @@ function cliErrorResponse(error: unknown) {
         },
       },
       { status: error.status },
-    );
-  }
-
-  if (error instanceof WorkflowScriptSyntaxError) {
-    return NextResponse.json(
-      {
-        error: {
-          code: "workflow_script_invalid",
-          message: error.message,
-          details: {
-            diagnostics: error.diagnostics,
-          },
-        },
-      },
-      { status: 400 },
     );
   }
 

@@ -1506,6 +1506,491 @@ a {
   min-width: 210px;
 }
 
+.flow-runtime-overview {
+  display: grid;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-1);
+  background: color-mix(in srgb, var(--background-fronted) 96%, transparent);
+  padding: 14px 18px;
+}
+
+.flow-runtime-heading,
+.flow-runtime-panel-title,
+.flow-runtime-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.flow-runtime-heading h2,
+.flow-runtime-panel-title h3 {
+  margin: 0;
+  color: var(--foreground);
+}
+
+.flow-runtime-heading h2 {
+  font-size: 16px;
+}
+
+.flow-runtime-heading p,
+.flow-runtime-history p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.flow-runtime-eyebrow {
+  color: var(--status-blue, #3b82f6);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.flow-runtime-tabs {
+  display: flex;
+  gap: 3px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.flow-runtime-tabs button {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 5px 10px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.flow-runtime-tabs button.is-active {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 0 0 1px var(--border-1);
+}
+
+.flow-runtime-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.flow-runtime-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.flow-runtime-actions button,
+.flow-runtime-human-actions button {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.flow-runtime-actions button:disabled,
+.flow-runtime-human-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.flow-runtime-action-primary {
+  background: var(--tutti-purple);
+  color: var(--white-stationary);
+}
+
+.flow-runtime-action-danger {
+  background: color-mix(in srgb, var(--state-danger) 12%, transparent);
+  color: var(--state-danger);
+}
+
+.flow-back-link {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  padding: 7px 11px;
+  color: var(--foreground);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.flow-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.flow-detail-actions button {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  padding: 7px 11px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.flow-detail-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.flow-detail-error {
+  margin: 12px 24px 0;
+  color: var(--state-danger);
+  font-size: 11px;
+}
+
+.flow-runtime-actions > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.flow-runtime-inputs {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 4px;
+}
+
+.flow-runtime-inputs > span,
+.flow-runtime-config-grid label > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-runtime-inputs textarea,
+.flow-runtime-config-grid textarea,
+.flow-runtime-config-grid input {
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 8px;
+  color: var(--foreground);
+  font: 11px var(--font-geist-mono);
+}
+
+.flow-runtime-metric {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.flow-runtime-metric > span,
+.flow-runtime-node-kind {
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.flow-runtime-metric > strong {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.flow-runtime-metric > small {
+  overflow: hidden;
+  color: var(--state-warning);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.flow-runtime-node-track {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.flow-runtime-node {
+  display: grid;
+  min-width: 126px;
+  gap: 2px;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 7px 9px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-runtime-node > strong {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.flow-runtime-node > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-runtime-node-running,
+.flow-runtime-node-queued {
+  border-color: color-mix(in srgb, var(--status-blue, #3b82f6) 55%, var(--border-1));
+}
+
+.flow-runtime-node-waiting {
+  border-color: color-mix(in srgb, var(--state-warning) 55%, var(--border-1));
+}
+
+.flow-runtime-node-completed {
+  border-color: color-mix(in srgb, var(--state-success) 45%, var(--border-1));
+}
+
+.flow-runtime-node-failed,
+.flow-runtime-node-uncertain {
+  border-color: color-mix(in srgb, var(--state-danger) 55%, var(--border-1));
+}
+
+.flow-runtime-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-1);
+  padding-top: 12px;
+}
+
+.flow-runtime-panel-title h3 {
+  font-size: 12px;
+}
+
+.flow-runtime-panel-title > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-runtime-edge-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.flow-runtime-edge-list code {
+  border-radius: 5px;
+  background: var(--background);
+  padding: 4px 7px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-runtime-configuration {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-1);
+  padding-top: 14px;
+}
+
+.flow-runtime-configuration button,
+.flow-runtime-config-footer button {
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background);
+  padding: 6px 10px;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.flow-runtime-config-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) minmax(220px, 1fr);
+  gap: 10px;
+}
+
+.flow-runtime-config-grid label {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+
+.flow-runtime-config-grid label:first-child {
+  grid-row: span 3;
+}
+
+.flow-runtime-config-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.flow-runtime-config-footer > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-runtime-history-grid,
+.flow-runtime-review {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.flow-runtime-history,
+.flow-runtime-memory {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--background);
+  padding: 9px;
+}
+
+.flow-runtime-history-row {
+  border-top: 1px solid var(--border-1);
+  padding: 7px 0;
+}
+
+.flow-runtime-history-row:first-of-type {
+  margin-top: 6px;
+}
+
+.flow-runtime-history-row > div {
+  display: grid;
+  min-width: 0;
+}
+
+.flow-runtime-history-row strong,
+.flow-runtime-history-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.flow-runtime-history-row span,
+.flow-runtime-history-row time {
+  color: var(--text-secondary);
+}
+
+.flow-runtime-history-row time {
+  flex: none;
+  font-size: 9px;
+}
+
+.flow-runtime-history-row.is-selected {
+  background: color-mix(in srgb, var(--status-blue) 8%, transparent);
+}
+
+.flow-runtime-history-row button {
+  border: 0;
+  background: transparent;
+  color: var(--status-blue);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.flow-runtime-memory {
+  grid-column: 1 / -1;
+}
+
+.flow-runtime-human-tasks {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border-1);
+  padding-top: 14px;
+}
+
+.flow-runtime-human-tasks article {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--border-1);
+  border-radius: 10px;
+  background: var(--background);
+  padding: 12px;
+}
+
+.flow-runtime-human-tasks article p {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  font-size: 11px;
+}
+
+.flow-runtime-human-tasks article p span {
+  color: var(--text-secondary);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.flow-runtime-human-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 6px;
+}
+
+.flow-runtime-human-action {
+  display: grid;
+  min-width: 180px;
+  gap: 6px;
+}
+
+.flow-runtime-human-action label {
+  display: grid;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-runtime-human-action input,
+.flow-runtime-human-action select,
+.flow-runtime-human-action textarea {
+  min-width: 180px;
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  background: var(--background-fronted);
+  padding: 7px 8px;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+  resize: vertical;
+}
+
+.flow-runtime-memory article {
+  margin-top: 8px;
+}
+
+.flow-runtime-memory pre {
+  max-height: 160px;
+  overflow: auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--background-fronted) 80%, transparent);
+  padding: 8px;
+  white-space: pre-wrap;
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .flow-runtime-summary {
+    grid-template-columns: repeat(3, minmax(100px, 1fr));
+  }
+
+  .flow-runtime-history-grid,
+  .flow-runtime-review {
+    grid-template-columns: 1fr;
+  }
+}
+
 .workspace {
   display: grid;
   min-height: 0;

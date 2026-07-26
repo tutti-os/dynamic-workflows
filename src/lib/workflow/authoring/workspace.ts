@@ -17,12 +17,10 @@ const MATERIAL_URLS = {
   ),
 } as const;
 
-export const AUTHORING_DRAFT_FILE = "draft.workflow.js";
-export const AUTHORING_CURRENT_SCRIPT_FILE = "current.workflow.js";
+export const AUTHORING_DRAFT_BUNDLE_DIR = "draft.flow";
 
 export type AuthoringWorkspace = {
   dir: string;
-  currentScriptPath?: string;
 };
 
 export function getAuthoringWorkspaceDir(jobId: string): string {
@@ -55,7 +53,6 @@ export function prepareSemanticReviewWorkspace(input: {
 
 export function prepareAuthoringWorkspace(input: {
   jobId: string;
-  currentScript?: string;
 }): AuthoringWorkspace {
   const dir = getAuthoringWorkspaceDir(input.jobId);
   fs.mkdirSync(dir, { recursive: true });
@@ -91,42 +88,45 @@ export function prepareAuthoringWorkspace(input: {
     }
   }
 
-  let currentScriptPath: string | undefined;
-  if (input.currentScript !== undefined) {
-    currentScriptPath = path.join(dir, AUTHORING_CURRENT_SCRIPT_FILE);
-    fs.writeFileSync(currentScriptPath, input.currentScript);
-  }
-
-  return { dir, currentScriptPath };
+  return { dir };
 }
 
-export function resolveAuthoringScriptFile(input: {
+export function resolveAuthoringBundleDirectory(input: {
   jobId: string;
-  file: string;
+  directory?: string;
 }): string {
   const dir = getAuthoringWorkspaceDir(input.jobId);
-  const requested = path.resolve(dir, input.file);
+  const directory = input.directory ?? AUTHORING_DRAFT_BUNDLE_DIR;
+  const requested = path.resolve(dir, directory);
 
   let realDir: string;
   let realRequested: string;
   try {
     realDir = fs.realpathSync(dir);
+    if (fs.lstatSync(requested).isSymbolicLink()) {
+      throw new AuthoringWorkspaceError(
+        `Flow Bundle directory must not be a symlink: ${directory}`,
+      );
+    }
     realRequested = fs.realpathSync(requested);
-  } catch {
+  } catch (error) {
+    if (error instanceof AuthoringWorkspaceError) {
+      throw error;
+    }
     throw new AuthoringWorkspaceError(
-      `Script file not found in authoring workspace: ${input.file}`,
+      `Flow Bundle directory not found in authoring workspace: ${directory}`,
     );
   }
 
   const relative = path.relative(realDir, realRequested);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new AuthoringWorkspaceError(
-      `Script file must stay inside the authoring workspace: ${input.file}`,
+      `Flow Bundle directory must stay inside the authoring workspace: ${directory}`,
     );
   }
-  if (!fs.statSync(realRequested).isFile()) {
+  if (!fs.statSync(realRequested).isDirectory()) {
     throw new AuthoringWorkspaceError(
-      `Script path is not a file: ${input.file}`,
+      `Flow Bundle path is not a directory: ${directory}`,
     );
   }
   return realRequested;

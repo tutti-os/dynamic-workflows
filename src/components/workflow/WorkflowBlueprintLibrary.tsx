@@ -1,15 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import {
-  Background,
-  Controls,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type ReactFlowInstance,
-} from "@xyflow/react";
+import { useEffect, useState } from "react";
 import {
   Badge,
   Button,
@@ -36,24 +28,15 @@ import {
   instantiateWorkflowBlueprint,
   listWorkflowBlueprints,
   loadWorkflowBlueprint,
-  parseWorkflowScript,
   readApiJsonError,
   searchWorkflowBlueprints,
 } from "@/components/workflow/workflowApiService";
-import { useWorkflowFlowLayout } from "@/components/workflow/useWorkflowFlowLayout";
-import { NODE_TYPES } from "@/components/workflow/WorkflowGraphNode";
-import type {
-  FlowNodeData,
-  MainView,
-} from "@/components/workflow/WorkflowWorkbench.types";
 import type {
   WorkflowBlueprintDetail,
   WorkflowBlueprintSummary,
 } from "@/lib/workflow/blueprint-types";
-import type {
-  ParsedWorkflow,
-  WorkflowInputDefinition,
-} from "@/lib/workflow/types";
+
+type BlueprintView = "graph" | "script";
 
 export function WorkflowBlueprintLibrary() {
   const router = useRouter();
@@ -67,12 +50,9 @@ export function WorkflowBlueprintLibrary() {
   const [selectedBlueprint, setSelectedBlueprint] = useState<
     WorkflowBlueprintDetail | undefined
   >();
-  const [selectedParsed, setSelectedParsed] = useState<
-    ParsedWorkflow | undefined
-  >();
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | undefined>();
-  const [detailView, setDetailView] = useState<MainView>("graph");
+  const [detailView, setDetailView] = useState<BlueprintView>("graph");
   const [detailActionError, setDetailActionError] = useState<
     string | undefined
   >();
@@ -113,7 +93,6 @@ export function WorkflowBlueprintLibrary() {
   useEffect(() => {
     if (!selectedBlueprintId) {
       setSelectedBlueprint(undefined);
-      setSelectedParsed(undefined);
       setDetailError(undefined);
       setDetailActionError(undefined);
       setDetailView("graph");
@@ -128,13 +107,10 @@ export function WorkflowBlueprintLibrary() {
       setDetailError(undefined);
       setDetailActionError(undefined);
       setSelectedBlueprint(undefined);
-      setSelectedParsed(undefined);
       try {
         const blueprint = await loadWorkflowBlueprint(blueprintId);
-        const parsed = await parseWorkflowScript(blueprint.script);
         if (mounted) {
           setSelectedBlueprint(blueprint);
-          setSelectedParsed(parsed);
         }
       } catch (caught) {
         if (mounted) {
@@ -229,7 +205,6 @@ export function WorkflowBlueprintLibrary() {
       <BlueprintDetailDialog
         open={Boolean(selectedBlueprintId)}
         blueprint={selectedBlueprint}
-        parsed={selectedParsed}
         loading={detailLoading}
         error={detailError}
         actionError={detailActionError}
@@ -327,13 +302,12 @@ function BlueprintCard(props: {
 function BlueprintDetailDialog(props: {
   open: boolean;
   blueprint?: WorkflowBlueprintDetail;
-  parsed?: ParsedWorkflow;
   loading: boolean;
   error?: string;
   actionError?: string;
-  view: MainView;
+  view: BlueprintView;
   instantiating: boolean;
-  onViewChange: (view: MainView) => void;
+  onViewChange: (view: BlueprintView) => void;
   onOpenChange: (open: boolean) => void;
   onUseBlueprint: (blueprintId: string) => Promise<void>;
 }) {
@@ -390,18 +364,20 @@ function BlueprintDetailDialog(props: {
               </ul>
             </div>
 
-            {props.parsed ? (
-              <BlueprintOverview parsed={props.parsed} />
+            {blueprint.preview ? (
+              <BlueprintFlowOverview blueprint={blueprint} />
             ) : null}
 
             <div className="blueprint-preview-header">
               <div>
                 <h3>
-                  {props.view === "graph" ? "DAG preview" : "Script preview"}
+                  {props.view === "graph"
+                    ? "Flow preview"
+                    : "Bundle source"}
                 </h3>
                 <p>
-                  {props.parsed
-                    ? `${props.parsed.nodes.length} nodes, ${props.parsed.edges.length} edges across ${props.parsed.phases.length} phases`
+                  {blueprint.preview
+                    ? `${blueprint.preview.nodes.length} nodes · ${blueprint.preview.edges.length} edges · ${blueprint.bundle.files.length} files`
                     : "Preview unavailable until parsing completes."}
                 </p>
               </div>
@@ -421,11 +397,18 @@ function BlueprintDetailDialog(props: {
               />
             </div>
 
-            {props.view === "graph" && props.parsed ? (
-              <BlueprintGraphPreview parsed={props.parsed} />
+            {props.view === "graph" && blueprint.preview ? (
+              <BlueprintFlowPreview blueprint={blueprint} />
             ) : (
               <pre className="blueprint-script-preview">
-                <code>{blueprint.script}</code>
+                <code>
+                  {blueprint.bundle.files
+                    .map(
+                      (file) =>
+                        `===== ${file.path} =====\n${file.content}`,
+                    )
+                    .join("\n\n")}
+                </code>
               </pre>
             )}
           </div>
@@ -463,128 +446,63 @@ function BlueprintDetailDialog(props: {
   );
 }
 
-function BlueprintOverview(props: { parsed: ParsedWorkflow }) {
-  const inputEntries = Object.entries(props.parsed.inputSchema);
-  const loopNodes = props.parsed.nodes.filter((node) => node.kind === "loop");
-  const agentCount = props.parsed.nodes.filter(
-    (node) => node.kind === "agent",
-  ).length;
-  const loopStepCount = loopNodes.reduce(
-    (total, node) => total + (node.loop?.steps.length ?? 0),
-    0,
-  );
-
+function BlueprintFlowOverview(props: {
+  blueprint: Extract<
+    WorkflowBlueprintDetail,
+    { schemaVersion: "tutti.flow.v1" }
+  >;
+}) {
+  const preview = props.blueprint.preview!;
   return (
     <div className="blueprint-overview-grid">
-      <div className="blueprint-overview-panel">
-        <h4>Blueprint inputs</h4>
-        {inputEntries.length > 0 ? (
-          <div className="blueprint-overview-list">
-            {inputEntries.map(([name, definition]) => (
-              <div className="blueprint-overview-row" key={name}>
-                <span>
-                  {formatInputLabel(name, definition)}
-                  {definition.required ? (
-                    <Badge variant="warning">required</Badge>
-                  ) : null}
-                </span>
-                <small>{formatInputDetails(definition)}</small>
-              </div>
-            ))}
+      <div>
+        <strong>Params</strong>
+        <span>{Object.keys(preview.params).join(", ") || "none"}</span>
+      </div>
+      <div>
+        <strong>Inputs</strong>
+        <span>{Object.keys(preview.inputs).join(", ") || "none"}</span>
+      </div>
+      <div>
+        <strong>Secrets</strong>
+        <span>{Object.keys(preview.secrets).join(", ") || "none"}</span>
+      </div>
+      <div>
+        <strong>Capabilities</strong>
+        <span>{props.blueprint.capabilities?.join(", ") || "standard"}</span>
+      </div>
+    </div>
+  );
+}
+
+function BlueprintFlowPreview(props: {
+  blueprint: Extract<
+    WorkflowBlueprintDetail,
+    { schemaVersion: "tutti.flow.v1" }
+  >;
+}) {
+  const preview = props.blueprint.preview!;
+  return (
+    <div className="flow-runtime-panel">
+      <div className="flow-runtime-node-track">
+        {preview.nodes.map((node) => (
+          <div className="flow-runtime-node" key={node.id}>
+            <span className="flow-runtime-node-kind">{node.kind}</span>
+            <strong>{node.label}</strong>
+            <small>{node.id}</small>
           </div>
-        ) : (
-          <p>No run inputs declared.</p>
-        )}
+        ))}
       </div>
-
-      <div className="blueprint-overview-panel">
-        <h4>Structure</h4>
-        <div className="blueprint-overview-metrics">
-          <Metric label="Phases" value={props.parsed.phases.length} />
-          <Metric label="Nodes" value={props.parsed.nodes.length} />
-          <Metric label="Agents" value={agentCount + loopStepCount} />
-          <Metric label="Loops" value={loopNodes.length} />
-        </div>
-        <div className="blueprint-overview-chips">
-          {props.parsed.meta.requiresCwd ? (
-            <Badge variant="warning">requires project</Badge>
-          ) : (
-            <Badge variant="muted">no project required</Badge>
-          )}
-          {loopNodes.length > 0 ? (
-            <Badge variant="pending">loop primitive</Badge>
-          ) : null}
-          {props.parsed.phases.map((phase) => (
-            <Badge key={phase.id} variant="outline">
-              {phase.title}
-            </Badge>
-          ))}
-        </div>
+      <div className="flow-runtime-edge-list">
+        {preview.edges.map((edge) => (
+          <code key={edge.id}>
+            {edge.sourceNodeId} → {edge.targetNodeId}
+            {edge.kind === "control" ? ` [${edge.outcome}]` : ""}
+          </code>
+        ))}
       </div>
     </div>
   );
-}
-
-function BlueprintGraphPreview(props: { parsed: ParsedWorkflow }) {
-  const nodeStatuses = useMemo(() => ({}), []);
-  const { flowNodes, flowEdges } = useWorkflowFlowLayout({
-    parsed: props.parsed,
-    nodeStatuses,
-  });
-
-  return (
-    <div className="blueprint-graph-preview">
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={NODE_TYPES}
-        fitView
-        minZoom={0.25}
-        maxZoom={1.2}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={false}
-        onInit={(instance: ReactFlowInstance<Node<FlowNodeData>, Edge>) => {
-          window.requestAnimationFrame(() => {
-            void instance.fitView({ padding: 0.26 });
-          });
-        }}
-      >
-        <Background color="var(--border-1)" gap={24} />
-        <Controls />
-      </ReactFlow>
-    </div>
-  );
-}
-
-function Metric(props: { label: string; value: number }) {
-  return (
-    <div className="blueprint-overview-metric">
-      <strong>{props.value}</strong>
-      <span>{props.label}</span>
-    </div>
-  );
-}
-
-function formatInputLabel(
-  name: string,
-  definition: WorkflowInputDefinition,
-): string {
-  return definition.label ? `${definition.label} (${name})` : name;
-}
-
-function formatInputDetails(definition: WorkflowInputDefinition): string {
-  const parts: string[] = [definition.type];
-  if ("widget" in definition && definition.widget) {
-    parts.push(definition.widget);
-  }
-  if ("options" in definition) {
-    parts.push(`${definition.options.length} options`);
-  }
-  if (definition.default !== undefined) {
-    parts.push("has default");
-  }
-  return parts.join(" · ");
 }
 
 function BlueprintSkeleton() {

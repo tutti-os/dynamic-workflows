@@ -31,52 +31,6 @@ export function workflowNotFoundError(): AppError {
   return new AppError("WORKFLOW_NOT_FOUND", "Workflow not found");
 }
 
-export function workflowVersionNotFoundError(): AppError {
-  return new AppError(
-    "WORKFLOW_VERSION_NOT_FOUND",
-    "Workflow version not found",
-  );
-}
-
-export function workflowRunNotFoundError(): AppError {
-  return new AppError("RUN_NOT_FOUND", "Run not found");
-}
-
-export function workflowMapNodeInvalidError(message: string): AppError {
-  return new AppError("WORKFLOW_MAP_NODE_INVALID", message);
-}
-
-export function workflowMapRetryInvalidError(message: string): AppError {
-  return new AppError("WORKFLOW_MAP_RETRY_INVALID", message);
-}
-
-export function workflowRetryNodeInvalidError(message: string): AppError {
-  return new AppError("WORKFLOW_RETRY_NODE_INVALID", message);
-}
-
-export function workflowRetryFromNodeInvalidError(message: string): AppError {
-  return new AppError("WORKFLOW_RETRY_FROM_NODE_INVALID", message);
-}
-
 export function workflowRetryRequestInvalidError(message: string): AppError {
   return new AppError("WORKFLOW_RETRY_REQUEST_INVALID", message);
-}
-
-export function workflowRunCwdConflictError(input: {
-  runId: string;
-  cwd: string;
-}): AppError {
-  return new AppError(
-    "WORKFLOW_RUN_CWD_CONFLICT",
-    `Another workflow run (${input.runId}) is already active in ${input.cwd}. ` +
-      `Wait for it to finish or pass force to run anyway.`,
-    { details: { conflictingRunId: input.runId, cwd: input.cwd } },
-  );
-}
-
-export function workflowInputsInvalidError(error: unknown): AppError {
-  return new AppError(
-    "WORKFLOW_INPUTS_INVALID",
-    error instanceof Error ? error.message : "Workflow inputs are invalid.",
-  );
 }

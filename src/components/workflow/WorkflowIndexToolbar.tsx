@@ -6,15 +6,13 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@tutti-os/ui-system";
-import type {
-  WorkflowRunStatus,
-} from "@/lib/db/workflows/types";
+import type { FlowStatusFilter } from "./useWorkflowHomeController";
 
 type WorkflowIndexToolbarProps = {
   query: string;
-  statusFilter: WorkflowRunStatus | "all";
+  statusFilter: FlowStatusFilter;
   onQueryChange: (value: string) => void;
-  onStatusFilterChange: (value: WorkflowRunStatus | "all") => void;
+  onStatusFilterChange: (value: FlowStatusFilter) => void;
 };
 
 export function WorkflowIndexToolbar(props: WorkflowIndexToolbarProps) {
@@ -39,14 +37,14 @@ export function WorkflowIndexToolbar(props: WorkflowIndexToolbarProps) {
 }
 
 function RunStatusFilterSelect(props: {
-  value: WorkflowRunStatus | "all";
-  onValueChange: (value: WorkflowRunStatus | "all") => void;
+  value: FlowStatusFilter;
+  onValueChange: (value: FlowStatusFilter) => void;
 }) {
   return (
     <Select
       value={props.value}
       onValueChange={(value) =>
-        props.onValueChange(value as WorkflowRunStatus | "all")
+        props.onValueChange(value as FlowStatusFilter)
       }
     >
       <SelectTrigger className="workflow-status-filter">
@@ -57,7 +55,13 @@ function RunStatusFilterSelect(props: {
       <SelectContent align="start">
         <SelectItem value="all">All statuses</SelectItem>
         <SelectItem value="running">running</SelectItem>
-        <SelectItem value="waiting_for_human">waiting for human</SelectItem>
+        <SelectItem value="waiting_gate">waiting on gate</SelectItem>
+        <SelectItem value="waiting_human">waiting for human</SelectItem>
+        <SelectItem value="paused_failure">paused on failure</SelectItem>
+        <SelectItem value="paused_uncertain">paused on uncertainty</SelectItem>
+        <SelectItem value="paused_conflict">paused on conflict</SelectItem>
+        <SelectItem value="paused_budget">paused on budget</SelectItem>
+        <SelectItem value="pending">pending</SelectItem>
         <SelectItem value="interrupted">interrupted</SelectItem>
         <SelectItem value="completed">completed</SelectItem>
         <SelectItem value="failed">failed</SelectItem>

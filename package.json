@@ -1,7 +1,7 @@
 {
   "name": "dynamic-workflows",
   "version": "1.0.0",
-  "description": "Script-first dynamic workflow orchestrator for local Nextop agents.",
+  "description": "Persistent Flow orchestrator for local Tutti agents and deterministic automation.",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.11.0",

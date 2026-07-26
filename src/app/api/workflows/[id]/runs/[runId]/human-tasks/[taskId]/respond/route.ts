@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/api/errors";
 import { getWorkflowDetail } from "@/lib/db/workflows/workflow-repository";
-import { getWorkflowRun } from "@/lib/db/workflows/runs";
+import { getFlowV1Run } from "@/lib/db/workflows/flow-runtime";
 import {
-  HumanTaskConflictError,
-  HumanTaskValidationError,
-  resolveWorkflowHumanTask,
-} from "@/lib/db/workflows/human-tasks";
-import { resumeWorkflowRunAfterHumanTask } from "@/lib/workflow/run-jobs";
+  FlowV1ServiceError,
+  respondToFlowV1HumanTask,
+} from "@/lib/flow-v1/flow-service";
 import type { WorkflowValue } from "@/lib/workflow/types";
 
 export async function POST(
@@ -18,20 +16,10 @@ export async function POST(
   if (!getWorkflowDetail(id)) {
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
-  const currentRun = getWorkflowRun(runId);
-  if (!currentRun || currentRun.workflowId !== id) {
+  const currentRun = getFlowV1Run(runId);
+  if (!currentRun || currentRun.flowId !== id) {
     return NextResponse.json(apiError("RUN_NOT_FOUND"), { status: 404 });
   }
-  if (
-    currentRun.status === "completed" ||
-    currentRun.status === "failed" ||
-    currentRun.status === "canceled"
-  ) {
-    return NextResponse.json(apiError("HUMAN_TASK_CONFLICT", {
-      message: "This run has already finished.",
-    }), { status: 409 });
-  }
-
   let body: unknown;
   try {
     body = await request.json();
@@ -53,29 +41,28 @@ export async function POST(
   }
 
   try {
-    const task = resolveWorkflowHumanTask({
+    const result = await respondToFlowV1HumanTask({
+      flowId: id,
       runId,
       taskId,
       action: raw.action,
       values: raw.values as Record<string, WorkflowValue>,
       revision: raw.revision as number,
     });
-    const run = await resumeWorkflowRunAfterHumanTask({ workflowId: id, runId });
-    return NextResponse.json({ task, run });
+    return NextResponse.json({
+      task: result.task,
+      run: result.tick.run,
+      execution: result.execution,
+    });
   } catch (error) {
-    if (error instanceof HumanTaskConflictError) {
-      return NextResponse.json(apiError("HUMAN_TASK_CONFLICT", {
-        message: error.message,
-      }), { status: 409 });
-    }
-    if (error instanceof HumanTaskValidationError) {
-      const status = error.message === "Human task not found." ? 404 : 400;
+    if (error instanceof FlowV1ServiceError) {
+      const notFound = error.code === "flow_human_task_not_found";
       return NextResponse.json(
         apiError(
-          status === 404 ? "HUMAN_TASK_NOT_FOUND" : "HUMAN_TASK_INVALID",
+          notFound ? "HUMAN_TASK_NOT_FOUND" : "HUMAN_TASK_CONFLICT",
           { message: error.message },
         ),
-        { status },
+        { status: notFound ? 404 : 409 },
       );
     }
     return NextResponse.json(apiError("WORKFLOW_RUN_FAILED", {

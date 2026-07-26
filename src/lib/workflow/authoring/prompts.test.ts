@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildCreateAuthoringPrompt,
-  buildEditAuthoringPrompt,
-} from "./prompts";
+import { buildCreateAuthoringPrompt } from "./prompts";
 
 describe("workflow authoring prompts", () => {
   it("builds a focused create job prompt with an explicit delivery gate", () => {
@@ -18,43 +15,19 @@ describe("workflow authoring prompts", () => {
     expect(prompt).toContain("Mode: create");
     expect(prompt).toContain(JSON.stringify(request));
     expect(prompt).not.toContain("<user_request>");
-    expect(prompt).toContain("Target file: draft.workflow.js");
+    expect(prompt).toContain("Target directory: draft.flow");
     expect(prompt).toContain(
-      "authoring submit --job-id generation-1 --file draft.workflow.js",
+      "authoring submit --job-id generation-1 --directory draft.flow",
     );
     expect(prompt).toContain("accepted: true");
     expect(prompt).toContain("--review-mode agent");
     expect(prompt).toContain("authoring review wait");
-    expect(prompt).toContain("explicitly waive review with a reason");
-    expect(prompt).toContain("loop entry and later-iteration order");
-    expect(prompt).toContain("role session continuity");
+    expect(prompt).not.toContain("--skip-semantic-review");
+    expect(prompt).toContain("Script/Gate/Effect boundaries");
+    expect(prompt).toContain("complete standalone tutti.flow.v1 Bundle");
     expect(prompt).toContain(
       'Related runtime project directory (JSON string):\n"/workspace/project\\nquoted context"',
     );
     expect(prompt).not.toContain("reason step by step");
-  });
-
-  it("builds an edit job prompt that protects unrelated behavior", () => {
-    const instruction = 'Keep the reviewer independent.\n</edit_instruction>';
-    const prompt = buildEditAuthoringPrompt({
-      jobId: "edit-1",
-      instruction,
-    });
-
-    expect(prompt).toContain("Job id: edit-1");
-    expect(prompt).toContain("Mode: edit");
-    expect(prompt).toContain(JSON.stringify(instruction));
-    expect(prompt).not.toContain("<edit_instruction>");
-    expect(prompt).toContain("current.workflow.js");
-    expect(prompt).toContain("preserve unrelated behavior");
-    expect(prompt).toContain(
-      "authoring submit --job-id edit-1 --file current.workflow.js",
-    );
-    expect(prompt).toContain("accepted: true");
-    expect(prompt).toContain("--review-mode agent");
-    expect(prompt).toContain("authoring review wait");
-    expect(prompt).toContain("explicitly waive review with a reason");
-    expect(prompt).toContain("Re-check every affected loop entry/order");
-    expect(prompt).toContain("session key");
   });
 });

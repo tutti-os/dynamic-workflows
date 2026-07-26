@@ -4,14 +4,14 @@ import {
   createWorkflowFromPrompt,
   deleteWorkflow as deleteWorkflowRequest,
   duplicateWorkflow as duplicateWorkflowRequest,
-  importWorkflowScriptFile,
   listWorkflowSummaries,
   readApiJsonError,
 } from "@/components/workflow/workflowApiService";
+import type { WorkflowListItem } from "@/lib/db/workflows/types";
 import type {
-  WorkflowListItem,
-  WorkflowRunStatus,
-} from "@/lib/db/workflows/types";
+  FlowV1CycleStatus,
+  FlowV1RunStatus,
+} from "@/lib/flow-v1/types";
 import type { WorkflowDiagnostic } from "@/lib/workflow/types";
 
 const DEFAULT_WORKFLOW_PROMPT =
@@ -32,25 +32,24 @@ type WorkflowHomeController = {
   runCount: number;
   query: string;
   setQuery: (value: string) => void;
-  statusFilter: WorkflowRunStatus | "all";
-  setStatusFilter: (value: WorkflowRunStatus | "all") => void;
+  statusFilter: FlowStatusFilter;
+  setStatusFilter: (value: FlowStatusFilter) => void;
   isLoadingWorkflows: boolean;
   isCreating: boolean;
   createError: string | undefined;
   createDiagnostics: WorkflowDiagnostic[];
   createWorkflow: () => Promise<void>;
-  importFile: File | undefined;
-  setImportFile: (value: File | undefined) => void;
-  isImporting: boolean;
-  importError: string | undefined;
-  importDiagnostics: WorkflowDiagnostic[];
-  importWorkflow: () => Promise<void>;
   duplicatingId: string | undefined;
   deletingId: string | undefined;
   actionError: string | undefined;
   duplicateWorkflow: (workflowId: string) => Promise<void>;
   deleteWorkflow: (workflowId: string, workflowName: string) => Promise<void>;
 };
+
+export type FlowStatusFilter =
+  | "all"
+  | FlowV1CycleStatus
+  | FlowV1RunStatus;
 
 export function useWorkflowHomeController(
   input: WorkflowHomeControllerInput,
@@ -59,21 +58,13 @@ export function useWorkflowHomeController(
   const [prompt, setPrompt] = useState(DEFAULT_WORKFLOW_PROMPT);
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<WorkflowRunStatus | "all">(
-    "all",
-  );
+  const [statusFilter, setStatusFilter] = useState<FlowStatusFilter>("all");
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(true);
-  const [importFile, setImportFile] = useState<File | undefined>();
-  const [isImporting, setIsImporting] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | undefined>();
   const [deletingId, setDeletingId] = useState<string | undefined>();
   const [createError, setCreateError] = useState<string | undefined>();
   const [createDiagnostics, setCreateDiagnostics] = useState<
-    WorkflowDiagnostic[]
-  >([]);
-  const [importError, setImportError] = useState<string | undefined>();
-  const [importDiagnostics, setImportDiagnostics] = useState<
     WorkflowDiagnostic[]
   >([]);
   const [actionError, setActionError] = useState<string | undefined>();
@@ -103,12 +94,19 @@ export function useWorkflowHomeController(
         item.workflow.name.toLowerCase().includes(normalizedQuery) ||
         item.workflow.description.toLowerCase().includes(normalizedQuery);
       const matchesStatus =
-        statusFilter === "all" || item.latestRun?.status === statusFilter;
+        statusFilter === "all" ||
+        item.flowV1Runtime?.activeCycle?.status === statusFilter ||
+        item.flowV1Runtime?.latestRun?.status === statusFilter;
       return matchesQuery && matchesStatus;
     });
   }, [query, statusFilter, workflows]);
   const runCount = useMemo(
-    () => workflows.reduce((total, item) => total + item.runCount, 0),
+    () =>
+      workflows.reduce(
+        (total, item) =>
+          total + (item.flowV1Runtime?.runCount ?? 0),
+        0,
+      ),
     [workflows],
   );
 
@@ -136,31 +134,6 @@ export function useWorkflowHomeController(
       setCreateError(apiError.message);
     } finally {
       setIsCreating(false);
-    }
-  }
-
-  async function importWorkflow() {
-    if (!importFile) {
-      setImportError("Choose a workflow script file before importing.");
-      setImportDiagnostics([]);
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", importFile, importFile.name);
-
-    setIsImporting(true);
-    setImportError(undefined);
-    setImportDiagnostics([]);
-    try {
-      const data = await importWorkflowScriptFile(formData);
-      router.push(`/workflows/${data.workflow.id}`);
-    } catch (caught) {
-      const apiError = readApiJsonError(caught, "WORKFLOW_IMPORT_FAILED");
-      setImportDiagnostics(apiError.diagnostics ?? []);
-      setImportError(apiError.message);
-    } finally {
-      setIsImporting(false);
     }
   }
 
@@ -212,12 +185,6 @@ export function useWorkflowHomeController(
     createError,
     createDiagnostics,
     createWorkflow,
-    importFile,
-    setImportFile,
-    isImporting,
-    importError,
-    importDiagnostics,
-    importWorkflow,
     duplicatingId,
     deletingId,
     actionError,

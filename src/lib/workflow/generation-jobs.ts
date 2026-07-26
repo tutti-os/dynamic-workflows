@@ -1,5 +1,5 @@
 import {
-  completeWorkflowGeneration,
+  completeWorkflowFlowGeneration,
   failWorkflowGeneration,
   getLatestWorkflowGeneration,
   getWorkflowGeneration,
@@ -19,11 +19,11 @@ import {
   createWaivedSemanticReview,
   hashAuthoringScript,
 } from "@/lib/workflow/authoring/semantic-review";
+import { createSampleFlowV1Bundle } from "@/lib/workflow/sample";
 import {
-  assertWorkflowScriptValid,
-  WorkflowScriptSyntaxError,
-} from "@/lib/workflow/parser";
-import { SAMPLE_WORKFLOW } from "@/lib/workflow/sample";
+  configureFlowV1,
+  createFlowV1Version,
+} from "@/lib/flow-v1/flow-service";
 
 const activeGenerationJobs = new Map<string, Promise<void>>();
 
@@ -95,17 +95,33 @@ async function launchGenerationSession(generationId: string) {
 
   try {
     if (!generation.agent || generation.agent === "mock") {
-      const script = personalizeSample(generation.prompt);
-      assertWorkflowScriptValid(script);
-      completeWorkflowGeneration({
-        generationId,
-        script,
-        generation: { source: "sample" },
-        semanticReview: createWaivedSemanticReview({
+      const bundle = createSampleFlowV1Bundle(generation.prompt);
+      const semanticReview = createWaivedSemanticReview({
           intentHash: hashAuthoringScript(generation.prompt),
-          scriptHash: hashAuthoringScript(script),
+          scriptHash: hashAuthoringScript(
+            bundle.files
+              .map((file) => `${file.path}\n${file.content}`)
+              .join("\n\n"),
+          ),
           reason: "Built-in mock authoring path.",
-        }),
+        });
+      createFlowV1Version({
+        flowId: generation.workflowId,
+        bundle,
+        publish: true,
+        semanticReview,
+      });
+      configureFlowV1({
+        flowId: generation.workflowId,
+        params: {},
+        projectCwd: generation.cwd ?? undefined,
+      });
+      completeWorkflowFlowGeneration({
+        generationId,
+        generation: {
+          source: "sample_flow_bundle",
+          bundleHash: bundle.hash,
+        },
       });
       return;
     }
@@ -145,31 +161,15 @@ async function launchGenerationSession(generationId: string) {
   }
 }
 
-function personalizeSample(description: string): string {
-  if (!description.trim()) {
-    return SAMPLE_WORKFLOW;
-  }
-  return SAMPLE_WORKFLOW.replace(
-    'description: "Inspect a codebase with focused local agents and synthesize the results"',
-    `description: ${JSON.stringify(description.trim())}`,
-  );
-}
-
 function serializeGenerationError(error: unknown) {
-  const diagnostics =
-    error instanceof WorkflowScriptSyntaxError ? error.diagnostics : undefined;
   return {
     code: getGenerationErrorCode(error),
     message:
       error instanceof Error ? error.message : "Workflow generation failed",
-    ...(diagnostics ? { diagnostics } : {}),
   };
 }
 
 function getGenerationErrorCode(error: unknown): ApiErrorCode {
-  if (error instanceof WorkflowScriptSyntaxError) {
-    return "WORKFLOW_SCRIPT_INVALID";
-  }
   if (error instanceof WorkflowCwdError) {
     return "WORKFLOW_CWD_INVALID";
   }

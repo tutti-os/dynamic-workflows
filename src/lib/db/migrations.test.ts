@@ -14,47 +14,80 @@ describe("migrateDb", () => {
           "schema_migrations",
           "workflows",
           "workflow_versions",
+          "workflow_version_bundles",
+          "workflow_version_files",
           "workflow_runs",
-          "workflow_run_checkpoints",
           "workflow_run_human_tasks",
-          "workflow_run_notes",
           "workflow_generations",
-          "workflow_edit_jobs",
+          "workflow_params",
+          "workflow_secret_bindings",
+          "workflow_schedules",
+          "workflow_cycles",
+          "workflow_cycle_checkpoints",
+          "workflow_invocations",
+          "workflow_node_attempts",
+          "workflow_effects",
+          "workflow_memory_updates",
         ]),
       );
-      expect(readColumnNames(database, "workflow_run_notes")).toEqual(
+      expect(tables).not.toEqual(
         expect.arrayContaining([
-          "run_id",
-          "message",
-          "target",
-          "node_id",
-          "status",
-          "consumed_execution_key",
-          "delivery_json",
-          "created_at",
-          "consumed_at",
+          "workflow_edit_jobs",
+          "workflow_run_checkpoints",
+          "workflow_run_notes",
         ]),
       );
       expect(readColumnNames(database, "workflow_versions")).toEqual(
-        expect.arrayContaining(["source", "base_version_id", "note"]),
-      );
-      expect(readColumnNames(database, "workflow_edit_jobs")).toContain(
-        "agent_session_id",
-      );
-      expect(readColumnNames(database, "workflow_run_checkpoints")).toEqual(
         expect.arrayContaining([
-          "run_id",
-          "node_id",
-          "checkpoint_json",
-          "updated_at",
+          "schema_version",
+          "version_status",
+          "bundle_hash",
+          "published_at",
         ]),
       );
+      expect(readColumnNames(database, "workflows")).toEqual(
+        expect.arrayContaining(["lifecycle", "params_revision"]),
+      );
+      const runColumns = readColumnNames(database, "workflow_runs");
+      expect(runColumns).toEqual(
+        expect.arrayContaining([
+          "cycle_id",
+          "invocation_id",
+          "tick_sequence",
+          "stop_reason",
+          "owner_token",
+          "owner_claimed_at",
+        ]),
+      );
+      expect(runColumns).not.toEqual(
+        expect.arrayContaining([
+          "executor_kind",
+          "external_run_id",
+          "resume_token",
+          "log_path",
+        ]),
+      );
+      expect(readColumnNames(database, "workflow_version_bundles")).toEqual([
+        "version_id",
+        "schema_version",
+        "bundle_hash",
+        "created_at",
+      ]);
+      expect(readColumnNames(database, "workflow_version_files")).toEqual([
+        "version_id",
+        "path",
+        "content",
+        "sha256",
+        "size_bytes",
+        "media_kind",
+        "file_role",
+        "created_at",
+      ]);
       expect(readColumnNames(database, "workflow_run_human_tasks")).toEqual(
         expect.arrayContaining([
           "run_id",
+          "cycle_id",
           "node_id",
-          "parent_node_id",
-          "iteration",
           "execution_key",
           "status",
           "spec_json",
@@ -63,22 +96,16 @@ describe("migrateDb", () => {
           "revision",
         ]),
       );
-      for (const table of [
-        "workflow_runs",
-        "workflow_generations",
-        "workflow_edit_jobs",
-      ]) {
-        const columns = readColumnNames(database, table);
-        expect(columns).toContain("agent");
-        expect(columns).not.toContain("provider");
-      }
+      expect(readColumnNames(database, "workflow_generations")).toContain(
+        "agent",
+      );
       expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
     } finally {
       database.close();
     }
   });
 
-  it("stamps an existing v1 database without dropping data", () => {
+  it("purges pre-Flow workflows and drops legacy-only tables", () => {
     const database = new Database(":memory:");
     try {
       database.exec(`
@@ -124,7 +151,7 @@ describe("migrateDb", () => {
         INSERT INTO workflows (
           id, name, description, current_version_id, created_at, updated_at
         ) VALUES (
-          'workflow-1', 'Existing', 'Existing workflow', NULL,
+          'workflow-1', 'Existing', 'Existing workflow', 'version-1',
           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
         );
 
@@ -154,34 +181,37 @@ describe("migrateDb", () => {
         database
           .prepare("SELECT name FROM workflows WHERE id = ?")
           .get("workflow-1"),
-      ).toEqual({ name: "Existing" });
+      ).toBeUndefined();
       expect(readTableNames(database)).toContain("schema_migrations");
       expect(readTableNames(database)).toContain("workflow_generations");
-      expect(readTableNames(database)).toContain("workflow_edit_jobs");
-      expect(readTableNames(database)).toContain("workflow_run_checkpoints");
       expect(readTableNames(database)).toContain("workflow_run_human_tasks");
-      expect(readTableNames(database)).toContain("workflow_run_notes");
-      expect(readColumnNames(database, "workflow_versions")).toEqual(
-        expect.arrayContaining(["source", "base_version_id", "note"]),
+      expect(readTableNames(database)).not.toContain("workflow_edit_jobs");
+      expect(readTableNames(database)).not.toContain(
+        "workflow_run_checkpoints",
       );
-      expect(readColumnNames(database, "workflow_edit_jobs")).toContain(
-        "agent_session_id",
+      expect(readTableNames(database)).not.toContain("workflow_run_notes");
+      expect(readTableNames(database)).toContain("workflow_version_bundles");
+      expect(readTableNames(database)).toContain("workflow_version_files");
+      expect(readTableNames(database)).toContain("workflow_cycles");
+      expect(readTableNames(database)).toContain(
+        "workflow_cycle_checkpoints",
       );
+      expect(readTableNames(database)).toContain("workflow_invocations");
+      expect(readTableNames(database)).toContain("workflow_node_attempts");
+      expect(readTableNames(database)).toContain("workflow_effects");
       const runColumns = readColumnNames(database, "workflow_runs");
-      expect(runColumns).toContain("agent");
       expect(runColumns).toEqual(
-        expect.arrayContaining(["resume_token", "resume_claimed_at"]),
+        expect.arrayContaining(["cycle_id", "invocation_id", "tick_sequence"]),
       );
-      expect(runColumns).not.toContain("provider");
-      expect(
-        database
-          .prepare("SELECT id, agent FROM workflow_runs ORDER BY id")
-          .all(),
-      ).toEqual([
-        { id: "run-1", agent: "local:codex" },
-        { id: "run-2", agent: "local:claude-code" },
-        { id: "run-3", agent: "mock" },
-      ]);
+      expect(runColumns).not.toEqual(
+        expect.arrayContaining([
+          "provider",
+          "agent",
+          "resume_token",
+          "resume_claimed_at",
+          "executor_kind",
+        ]),
+      );
     } finally {
       database.close();
     }

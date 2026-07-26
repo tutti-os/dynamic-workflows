@@ -4,25 +4,18 @@ import { toWorkflowApiErrorResponse } from "@/lib/api/server-errors";
 import {
   createPendingWorkflowGeneration,
 } from "@/lib/db/workflows/generations";
-import {
-  listWorkflows,
-} from "@/lib/db/workflows/workflow-repository";
+import { listWorkflows } from "@/lib/db/workflows/workflow-repository";
 import { ensureWorkflowGenerationStarted } from "@/lib/workflow/generation-jobs";
-import { reconcileStaleRunningRuns } from "@/lib/workflow/run-jobs";
+import { createFlowV1Bundle } from "@/lib/flow-v1/bundle";
+import { createFlowV1 } from "@/lib/flow-v1/flow-service";
+import type {
+  FlowV1BundleSourceFile,
+  FlowV1JsonObject,
+} from "@/lib/flow-v1/types";
+import type { FlowV1SecretBinding } from "@/lib/flow-v1/runtime-config";
 
 export async function GET() {
-  // Reconcile any zombie "running" run surfaced as a workflow's latestRun so
-  // the home list stops showing it as running forever.
-  const workflows = await Promise.all(
-    listWorkflows().map(async (summary) => {
-      if (summary.latestRun?.status !== "running") {
-        return summary;
-      }
-      const [latestRun] = await reconcileStaleRunningRuns([summary.latestRun]);
-      return { ...summary, latestRun };
-    }),
-  );
-  return NextResponse.json({ workflows });
+  return NextResponse.json({ workflows: listWorkflows() });
 }
 
 export async function POST(request: Request) {
@@ -31,7 +24,30 @@ export async function POST(request: Request) {
     agent?: string;
     model?: string;
     cwd?: string;
+    bundle?: { files?: FlowV1BundleSourceFile[] };
+    params?: FlowV1JsonObject;
+    publish?: boolean;
+    activate?: boolean;
+    projectCwd?: string;
+    secretBindings?: Record<string, FlowV1SecretBinding>;
   };
+
+  if (body.bundle) {
+    try {
+      const bundle = createFlowV1Bundle(body.bundle.files ?? []);
+      const created = createFlowV1({
+        bundle,
+        params: body.params,
+        publish: body.publish,
+        activate: body.activate,
+        projectCwd: body.projectCwd,
+        secretBindings: body.secretBindings,
+      });
+      return NextResponse.json(created, { status: 201 });
+    } catch (error) {
+      return toWorkflowApiErrorResponse(error, "WORKFLOW_SAVE_FAILED");
+    }
+  }
 
   const prompt = body.prompt?.trim();
   if (!prompt) {

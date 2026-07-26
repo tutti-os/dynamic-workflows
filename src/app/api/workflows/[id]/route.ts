@@ -6,10 +6,17 @@ import {
   getWorkflowDetail,
   updateWorkflowMetadata,
 } from "@/lib/db/workflows/workflow-repository";
-import { reconcileStaleRunningRuns } from "@/lib/workflow/run-jobs";
+import { getFlowV1DetailProjection } from "@/lib/flow-v1/projection";
+import {
+  configureFlowV1,
+  setFlowV1Lifecycle,
+} from "@/lib/flow-v1/flow-service";
+import { getFlowV1BundleForVersion } from "@/lib/db/workflows/flow-bundles";
+import type { FlowV1JsonObject } from "@/lib/flow-v1/types";
+import type { FlowV1SecretBinding } from "@/lib/flow-v1/runtime-config";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const { id } = await context.params;
@@ -18,10 +25,15 @@ export async function GET(
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
 
-  // Reconcile zombie "running" runs (crash/old-bug leftovers) that never get
-  // reopened individually, so the runs list stops showing them as running.
-  const runs = await reconcileStaleRunningRuns(detail.runs);
-  return NextResponse.json({ ...detail, runs });
+  const cycleId = new URL(request.url).searchParams.get("cycleId") ?? undefined;
+  const flowV1 = getFlowV1DetailProjection(id, cycleId);
+  if (detail.currentVersion && !flowV1) {
+    return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
+  }
+  return NextResponse.json({
+    ...detail,
+    flowV1,
+  });
 }
 
 export async function PATCH(
@@ -32,7 +44,61 @@ export async function PATCH(
   const body = (await request.json()) as {
     name?: string;
     description?: string;
+    lifecycle?: "active" | "paused" | "archived";
+    params?: FlowV1JsonObject;
+    expectedParamsRevision?: number;
+    projectCwd?: string | null;
+    secretBindings?: Record<string, FlowV1SecretBinding>;
   };
+
+  if (
+    body.params ||
+    body.projectCwd !== undefined ||
+    body.secretBindings
+  ) {
+    try {
+      const config = configureFlowV1({
+        flowId: id,
+        params: body.params,
+        expectedParamsRevision: body.expectedParamsRevision,
+        projectCwd: body.projectCwd,
+        secretBindings: body.secretBindings,
+      });
+      return NextResponse.json({
+        config,
+        flowV1: getFlowV1DetailProjection(id),
+      });
+    } catch (error) {
+      return toWorkflowApiErrorResponse(error, "WORKFLOW_UPDATE_FAILED");
+    }
+  }
+
+  if (body.lifecycle) {
+    const detail = getWorkflowDetail(id);
+    if (
+      !detail?.currentVersion ||
+      !getFlowV1BundleForVersion(detail.currentVersion.id)
+    ) {
+      return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), {
+        status: 404,
+      });
+    }
+    if (!["active", "paused", "archived"].includes(body.lifecycle)) {
+      return NextResponse.json(
+        { error: { code: "FLOW_LIFECYCLE_INVALID" } },
+        { status: 400 },
+      );
+    }
+    try {
+      setFlowV1Lifecycle({ flowId: id, lifecycle: body.lifecycle });
+      return NextResponse.json({
+        ...getWorkflowDetail(id),
+        flowV1: getFlowV1DetailProjection(id),
+      });
+    } catch (error) {
+      return toWorkflowApiErrorResponse(error, "WORKFLOW_UPDATE_FAILED");
+    }
+  }
 
   const name = body.name?.trim();
   if (!name) {

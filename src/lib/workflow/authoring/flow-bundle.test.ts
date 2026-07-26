@@ -1,0 +1,141 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+let dataDir: string;
+
+beforeEach(() => {
+  dataDir = mkdtempSync(path.join(tmpdir(), "flow-authoring-test-"));
+  process.env.DYNAMIC_WORKFLOWS_DATA_DIR = dataDir;
+  vi.resetModules();
+});
+
+afterEach(() => {
+  vi.resetModules();
+  delete process.env.DYNAMIC_WORKFLOWS_DATA_DIR;
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+describe("Flow v1 authoring validation", () => {
+  it("validates a Bundle directory without executing its modules", async () => {
+    const { prepareAuthoringWorkspace } = await import("./workspace");
+    const { validateAuthoringFlowBundle } = await import("./flow-bundle");
+    const workspace = prepareAuthoringWorkspace({ jobId: "job-1" });
+    const bundleDir = path.join(workspace.dir, "draft.flow");
+    mkdirSync(path.join(bundleDir, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(bundleDir, "flow.js"),
+      `
+        globalThis.__authoringFlowExecuted = true;
+        export const schemaVersion = "tutti.flow.v1";
+        const scan = script({ id: "scan", file: "scripts/scan.mjs" });
+        const done = completeCycle({ id: "done", inputs: { scan } });
+      `,
+    );
+    writeFileSync(
+      path.join(bundleDir, "scripts", "scan.mjs"),
+      `
+        globalThis.__authoringFlowExecuted = true;
+        export async function run() { return {}; }
+      `,
+    );
+
+    const result = validateAuthoringFlowBundle({ jobId: "job-1" });
+    expect(result.valid).toBe(true);
+    expect(result.bundle?.files.map((file) => file.path)).toEqual([
+      "flow.js",
+      "scripts/scan.mjs",
+    ]);
+    expect(
+      (globalThis as Record<string, unknown>).__authoringFlowExecuted,
+    ).toBeUndefined();
+  });
+
+  it("returns Bundle diagnostics and rejects directory symlinks", async () => {
+    const {
+      prepareAuthoringWorkspace,
+      resolveAuthoringBundleDirectory,
+    } = await import("./workspace");
+    const { validateAuthoringFlowBundle } = await import("./flow-bundle");
+    const workspace = prepareAuthoringWorkspace({ jobId: "job-2" });
+    const invalidDir = path.join(workspace.dir, "invalid.flow");
+    mkdirSync(invalidDir);
+    writeFileSync(path.join(invalidDir, "unexpected.txt"), "no entry");
+
+    const invalid = validateAuthoringFlowBundle({
+      jobId: "job-2",
+      directory: "invalid.flow",
+    });
+    expect(invalid.valid).toBe(false);
+    expect(invalid.diagnostics.map((entry) => entry.code)).toEqual(
+      expect.arrayContaining([
+        "bundle.path_unsupported",
+        "bundle.entry_missing",
+      ]),
+    );
+
+    symlinkSync(invalidDir, path.join(workspace.dir, "draft.flow"));
+    expect(() =>
+      resolveAuthoringBundleDirectory({ jobId: "job-2" }),
+    ).toThrow(/must not be a symlink/u);
+  });
+
+  it("submits a validated Bundle into the generation Flow as a standalone Version", async () => {
+    const { createPendingWorkflowGeneration } = await import(
+      "@/lib/db/workflows/generations"
+    );
+    const { prepareAuthoringWorkspace } = await import("./workspace");
+    const {
+      submitAuthoringFlowBundle,
+    } = await import("./flow-bundle");
+    const { getFlowV1BundleForVersion } = await import(
+      "@/lib/db/workflows/flow-bundles"
+    );
+    const pending = createPendingWorkflowGeneration({
+      prompt: "Create a persistent maintenance Flow",
+    });
+    const jobId = pending.generation!.id;
+    const workspace = prepareAuthoringWorkspace({ jobId });
+    const bundleDir = path.join(workspace.dir, "draft.flow");
+    mkdirSync(path.join(bundleDir, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(bundleDir, "flow.js"),
+      `
+        export const schemaVersion = "tutti.flow.v1";
+        export const meta = {
+          name: "generated-flow",
+          description: "Generated persistent Flow",
+        };
+        const scan = script({ id: "scan", file: "scripts/scan.mjs" });
+        const done = completeCycle({ id: "done", inputs: { scan } });
+      `,
+    );
+    writeFileSync(
+      path.join(bundleDir, "scripts", "scan.mjs"),
+      "export async function run() { return {}; }",
+    );
+
+    const submitted = await submitAuthoringFlowBundle({
+      jobId,
+      skipSemanticReview: true,
+      reason: "Static Flow v1 review fixture",
+    });
+
+    expect(submitted).toMatchObject({
+      accepted: true,
+      workflowId: pending.workflow.id,
+      version: 1,
+      bundleHash: expect.any(String),
+    });
+    expect(
+      getFlowV1BundleForVersion(submitted.versionId!)?.hash,
+    ).toBe(submitted.bundleHash);
+  });
+});

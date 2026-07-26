@@ -56,7 +56,7 @@ export async function packageTuttiDevApp(options = {}) {
     name: "Dynamic Workflows Dev",
     description:
       sourcePackage.description ??
-      "Script-first dynamic workflow orchestrator for local Nextop agents.",
+      "Persistent Flow orchestrator for local Tutti agents and deterministic automation.",
     icon: {
       type: "asset",
       src: "icon.svg",

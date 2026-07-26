@@ -6,28 +6,17 @@ import {
 } from "@/lib/api/errors";
 import { isAppError } from "@/lib/api/app-error";
 import { WorkflowCwdError } from "@/lib/workflow/cwd";
-import { WorkflowScriptSyntaxError } from "@/lib/workflow/parser";
 
 const ERROR_STATUS: Partial<Record<ApiErrorCode, number>> = {
   PROMPT_REQUIRED: 400,
-  SCRIPT_REQUIRED: 400,
   WORKFLOW_NAME_REQUIRED: 400,
   WORKFLOW_NAME_TOO_LONG: 400,
   WORKFLOW_DESCRIPTION_TOO_LONG: 400,
   WORKFLOW_NOT_FOUND: 404,
-  WORKFLOW_VERSION_NOT_FOUND: 404,
   WORKFLOW_BLUEPRINT_NOT_FOUND: 404,
   RUN_NOT_FOUND: 404,
-  WORKFLOW_SCRIPT_INVALID: 400,
-  WORKFLOW_INPUTS_INVALID: 400,
   WORKFLOW_CWD_INVALID: 400,
-  WORKFLOW_MAP_NODE_INVALID: 400,
-  WORKFLOW_MAP_RETRY_INVALID: 409,
-  WORKFLOW_RETRY_NODE_INVALID: 400,
-  WORKFLOW_RETRY_FROM_NODE_INVALID: 409,
   WORKFLOW_RETRY_REQUEST_INVALID: 400,
-  WORKFLOW_RUN_CWD_CONFLICT: 409,
-  LEGACY_RUN_ENDPOINT: 410,
 };
 
 export function getWorkflowApiErrorCode(
@@ -36,9 +25,6 @@ export function getWorkflowApiErrorCode(
 ): ApiErrorCode {
   if (isAppError(error)) {
     return error.code;
-  }
-  if (error instanceof WorkflowScriptSyntaxError) {
-    return "WORKFLOW_SCRIPT_INVALID";
   }
   if (error instanceof WorkflowCwdError) {
     return "WORKFLOW_CWD_INVALID";
@@ -58,12 +44,7 @@ export function toWorkflowApiErrorResponse(
     apiError(code, {
       message: error instanceof Error ? error.message : undefined,
       details: isAppError(error) ? error.details : undefined,
-      diagnostics:
-        isAppError(error)
-          ? error.diagnostics
-          : error instanceof WorkflowScriptSyntaxError
-          ? error.diagnostics
-          : undefined,
+      diagnostics: isAppError(error) ? error.diagnostics : undefined,
     }),
     { status: options?.status ?? ERROR_STATUS[code] ?? 500 },
   );

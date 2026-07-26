@@ -4,12 +4,12 @@ import {
   getWorkflowDetail,
 } from "@/lib/db/workflows/workflow-repository";
 import {
-  getWorkflowRun,
-} from "@/lib/db/workflows/runs";
+  getFlowV1Run,
+} from "@/lib/db/workflows/flow-runtime";
 import {
-  cancelWorkflowRun,
-  isWorkflowRunJobActive,
-} from "@/lib/workflow/run-jobs";
+  cancelFlowV1Cycle,
+  FlowV1ServiceError,
+} from "@/lib/flow-v1/flow-service";
 
 export async function POST(
   _request: Request,
@@ -20,16 +20,31 @@ export async function POST(
     return NextResponse.json(apiError("WORKFLOW_NOT_FOUND"), { status: 404 });
   }
 
-  const run = getWorkflowRun(runId);
-  if (!run || run.workflowId !== id) {
+  const flowRun = getFlowV1Run(runId);
+  if (!flowRun || flowRun.flowId !== id) {
     return NextResponse.json(apiError("RUN_NOT_FOUND"), { status: 404 });
   }
-
-  const wasActive = isWorkflowRunJobActive(runId);
-  const updated = cancelWorkflowRun(runId);
-  return NextResponse.json({
-    ok: true,
-    canceled: wasActive || updated?.status === "canceled",
-    run: updated,
-  });
+  try {
+    const cancellation = cancelFlowV1Cycle({
+      flowId: id,
+      cycleId: flowRun.cycleId,
+    });
+    return NextResponse.json({
+      ok: true,
+      cancellation,
+    });
+  } catch (error) {
+    if (error instanceof FlowV1ServiceError) {
+      return NextResponse.json(
+        {
+          error: {
+            code: error.code,
+            message: error.message,
+          },
+        },
+        { status: 409 },
+      );
+    }
+    throw error;
+  }
 }

@@ -1,13 +1,9 @@
 import type {
   WorkflowDiagnostic,
-  WorkflowLoopRecoveryState,
-  WorkflowMapRecoveryState,
   WorkflowMeta,
-  WorkflowRunCheckpointState,
 } from "@/lib/workflow/types";
 import type {
   AuthoringSemanticReview,
-  WorkflowEditJobError,
   WorkflowGenerationError,
 } from "./types";
 
@@ -59,35 +55,6 @@ export function parseWorkflowGenerationErrorColumn(
   context: JsonColumnContext,
 ): WorkflowGenerationError {
   return parseJsonColumn(value, context, isWorkflowError);
-}
-
-export function parseWorkflowEditJobErrorColumn(
-  value: string,
-  context: JsonColumnContext,
-): WorkflowEditJobError {
-  return parseJsonColumn(value, context, isWorkflowError);
-}
-
-export function parseWorkflowRunCheckpointStateColumn(
-  value: string,
-  context: JsonColumnContext,
-): WorkflowRunCheckpointState {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (error) {
-    throw invalidJsonColumnError(context, "is not valid JSON", error);
-  }
-  // Tagged `{ kind, state }` checkpoints are the current shape. Rows written
-  // before map support stored a bare loop recovery state; normalize those to a
-  // `loop` checkpoint so old runs keep resuming.
-  if (isWorkflowRunCheckpointState(parsed)) {
-    return parsed;
-  }
-  if (isWorkflowLoopRecoveryState(parsed)) {
-    return { kind: "loop", state: parsed };
-  }
-  throw invalidJsonColumnError(context, "has invalid shape");
 }
 
 export function stringifyWorkflowMetaColumn(
@@ -176,20 +143,6 @@ export function stringifyWorkflowGenerationErrorColumn(
   return stringifyJsonColumn(value, context, isWorkflowError);
 }
 
-export function stringifyWorkflowEditJobErrorColumn(
-  value: unknown,
-  context: JsonColumnContext,
-): string {
-  return stringifyJsonColumn(value, context, isWorkflowError);
-}
-
-export function stringifyWorkflowRunCheckpointStateColumn(
-  value: unknown,
-  context: JsonColumnContext,
-): string {
-  return stringifyJsonColumn(value, context, isWorkflowRunCheckpointState);
-}
-
 export function isWorkflowMeta(value: unknown): value is WorkflowMeta {
   if (!isJsonObject(value)) {
     return false;
@@ -208,7 +161,7 @@ export function isWorkflowMeta(value: unknown): value is WorkflowMeta {
 
 export function isWorkflowError(
   value: unknown,
-): value is WorkflowGenerationError | WorkflowEditJobError {
+): value is WorkflowGenerationError {
   if (!isJsonObject(value) || typeof value.message !== "string") {
     return false;
   }
@@ -220,89 +173,6 @@ export function isWorkflowError(
   }
   return Array.isArray(value.diagnostics) &&
     value.diagnostics.every(isWorkflowDiagnostic);
-}
-
-export function isWorkflowLoopRecoveryState(
-  value: unknown,
-): value is WorkflowLoopRecoveryState {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  if (
-    !Number.isInteger(value.nextIteration) ||
-    !isWorkflowValueRecord(value.previousStepOutputs)
-  ) {
-    return false;
-  }
-  if (
-    value.currentIteration !== undefined &&
-    !Number.isInteger(value.currentIteration)
-  ) {
-    return false;
-  }
-  if (
-    value.currentStepOutputs !== undefined &&
-    !isWorkflowValueRecord(value.currentStepOutputs)
-  ) {
-    return false;
-  }
-  return Array.isArray(value.iterations) &&
-    value.iterations.every(isWorkflowLoopRecoveryIteration);
-}
-
-export function isWorkflowRunCheckpointState(
-  value: unknown,
-): value is WorkflowRunCheckpointState {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  if (value.kind === "loop") {
-    return isWorkflowLoopRecoveryState(value.state);
-  }
-  if (value.kind === "map") {
-    return isWorkflowMapRecoveryState(value.state);
-  }
-  return false;
-}
-
-export function isWorkflowMapRecoveryState(
-  value: unknown,
-): value is WorkflowMapRecoveryState {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  if (!Array.isArray(value.items) || !value.items.every(isJsonValue)) {
-    return false;
-  }
-  return (
-    Array.isArray(value.completions) &&
-    value.completions.every(isWorkflowMapItemCompletion)
-  );
-}
-
-function isWorkflowMapItemCompletion(value: unknown): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  if (!Number.isInteger(value.index)) {
-    return false;
-  }
-  if (value.status !== "completed" && value.status !== "failed") {
-    return false;
-  }
-  // `step` records the failing step for multi-step items. Legacy single-step
-  // completions omit it, so undefined must stay valid for backward compat.
-  if (value.step !== undefined && typeof value.step !== "string") {
-    return false;
-  }
-  if (value.output !== undefined && !isJsonValue(value.output)) {
-    return false;
-  }
-  return value.error === undefined || typeof value.error === "string";
-}
-
-function isWorkflowValueRecord(value: unknown): boolean {
-  return isJsonObject(value) && Object.values(value).every(isJsonValue);
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
@@ -420,17 +290,4 @@ function isEditableRange(value: unknown): boolean {
   return isJsonObject(value) &&
     Number.isFinite(value.start) &&
     Number.isFinite(value.end);
-}
-
-function isWorkflowLoopRecoveryIteration(value: unknown): boolean {
-  return isJsonObject(value) &&
-    Number.isInteger(value.index) &&
-    isWorkflowValueRecord(value.outputs) &&
-    typeof value.untilOutput === "string" &&
-    typeof value.untilMatched === "boolean";
-}
-
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return isJsonObject(value) &&
-    Object.values(value).every((item) => typeof item === "string");
 }

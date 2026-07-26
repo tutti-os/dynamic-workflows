@@ -1,9 +1,10 @@
 import type { WorkflowDetail } from "@/lib/db/workflows/types";
 import {
-  createWorkflowFromScript,
   updateWorkflowMetadata,
 } from "@/lib/db/workflows/workflow-repository";
 import { getWorkflowBlueprint } from "@/lib/workflow/blueprint-catalog";
+import { createFlowV1 } from "@/lib/flow-v1/flow-service";
+import { getWorkflowDetail } from "@/lib/db/workflows/workflow-repository";
 
 /**
  * Thrown when a blueprint id does not resolve to a built-in blueprint. Callers
@@ -34,11 +35,15 @@ export function instantiateWorkflowBlueprint(
     throw new BlueprintNotFoundError(blueprintId);
   }
 
-  const detail = createWorkflowFromScript(blueprint.script, {
-    source: "blueprint",
-    note: blueprint.id,
+  const created = createFlowV1({
+    bundle: blueprint.bundle,
+    publish: true,
+    activate: false,
   });
-
+  const detail = getWorkflowDetail(created.flowId);
+  if (!detail) {
+    throw new Error("Instantiated Flow could not be loaded.");
+  }
   const name = options.name?.trim();
   if (name && name !== detail.workflow.name) {
     return updateWorkflowMetadata({

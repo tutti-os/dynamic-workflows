@@ -61,7 +61,7 @@ export async function packageTuttiApp(options = {}) {
     cliScope,
     description:
       sourcePackage.description ??
-      "Script-first dynamic workflow orchestrator for local Nextop agents.",
+      "Persistent Flow orchestrator for local Tutti agents and deterministic automation.",
     environment,
     version,
   });
