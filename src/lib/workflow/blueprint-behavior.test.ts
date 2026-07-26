@@ -92,11 +92,22 @@ describe("official Blueprint behavior", () => {
       "rd_repair",
       "qa_review",
     ]);
+    expect(flow.nodes.find((node) => node.id === "implement_plan")?.session).toEqual(
+      { mode: "inherit", key: "rd_room" },
+    );
+    expect(acceptance?.loop?.steps[0]).toEqual(
+      expect.objectContaining({
+        session: { mode: "inherit", key: "rd_room" },
+        appendPrompt: expect.stringContaining("QA blockers"),
+      }),
+    );
     expect(acceptance?.loop?.steps[1]).toEqual(
       expect.objectContaining({
         label: "Adversarial QA acceptance",
-        execution: { access: "review", isolation: "required" },
+        session: { mode: "independent" },
+        execution: { access: "review", isolation: "shared" },
         output: expect.objectContaining({ kind: "json" }),
+        prompt: expect.not.stringContaining("Initial implementation record"),
       }),
     );
 

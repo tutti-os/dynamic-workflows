@@ -131,6 +131,15 @@ export type FlowV1ExecutionContract = {
   isolation: "shared" | "required";
 };
 
+export type FlowV1SessionSpec =
+  | {
+      mode: "independent";
+    }
+  | {
+      mode: "inherit";
+      key: string;
+    };
+
 export type FlowV1HumanContextItem = {
   label: string;
   value: string;
@@ -165,6 +174,8 @@ export type FlowV1CompositeAgentStep = {
   kind: "agent";
   label: string;
   prompt: string;
+  appendPrompt?: string;
+  session?: FlowV1SessionSpec;
   agent?: FlowV1ResolvableString;
   model?: FlowV1ResolvableString;
   permissionMode?: FlowV1ResolvableString;
@@ -237,6 +248,7 @@ export type FlowV1Node = {
   label: string;
   file?: string;
   prompt?: string;
+  session?: FlowV1SessionSpec;
   agent?: FlowV1ResolvableString;
   model?: FlowV1ResolvableString;
   permissionMode?: FlowV1ResolvableString;
@@ -491,6 +503,7 @@ export type FlowV1NodeAttemptRecord = {
   output: FlowV1JsonValue | null;
   error: FlowV1JsonObject | null;
   controlOutcome: string | null;
+  agentSessionKey: string | null;
   agentSessionId: string | null;
   startedAt: string;
   finishedAt: string | null;

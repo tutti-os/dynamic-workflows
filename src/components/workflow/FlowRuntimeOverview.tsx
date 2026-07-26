@@ -10,15 +10,29 @@ import {
   type Node as ReactFlowNode,
 } from "@xyflow/react";
 import {
+  Button,
+  ConfirmationDialog,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@tutti-os/ui-system";
+import {
   Ban,
   Bot,
   Braces,
   Brain,
   CheckCircle2,
+  CircleAlert,
   Code2,
   GitBranch,
   Layers3,
+  Play,
+  RefreshCw,
   Repeat2,
+  Square,
   UserRound,
   Zap,
 } from "lucide-react";
@@ -36,6 +50,7 @@ import type {
   FlowV1GraphCheckpoint,
   FlowV1Node,
   FlowV1NodeAttemptRecord,
+  FlowV1SchemaEntry,
 } from "@/lib/flow-v1/types";
 import type {
   WorkflowHumanAction,
@@ -43,22 +58,41 @@ import type {
   WorkflowValue,
 } from "@/lib/workflow/types";
 
-type FlowView = "design" | "live" | "review";
+export type FlowView = "design" | "live" | "review";
 type FlowAction = "start" | "resume" | "retry" | "cancel";
+type RuntimeConfigDraft = {
+  params: Record<string, string>;
+  projectCwd: string;
+  secretEnvs: Record<string, string>;
+  agent: string;
+  model: string;
+  permissionMode: string;
+};
 
 export function FlowRuntimeOverview(props: {
   workflowId: string;
   projection: FlowV1DetailProjection;
+  view: FlowView;
+  onViewChange: (view: FlowView) => void;
   onRefresh: () => Promise<unknown>;
 }) {
-  const [view, setView] = useState<FlowView>("live");
   const [historicalProjection, setHistoricalProjection] =
     useState<FlowV1DetailProjection | null>(null);
   const [pendingAction, setPendingAction] = useState<FlowAction | null>(
     null,
   );
   const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [invocationInputText, setInvocationInputText] = useState("{}");
+  const [startDialogOpen, setStartDialogOpen] = useState(false);
+  const [startDiscardOpen, setStartDiscardOpen] = useState(false);
+  const [startFieldErrors, setStartFieldErrors] = useState<
+    Record<string, string>
+  >({});
+  const [humanDialogOpen, setHumanDialogOpen] = useState(false);
+  const [invocationInputs, setInvocationInputs] = useState<
+    Record<string, string>
+  >(() =>
+    createSchemaValueDraft(props.projection.configuration.inputsSchema),
+  );
   const projection = historicalProjection ?? props.projection;
   const { runtime, selectedCycle, checkpoint } = projection;
   const currentNode = selectedCycle?.currentNodeId
@@ -78,21 +112,29 @@ export function FlowRuntimeOverview(props: {
       runtime.latestRun ?? projection.runs.at(-1) ?? null;
     let endpoint = `/api/workflows/${props.workflowId}/run`;
     let body: Record<string, unknown> | undefined;
-    if (next === "start") {
-      body = { inputs: parseJsonObject(invocationInputText, "Cycle inputs") };
-    } else if (next === "resume" && latestRun) {
-      endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/resume`;
-    } else if (next === "retry" && latestRun) {
-      endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/retry`;
-      body = selectedCycle?.currentNodeId
-        ? { fromNodeId: selectedCycle.currentNodeId }
-        : undefined;
-    } else if (next === "cancel" && latestRun) {
-      endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/cancel`;
-    }
     setPendingAction(next);
     setActionMessage(null);
+    if (next === "start") {
+      setStartFieldErrors({});
+    }
     try {
+      if (next === "start") {
+        body = {
+          inputs: parseSchemaValues(
+            projection.configuration.inputsSchema,
+            invocationInputs,
+          ),
+        };
+      } else if (next === "resume" && latestRun) {
+        endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/resume`;
+      } else if (next === "retry" && latestRun) {
+        endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/retry`;
+        body = selectedCycle?.currentNodeId
+          ? { fromNodeId: selectedCycle.currentNodeId }
+          : undefined;
+      } else if (next === "cancel" && latestRun) {
+        endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/cancel`;
+      }
       const response = await fetch(endpoint, {
         method: "POST",
         headers: body ? { "content-type": "application/json" } : undefined,
@@ -104,16 +146,26 @@ export function FlowRuntimeOverview(props: {
       if (!response.ok) {
         throw new Error(readActionError(payload));
       }
-      setActionMessage(
-        next === "cancel"
-          ? "Cancellation requested."
-          : "The next Tick has been queued.",
-      );
+      setActionMessage(flowActionSuccessMessage(next));
+      if (next === "start") {
+        setInvocationInputs(
+          createSchemaValueDraft(projection.configuration.inputsSchema),
+        );
+        setStartDialogOpen(false);
+      }
       await props.onRefresh();
       window.setTimeout(() => {
         void props.onRefresh();
       }, 750);
     } catch (error) {
+      if (next === "start" && error instanceof SchemaFieldError) {
+        setStartFieldErrors({ [error.field]: error.message });
+        window.setTimeout(() => {
+          document
+            .getElementById(`invocation-input-${error.field}`)
+            ?.focus();
+        });
+      }
       setActionMessage(
         error instanceof Error ? error.message : "Flow action failed.",
       );
@@ -142,127 +194,270 @@ export function FlowRuntimeOverview(props: {
         );
       }
       setHistoricalProjection(payload.flowV1);
-      setView("review");
+      props.onViewChange("review");
     } catch (error) {
       setActionMessage(
-        error instanceof Error
-          ? error.message
-          : "Cycle history could not be loaded.",
+          error instanceof Error
+            ? error.message
+            : "Run history could not be loaded.",
       );
     }
   }
 
+  const inputEntries = Object.entries(projection.configuration.inputsSchema);
+  const defaultInvocationInputs = createSchemaValueDraft(
+    projection.configuration.inputsSchema,
+  );
+  const startFormDirty =
+    JSON.stringify(invocationInputs) !== JSON.stringify(defaultInvocationInputs);
+  const pendingHumanTaskCount = projection.humanTasks.filter(
+    (task) => task.status === "pending",
+  ).length;
+  const guidance = flowGuidance(projection, action);
+
+  function requestStartDialogClose() {
+    if (pendingAction !== null) {
+      return;
+    }
+    if (startFormDirty) {
+      setStartDiscardOpen(true);
+      return;
+    }
+    setStartDialogOpen(false);
+  }
+
   return (
-    <section className="flow-runtime-overview" aria-label="Flow runtime">
+    <section className="flow-runtime-overview" aria-label="Workflow activity">
       <div className="flow-runtime-heading">
         <div>
-          <span className="flow-runtime-eyebrow">Persistent Flow</span>
-          <h2>{currentNode?.label ?? "Ready for the next Cycle"}</h2>
+          <span className="flow-runtime-eyebrow">Workflow status</span>
+          <h2>{currentNode?.label ?? "Ready to start"}</h2>
           <p>
             {currentState?.waitingReason ??
               currentState?.error?.message ??
               (selectedCycle
-                ? `Cycle #${selectedCycle.sequence} is ${selectedCycle.status}${selectedCycle.outcome ? ` with outcome ${selectedCycle.outcome}` : ""}.`
-                : "This Flow has not started a Cycle yet.")}
+                ? `Run #${selectedCycle.sequence} is ${formatStatus(selectedCycle.status)}${selectedCycle.outcome ? ` with outcome ${selectedCycle.outcome}` : ""}.`
+                : "This workflow has not run yet.")}
           </p>
         </div>
-        <div className="flow-runtime-tabs" role="tablist">
-          {(["design", "live", "review"] as const).map((item) => (
+      </div>
+
+      <div
+        className="flow-next-step"
+        data-action={action ?? selectedCycle?.status ?? "idle"}
+      >
+        <div className="flow-next-step-icon" aria-hidden="true">
+          {flowGuidanceIcon(action, selectedCycle?.status)}
+        </div>
+        <div className="flow-next-step-copy">
+          <span>Next step</span>
+          <h3>{guidance.title}</h3>
+          <p>{guidance.description}</p>
+        </div>
+        <div className="flow-next-step-actions">
+          {action ? (
             <button
-              aria-selected={view === item}
-              className={view === item ? "is-active" : undefined}
-              key={item}
-              onClick={() => setView(item)}
-              role="tab"
+              className={
+                action === "cancel"
+                  ? "flow-next-step-button flow-next-step-button-danger"
+                  : "flow-next-step-button flow-next-step-button-primary"
+              }
+              disabled={pendingAction !== null}
+              onClick={() => {
+                if (action === "start" && inputEntries.length > 0) {
+                  setActionMessage(null);
+                  setStartFieldErrors({});
+                  setInvocationInputs(
+                    createSchemaValueDraft(
+                      projection.configuration.inputsSchema,
+                    ),
+                  );
+                  setStartDialogOpen(true);
+                  return;
+                }
+                void runAction(action);
+              }}
               type="button"
             >
-              {capitalize(item)}
+              {pendingAction !== action ? flowActionIcon(action) : null}
+              {pendingAction === action
+                ? "Working…"
+                : flowActionLabel(action)}
             </button>
-          ))}
+          ) : selectedCycle?.status === "waiting_human" ? (
+            <button
+              className="flow-next-step-button flow-next-step-button-primary"
+              onClick={() => {
+                setHumanDialogOpen(true);
+              }}
+              type="button"
+            >
+              Review decision
+            </button>
+          ) : selectedCycle?.status === "paused_conflict" ? (
+            <button
+              className="flow-next-step-button flow-next-step-button-primary"
+              onClick={() => props.onViewChange("review")}
+              type="button"
+            >
+              Review conflict
+            </button>
+          ) : null}
+          {historicalProjection ? (
+            <button
+              className="flow-next-step-button flow-next-step-button-secondary"
+              onClick={() => {
+                setHistoricalProjection(null);
+                props.onViewChange("live");
+              }}
+              type="button"
+            >
+              Back to current run
+            </button>
+          ) : null}
         </div>
+        {actionMessage ? (
+          <p className="flow-next-step-message" role="status">
+            {actionMessage}
+          </p>
+        ) : null}
       </div>
 
-      <div className="flow-runtime-actions">
-        {action === "start" &&
-        Object.keys(projection.configuration.inputsSchema).length >
-          0 ? (
-          <label className="flow-runtime-inputs">
-            <span>Cycle inputs (JSON)</span>
-            <textarea
-              onChange={(event) =>
-                setInvocationInputText(event.currentTarget.value)
-              }
-              rows={3}
-              value={invocationInputText}
-            />
-          </label>
-        ) : null}
-        {action ? (
-          <button
-            className={
-              action === "cancel"
-                ? "flow-runtime-action-danger"
-                : "flow-runtime-action-primary"
-            }
-            disabled={pendingAction !== null}
-            onClick={() => void runAction(action)}
-            type="button"
-          >
-            {pendingAction === action
-              ? "Working…"
-              : flowActionLabel(action)}
-          </button>
-        ) : null}
-        {selectedCycle?.status === "waiting_human" ? (
-          <span>
-            Human decision pending · use the task card below to continue.
-          </span>
-        ) : null}
-        {historicalProjection ? (
-          <button
-            onClick={() => {
-              setHistoricalProjection(null);
-              setView("live");
+      <Dialog
+        open={startDialogOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setStartDialogOpen(open);
+          } else {
+            requestStartDialogClose();
+          }
+        }}
+      >
+        <DialogContent className="flow-start-dialog">
+          <DialogHeader>
+            <DialogTitle>Start workflow</DialogTitle>
+            <DialogDescription>
+              Add the inputs for this run. Defaults are already filled in.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="flow-dialog-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runAction("start");
             }}
-            type="button"
           >
-            Back to live Cycle
-          </button>
-        ) : null}
-        {actionMessage ? <span role="status">{actionMessage}</span> : null}
-      </div>
+            <div className="flow-invocation-input-grid">
+              {inputEntries.map(([name, definition]) => (
+                <SchemaField
+                  definition={definition}
+                  error={startFieldErrors[name]}
+                  idPrefix="invocation-input"
+                  key={name}
+                  name={name}
+                  onChange={(value) => {
+                    setInvocationInputs((current) => ({
+                      ...current,
+                      [name]: value,
+                    }));
+                    setStartFieldErrors((current) => {
+                      if (!current[name]) {
+                        return current;
+                      }
+                      const next = { ...current };
+                      delete next[name];
+                      return next;
+                    });
+                  }}
+                  value={invocationInputs[name] ?? ""}
+                />
+              ))}
+            </div>
+            {actionMessage ? (
+              <p className="flow-dialog-message" role="status">
+                {actionMessage}
+              </p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                disabled={pendingAction !== null}
+                onClick={requestStartDialogClose}
+                size="dialog"
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={pendingAction !== null}
+                size="dialog"
+                type="submit"
+              >
+                {pendingAction === "start" ? "Starting…" : "Start workflow"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <ConfirmationDialog
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        description="Your input changes will not be saved."
+        onConfirm={() => {
+          setInvocationInputs(defaultInvocationInputs);
+          setStartFieldErrors({});
+          setStartDiscardOpen(false);
+          setStartDialogOpen(false);
+        }}
+        onOpenChange={setStartDiscardOpen}
+        open={startDiscardOpen}
+        title="Discard run inputs?"
+        tone="destructive"
+      />
+
+      <Dialog open={humanDialogOpen} onOpenChange={setHumanDialogOpen}>
+        <DialogContent className="flow-human-dialog">
+          <DialogHeader>
+            <DialogTitle>Review decision</DialogTitle>
+            <DialogDescription>
+              {pendingHumanTaskCount === 1
+                ? "This workflow needs your response before it can continue."
+                : `${pendingHumanTaskCount} decisions need your response before this workflow can continue.`}
+            </DialogDescription>
+          </DialogHeader>
+          <HumanTasks
+            projection={projection}
+            workflowId={props.workflowId}
+            onRefresh={props.onRefresh}
+            onResolved={() => setHumanDialogOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
 
       <div className="flow-runtime-summary">
-        <RuntimeMetric label="Lifecycle" value={runtime.lifecycle} />
+        <RuntimeMetric label="Workflow" value={runtime.lifecycle} />
         <RuntimeMetric
-          label="Cycle"
+          label="Current run"
           value={
             selectedCycle
-              ? `#${selectedCycle.sequence} · ${selectedCycle.status}${selectedCycle.outcome ? ` · ${selectedCycle.outcome}` : ""}`
+              ? `#${selectedCycle.sequence} · ${formatStatus(selectedCycle.status)}${selectedCycle.outcome ? ` · ${selectedCycle.outcome}` : ""}`
               : "not started"
           }
         />
         <RuntimeMetric
-          label="Current node"
-          value={currentNode?.label ?? "—"}
-          detail={currentState?.waitingReason}
-        />
-        <RuntimeMetric label="Cycles" value={String(runtime.cycleCount)} />
-        <RuntimeMetric label="Ticks" value={String(runtime.runCount)} />
-        <RuntimeMetric
-          label="Next schedule"
+          label="Next scheduled"
           value={formatTimestamp(runtime.schedule?.nextFireAt)}
         />
       </div>
 
-      {view === "design" ? (
+      {props.view === "design" ? (
         <DesignView
           projection={projection}
           workflowId={props.workflowId}
           onRefresh={props.onRefresh}
         />
       ) : null}
-      {view === "live" ? (
+      {props.view === "live" ? (
         <LiveView
           projection={projection}
           workflowId={props.workflowId}
@@ -270,7 +465,7 @@ export function FlowRuntimeOverview(props: {
           onInspectCycle={inspectCycle}
         />
       ) : null}
-      {view === "review" ? (
+      {props.view === "review" ? (
         <ReviewView
           projection={projection}
           workflowId={props.workflowId}
@@ -290,7 +485,7 @@ function DesignView(props: {
   return (
     <div className="flow-runtime-panel">
       <div className="flow-runtime-panel-title">
-        <h3>Flow design</h3>
+        <h3>Workflow map</h3>
         <span>
           {props.projection.graph.nodes.length} nodes ·{" "}
           {props.projection.graph.edges.length} edges
@@ -320,8 +515,11 @@ function ConfigurationEditor(props: {
     model: configuration.defaultModel ?? undefined,
     permissionMode: configuration.defaultPermissionMode ?? undefined,
   });
-  const [paramsText, setParamsText] = useState(
-    JSON.stringify(configuration.params?.values ?? {}, null, 2),
+  const [paramsDraft, setParamsDraft] = useState<Record<string, string>>(() =>
+    createSchemaValueDraft(
+      configuration.paramsSchema,
+      configuration.params?.values,
+    ),
   );
   const [projectCwd, setProjectCwd] = useState(
     configuration.projectCwd ?? "",
@@ -337,13 +535,64 @@ function ConfigurationEditor(props: {
   const [pending, setPending] = useState<"save" | "lifecycle" | null>(
     null,
   );
+  const [configDialogOpen, setConfigDialogOpen] = useState(false);
+  const [configDiscardOpen, setConfigDiscardOpen] = useState(false);
+  const [configBaseline, setConfigBaseline] =
+    useState<RuntimeConfigDraft | null>(null);
+  const [configFieldErrors, setConfigFieldErrors] = useState<
+    Record<string, string>
+  >({});
   const [message, setMessage] = useState<string | null>(null);
+  const currentConfigDraft: RuntimeConfigDraft = {
+    params: paramsDraft,
+    projectCwd,
+    secretEnvs,
+    agent: runSettings.effectiveAgent,
+    model: runSettings.model,
+    permissionMode: runSettings.permissionMode,
+  };
+  const configDirty =
+    configBaseline !== null &&
+    JSON.stringify(currentConfigDraft) !== JSON.stringify(configBaseline);
+
+  function openConfigDialog() {
+    setConfigBaseline(currentConfigDraft);
+    setConfigFieldErrors({});
+    setMessage(null);
+    setConfigDialogOpen(true);
+  }
+
+  function restoreConfigDraft(snapshot: RuntimeConfigDraft) {
+    setParamsDraft(snapshot.params);
+    setProjectCwd(snapshot.projectCwd);
+    setSecretEnvs(snapshot.secretEnvs);
+    runSettings.setAgent(snapshot.agent);
+    runSettings.setModel(snapshot.model);
+    runSettings.setPermissionMode(snapshot.permissionMode);
+  }
+
+  function requestConfigDialogClose() {
+    if (pending !== null) {
+      return;
+    }
+    if (configDirty) {
+      setConfigDiscardOpen(true);
+      return;
+    }
+    setConfigBaseline(null);
+    setConfigFieldErrors({});
+    setConfigDialogOpen(false);
+  }
 
   async function save() {
     setPending("save");
     setMessage(null);
+    setConfigFieldErrors({});
     try {
-      const params = parseJsonObject(paramsText, "Params");
+      const params = parseSchemaValues(
+        configuration.paramsSchema,
+        paramsDraft,
+      );
       const secretBindings = Object.fromEntries(
         Object.entries(secretEnvs)
           .filter(([, env]) => env.trim())
@@ -362,9 +611,17 @@ function ConfigurationEditor(props: {
           runSettings.permissionMode.trim() || null,
         secretBindings,
       });
-      setMessage("Configuration saved.");
       await props.onRefresh();
+      setMessage("Configuration saved.");
+      setConfigBaseline(null);
+      setConfigDialogOpen(false);
     } catch (error) {
+      if (error instanceof SchemaFieldError) {
+        setConfigFieldErrors({ [error.field]: error.message });
+        window.setTimeout(() => {
+          document.getElementById(`runtime-param-${error.field}`)?.focus();
+        });
+      }
       setMessage(
         error instanceof Error
           ? error.message
@@ -390,7 +647,7 @@ function ConfigurationEditor(props: {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Lifecycle could not be changed.",
+          : "Schedule status could not be changed.",
       );
     } finally {
       setPending(null);
@@ -400,107 +657,241 @@ function ConfigurationEditor(props: {
   return (
     <div className="flow-runtime-configuration">
       <div className="flow-runtime-panel-title">
-        <h3>Variables & runtime</h3>
-        <button
-          disabled={pending !== null}
-          onClick={() => void toggleLifecycle()}
-          type="button"
+        <div>
+          <h3>Runtime setup</h3>
+          <p>Defaults used by every run.</p>
+        </div>
+        <div className="flow-runtime-config-actions">
+          <Button
+            disabled={pending !== null || runSettings.agentsLoading}
+            onClick={openConfigDialog}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            Edit configuration
+          </Button>
+          {props.projection.runtime.schedule ? (
+            <Button
+              disabled={pending !== null}
+              onClick={() => void toggleLifecycle()}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              {pending === "lifecycle"
+                ? "Updating…"
+                : props.projection.runtime.lifecycle === "active"
+                  ? "Pause schedule"
+                  : "Activate schedule"}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <dl className="flow-runtime-config-summary">
+        <div>
+          <dt>Project folder</dt>
+          <dd>{configuration.projectCwd || "Not set"}</dd>
+        </div>
+        <div>
+          <dt>Agent</dt>
+          <dd>{configuration.defaultAgent || "Default"}</dd>
+        </div>
+        <div>
+          <dt>Model</dt>
+          <dd>{configuration.defaultModel || "Default"}</dd>
+        </div>
+        <div>
+          <dt>Parameters</dt>
+          <dd>
+            {Object.keys(configuration.params?.values ?? {}).length} configured
+          </dd>
+        </div>
+      </dl>
+      {message ? (
+        <p
+          className="flow-runtime-config-message"
+          data-tone={message === "Configuration saved." ? "success" : "danger"}
+          role="status"
         >
-          {pending === "lifecycle"
-            ? "Updating…"
-            : props.projection.runtime.lifecycle === "active"
-              ? "Pause schedule"
-              : "Activate Flow"}
-        </button>
-      </div>
-      <div className="flow-runtime-config-grid">
-        <label>
-          <span>
-            Params · revision {configuration.params?.revision ?? 0}
-          </span>
-          <textarea
-            onChange={(event) => setParamsText(event.currentTarget.value)}
-            rows={7}
-            value={paramsText}
-          />
-        </label>
-        <label>
-          <span>Project cwd</span>
-          <input
-            onChange={(event) => setProjectCwd(event.currentTarget.value)}
-            placeholder="/absolute/path/to/project"
-            value={projectCwd}
-          />
-        </label>
-        <label>
-          <span>Default Agent</span>
-          <WorkflowAgentSelect
-            agents={runSettings.agents}
-            value={runSettings.effectiveAgent}
-            fallbackValue="mock"
-            disabled={runSettings.agentsLoading}
-            onValueChange={runSettings.setAgent}
-          />
-        </label>
-        <label>
-          <span>Default model</span>
-          <WorkflowModelSelect
-            models={runSettings.modelOptions}
-            value={runSettings.model}
-            disabled={runSettings.agentsLoading}
-            onValueChange={runSettings.setModel}
-          />
-        </label>
-        <label>
-          <span>Default permissions</span>
-          <WorkflowPermissionModeSelect
-            modes={runSettings.permissionModeOptions}
-            value={runSettings.permissionMode}
-            disabled={runSettings.agentsLoading}
-            onValueChange={runSettings.setPermissionMode}
-          />
-        </label>
-        {Object.entries(configuration.secretsSchema).map(
-          ([name, definition]) => (
-            <label key={name}>
-              <span>
-                Secret {name}
-                {definition.required ? " · required" : ""}
-              </span>
-              <input
-                onChange={(event) =>
-                  setSecretEnvs((current) => ({
-                    ...current,
-                    [name]: event.currentTarget.value,
-                  }))
-                }
-                placeholder="ENVIRONMENT_VARIABLE_NAME"
-                value={secretEnvs[name] ?? ""}
-              />
-            </label>
-          ),
-        )}
-      </div>
-      <AgentCatalogStatus
-        loading={runSettings.agentsLoading}
-        error={runSettings.agentsError}
-        warning={runSettings.agentsWarning}
-        onRetry={runSettings.retryAgents}
+          {message}
+        </p>
+      ) : null}
+
+      <Dialog
+        open={configDialogOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setConfigDialogOpen(true);
+          } else {
+            requestConfigDialogClose();
+          }
+        }}
+      >
+        <DialogContent className="flow-config-dialog">
+          <DialogHeader>
+            <DialogTitle>Runtime configuration</DialogTitle>
+            <DialogDescription>
+              Set the project, Agent, model, parameters, and secret bindings
+              used by this workflow.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="flow-dialog-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save();
+            }}
+          >
+            <div className="flow-runtime-config-grid">
+              <label>
+                <span>Project folder</span>
+                <input
+                  onChange={(event) =>
+                    setProjectCwd(event.currentTarget.value)
+                  }
+                  placeholder="/absolute/path/to/project"
+                  value={projectCwd}
+                />
+              </label>
+              <label>
+                <span>Default Agent</span>
+                <WorkflowAgentSelect
+                  agents={runSettings.agents}
+                  value={runSettings.effectiveAgent}
+                  fallbackValue="mock"
+                  disabled={runSettings.agentsLoading}
+                  onValueChange={runSettings.setAgent}
+                />
+              </label>
+              <label>
+                <span>Default model</span>
+                <WorkflowModelSelect
+                  models={runSettings.modelOptions}
+                  value={runSettings.model}
+                  disabled={runSettings.agentsLoading}
+                  onValueChange={runSettings.setModel}
+                />
+              </label>
+              <label>
+                <span>Default permissions</span>
+                <WorkflowPermissionModeSelect
+                  modes={runSettings.permissionModeOptions}
+                  value={runSettings.permissionMode}
+                  disabled={runSettings.agentsLoading}
+                  onValueChange={runSettings.setPermissionMode}
+                />
+              </label>
+              {Object.entries(configuration.secretsSchema).map(
+                ([name, definition]) => (
+                  <label key={name}>
+                    <span>
+                      Secret {name}
+                      {definition.required ? " · required" : ""}
+                    </span>
+                    <input
+                      onChange={(event) =>
+                        setSecretEnvs((current) => ({
+                          ...current,
+                          [name]: event.currentTarget.value,
+                        }))
+                      }
+                      placeholder="ENVIRONMENT_VARIABLE_NAME"
+                      value={secretEnvs[name] ?? ""}
+                    />
+                  </label>
+                ),
+              )}
+            </div>
+            {Object.keys(configuration.paramsSchema).length > 0 ? (
+              <fieldset className="flow-runtime-param-fields">
+                <legend>
+                  Parameters · revision {configuration.params?.revision ?? 0}
+                </legend>
+                <div className="flow-invocation-input-grid">
+                  {Object.entries(configuration.paramsSchema).map(
+                    ([name, definition]) => (
+                      <SchemaField
+                        definition={definition}
+                        error={configFieldErrors[name]}
+                        idPrefix="runtime-param"
+                        key={name}
+                        name={name}
+                        onChange={(value) => {
+                          setParamsDraft((current) => ({
+                            ...current,
+                            [name]: value,
+                          }));
+                          setConfigFieldErrors((current) => {
+                            if (!current[name]) {
+                              return current;
+                            }
+                            const next = { ...current };
+                            delete next[name];
+                            return next;
+                          });
+                        }}
+                        value={paramsDraft[name] ?? ""}
+                      />
+                    ),
+                  )}
+                </div>
+              </fieldset>
+            ) : null}
+            <AgentCatalogStatus
+              loading={runSettings.agentsLoading}
+              error={runSettings.agentsError}
+              warning={runSettings.agentsWarning}
+              onRetry={runSettings.retryAgents}
+            />
+            <p className="flow-dialog-hint">
+              Secret values stay in the environment. Only variable names are
+              stored.
+            </p>
+            {message ? (
+              <p className="flow-dialog-message" role="status">
+                {message}
+              </p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                disabled={pending !== null}
+                onClick={requestConfigDialogClose}
+                size="dialog"
+                type="button"
+                variant="outline"
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={pending !== null || !configDirty}
+                size="dialog"
+                type="submit"
+              >
+                {pending === "save" ? "Saving…" : "Save changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <ConfirmationDialog
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        description="Your runtime configuration changes will not be saved."
+        onConfirm={() => {
+          if (configBaseline) {
+            restoreConfigDraft(configBaseline);
+          }
+          setConfigFieldErrors({});
+          setConfigDiscardOpen(false);
+          setConfigDialogOpen(false);
+          setConfigBaseline(null);
+        }}
+        onOpenChange={setConfigDiscardOpen}
+        open={configDiscardOpen}
+        title="Discard configuration changes?"
+        tone="destructive"
       />
-      <div className="flow-runtime-config-footer">
-        <button
-          disabled={pending !== null}
-          onClick={() => void save()}
-          type="button"
-        >
-          {pending === "save" ? "Saving…" : "Save configuration"}
-        </button>
-        <span>
-          Secret values stay in the environment; only variable names are
-          stored.
-        </span>
-        {message ? <span role="status">{message}</span> : null}
-      </div>
     </div>
   );
 }
@@ -529,33 +920,28 @@ function LiveView(props: {
       />
       <div className="flow-runtime-history-grid">
         <HistoryList
-          title="Cycles"
+          title="Runs"
           selectedId={props.projection.selectedCycle?.id}
           onSelect={(cycleId) => void props.onInspectCycle(cycleId)}
           rows={props.projection.cycles.map((cycle) => ({
             id: cycle.id,
-            primary: `Cycle #${cycle.sequence}`,
+            primary: `Run #${cycle.sequence}`,
             secondary: cycle.outcome
-              ? `${cycle.status} · ${cycle.outcome}`
-              : cycle.status,
+              ? `${formatStatus(cycle.status)} · ${cycle.outcome}`
+              : formatStatus(cycle.status),
             timestamp: cycle.createdAt,
           }))}
         />
         <HistoryList
-          title="Ticks in selected Cycle"
+          title="Step executions in selected run"
           rows={props.projection.runs.map((run) => ({
             id: run.id,
-            primary: `Tick #${run.tickSequence}`,
-            secondary: run.stopReason ?? run.status,
+            primary: `Execution #${run.tickSequence}`,
+            secondary: formatStatus(run.stopReason ?? run.status),
             timestamp: run.startedAt,
           }))}
         />
       </div>
-      <HumanTasks
-        projection={props.projection}
-        workflowId={props.workflowId}
-        onRefresh={props.onRefresh}
-      />
     </div>
   );
 }
@@ -578,8 +964,8 @@ export function FlowGraph(props: {
       className="flow-runtime-graph"
       aria-label={
         props.mode === "design"
-          ? "Flow design graph"
-          : "Cycle execution graph"
+          ? "Workflow design graph"
+          : "Run execution graph"
       }
     >
       <ReactFlow
@@ -830,6 +1216,7 @@ function HumanTasks(props: {
   workflowId: string;
   projection: FlowV1DetailProjection;
   onRefresh: () => Promise<unknown>;
+  onResolved: () => void;
 }) {
   const tasks = props.projection.humanTasks.filter(
     (task) => task.status === "pending",
@@ -837,6 +1224,7 @@ function HumanTasks(props: {
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   if (tasks.length === 0) {
     return null;
   }
@@ -859,11 +1247,17 @@ function HumanTasks(props: {
         !String(actionValues[field.id] ?? "").trim(),
     );
     if (missing) {
-      setMessage(`${missing.label} is required.`);
+      const key = humanFieldKey(task, action, missing.id);
+      setFieldErrors({ [key]: `${missing.label} is required.` });
+      setMessage(null);
+      window.setTimeout(() => {
+        document.getElementById(`${task.id}-${action.id}-${missing.id}`)?.focus();
+      });
       return;
     }
     setPendingTaskId(task.id);
     setMessage(null);
+    setFieldErrors({});
     try {
       const response = await fetch(
         `/api/workflows/${props.workflowId}/runs/${task.runId}/human-tasks/${task.id}/respond`,
@@ -883,8 +1277,9 @@ function HumanTasks(props: {
       if (!response.ok) {
         throw new Error(readActionError(payload));
       }
-      setMessage("Decision recorded; the next Tick has been queued.");
+      setMessage("Decision recorded. The workflow will continue.");
       await props.onRefresh();
+      props.onResolved();
       window.setTimeout(() => {
         void props.onRefresh();
       }, 750);
@@ -897,12 +1292,20 @@ function HumanTasks(props: {
     }
   }
 
+  function updateFieldValue(key: string, value: string) {
+    setValues((current) => ({ ...current, [key]: value }));
+    setFieldErrors((current) => {
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
   return (
     <div className="flow-runtime-human-tasks">
-      <div className="flow-runtime-panel-title">
-        <h3>Human decisions</h3>
-        <span>{tasks.length} pending</span>
-      </div>
       {tasks.map((task) => (
         <article key={task.id}>
           <div>
@@ -924,6 +1327,8 @@ function HumanTasks(props: {
                   {action.fields.map((field) => {
                     const key = humanFieldKey(task, action, field.id);
                     const id = `${task.id}-${action.id}-${field.id}`;
+                    const errorId = `${id}-error`;
+                    const fieldError = fieldErrors[key];
                     const value =
                       values[key] ?? field.defaultValue ?? "";
                     return (
@@ -934,13 +1339,15 @@ function HumanTasks(props: {
                         </span>
                         {field.type === "textarea" ? (
                           <textarea
+                            aria-describedby={fieldError ? errorId : undefined}
+                            aria-invalid={Boolean(fieldError)}
                             disabled={pendingTaskId !== null}
                             id={id}
                             onChange={(event) =>
-                              setValues((current) => ({
-                                ...current,
-                                [key]: event.currentTarget.value,
-                              }))
+                              updateFieldValue(
+                                key,
+                                event.currentTarget.value,
+                              )
                             }
                             placeholder={field.placeholder}
                             rows={3}
@@ -948,13 +1355,15 @@ function HumanTasks(props: {
                           />
                         ) : field.type === "select" ? (
                           <select
+                            aria-describedby={fieldError ? errorId : undefined}
+                            aria-invalid={Boolean(fieldError)}
                             disabled={pendingTaskId !== null}
                             id={id}
                             onChange={(event) =>
-                              setValues((current) => ({
-                                ...current,
-                                [key]: event.currentTarget.value,
-                              }))
+                              updateFieldValue(
+                                key,
+                                event.currentTarget.value,
+                              )
                             }
                             value={value}
                           >
@@ -972,19 +1381,26 @@ function HumanTasks(props: {
                           </select>
                         ) : (
                           <input
+                            aria-describedby={fieldError ? errorId : undefined}
+                            aria-invalid={Boolean(fieldError)}
                             disabled={pendingTaskId !== null}
                             id={id}
                             onChange={(event) =>
-                              setValues((current) => ({
-                                ...current,
-                                [key]: event.currentTarget.value,
-                              }))
+                              updateFieldValue(
+                                key,
+                                event.currentTarget.value,
+                              )
                             }
                             placeholder={field.placeholder}
                             type="text"
                             value={value}
                           />
                         )}
+                        {fieldError ? (
+                          <small className="flow-field-error" id={errorId}>
+                            {fieldError}
+                          </small>
+                        ) : null}
                       </label>
                     );
                   })}
@@ -1034,7 +1450,7 @@ function ReviewView(props: {
   return (
     <div className="flow-runtime-panel flow-runtime-review">
       <HistoryList
-        title="Node Attempts"
+        title="Step attempts"
         selectedId={selectedAttempt?.id}
         onSelect={setSelectedAttemptId}
         rows={props.projection.attempts.map((attempt) => ({
@@ -1137,7 +1553,7 @@ function MemoryConflicts(props: {
       if (!response.ok) {
         throw new Error(readActionError(payload));
       }
-      setMessage("Memory conflict resolved; the next Tick has been queued.");
+      setMessage("Memory conflict resolved. The workflow will continue.");
       await props.onRefresh();
       window.setTimeout(() => {
         void props.onRefresh();
@@ -1252,7 +1668,7 @@ function AttemptDetail(props: {
         <>
           <dl>
             <div>
-              <dt>Node</dt>
+              <dt>Step</dt>
               <dd>{attempt.nodeId}</dd>
             </div>
             <div>
@@ -1353,16 +1769,104 @@ function HistoryList(props: {
   );
 }
 
+function SchemaField(props: {
+  name: string;
+  idPrefix: string;
+  definition: FlowV1SchemaEntry;
+  error?: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const id = `${props.idPrefix}-${props.name}`;
+  const errorId = `${id}-error`;
+  const constraints = inputConstraintLabel(props.definition);
+  const isBoolean = schemaHelperKind(props.definition.helper) === "boolean";
+  const isJson = schemaHelperKind(props.definition.helper) === "json";
+  const isNumber = schemaHelperKind(props.definition.helper) === "number";
+  return (
+    <label
+      className={
+        isJson
+          ? "flow-invocation-input flow-invocation-input-wide"
+          : "flow-invocation-input"
+      }
+      htmlFor={id}
+    >
+      <span>
+        <strong>{humanizeIdentifier(props.name)}</strong>
+        {props.definition.required ? <em>Required</em> : <small>Optional</small>}
+      </span>
+      {isBoolean ? (
+        <select
+          aria-describedby={props.error ? errorId : undefined}
+          aria-invalid={Boolean(props.error)}
+          id={id}
+          onChange={(event) => props.onChange(event.currentTarget.value)}
+          value={props.value}
+        >
+          <option value="">Choose a value…</option>
+          <option value="true">True</option>
+          <option value="false">False</option>
+        </select>
+      ) : isJson ? (
+        <textarea
+          aria-describedby={props.error ? errorId : undefined}
+          aria-invalid={Boolean(props.error)}
+          id={id}
+          onChange={(event) => props.onChange(event.currentTarget.value)}
+          placeholder={props.definition.required ? "Enter valid JSON" : "Optional JSON value"}
+          rows={4}
+          value={props.value}
+        />
+      ) : (
+        <input
+          aria-describedby={props.error ? errorId : undefined}
+          aria-invalid={Boolean(props.error)}
+          id={id}
+          inputMode={isNumber ? "decimal" : undefined}
+          max={
+            typeof props.definition.config.max === "number"
+              ? props.definition.config.max
+              : undefined
+          }
+          min={
+            typeof props.definition.config.min === "number"
+              ? props.definition.config.min
+              : undefined
+          }
+          onChange={(event) => props.onChange(event.currentTarget.value)}
+          placeholder={
+            props.definition.required ? "Enter a value" : "Optional"
+          }
+          step={
+            props.definition.config.integer === true
+              ? 1
+              : isNumber
+                ? "any"
+                : undefined
+          }
+          type={isNumber ? "number" : "text"}
+          value={props.value}
+        />
+      )}
+      {props.error ? (
+        <small className="flow-field-error" id={errorId}>
+          {props.error}
+        </small>
+      ) : null}
+      {constraints ? <small>{constraints}</small> : null}
+    </label>
+  );
+}
+
 function RuntimeMetric(props: {
   label: string;
   value: string;
-  detail?: string;
 }) {
   return (
     <div className="flow-runtime-metric">
       <span>{props.label}</span>
       <strong>{props.value}</strong>
-      {props.detail ? <small>{props.detail}</small> : null}
     </div>
   );
 }
@@ -1407,6 +1911,97 @@ function capitalize(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
 
+function formatStatus(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function flowGuidance(
+  projection: FlowV1DetailProjection,
+  action: FlowAction | null,
+): { title: string; description: string } {
+  const inputCount = Object.keys(projection.configuration.inputsSchema).length;
+  if (action === "start") {
+    return {
+      title: "Start this workflow",
+      description:
+        inputCount > 0
+          ? `Add ${inputCount} input${inputCount === 1 ? "" : "s"}, then start the first run.`
+          : "Start the first run now. Progress will appear in Activity below.",
+    };
+  }
+  if (action === "resume") {
+    return {
+      title: "Continue from where it paused",
+      description:
+        "Run the next step using the workflow's saved state and latest results.",
+    };
+  }
+  if (action === "retry") {
+    return {
+      title: "This step needs another try",
+      description:
+        "Retry the current step. Earlier completed work will stay intact.",
+    };
+  }
+  if (action === "cancel") {
+    return {
+      title: "The workflow is running",
+      description:
+        "You can follow its progress below. Stop it only if you do not want the current run to continue.",
+    };
+  }
+  if (projection.selectedCycle?.status === "waiting_human") {
+    return {
+      title: "Your decision is needed",
+      description:
+        "Review the pending decision and respond before the workflow can continue.",
+    };
+  }
+  if (projection.selectedCycle?.status === "paused_conflict") {
+    return {
+      title: "Resolve the saved-memory conflict",
+      description:
+        "Choose which memory version to keep before this workflow can continue.",
+    };
+  }
+  return {
+    title: "No action is needed right now",
+    description:
+      "Review the current activity below. This page will update as the workflow progresses.",
+  };
+}
+
+function flowGuidanceIcon(
+  action: FlowAction | null,
+  status: string | undefined,
+) {
+  if (action === "start") {
+    return <Play size={20} />;
+  }
+  if (action === "resume" || action === "retry") {
+    return <RefreshCw size={19} />;
+  }
+  if (action === "cancel") {
+    return <Zap size={19} />;
+  }
+  if (status === "waiting_human" || status === "paused_conflict") {
+    return <CircleAlert size={20} />;
+  }
+  return <CheckCircle2 size={20} />;
+}
+
+function flowActionIcon(action: FlowAction) {
+  switch (action) {
+    case "start":
+      return <Play aria-hidden="true" size={15} />;
+    case "resume":
+    case "retry":
+      return <RefreshCw aria-hidden="true" size={14} />;
+    case "cancel":
+      return <Square aria-hidden="true" size={13} />;
+  }
+}
+
 function resolveFlowAction(
   projection: FlowV1DetailProjection,
 ): FlowAction | null {
@@ -1441,14 +2036,202 @@ function resolveFlowAction(
 function flowActionLabel(action: FlowAction): string {
   switch (action) {
     case "start":
-      return "Start Cycle";
+      return "Start workflow";
     case "resume":
-      return "Run next Tick";
+      return "Continue workflow";
     case "retry":
-      return "Retry current node";
+      return "Retry step";
     case "cancel":
-      return "Cancel Cycle";
+      return "Stop current run";
   }
+}
+
+function flowActionSuccessMessage(action: FlowAction): string {
+  switch (action) {
+    case "start":
+      return "Workflow started. This page will update automatically.";
+    case "resume":
+      return "Workflow continued. This page will update automatically.";
+    case "retry":
+      return "Retry started. This page will update automatically.";
+    case "cancel":
+      return "Stop requested.";
+  }
+}
+
+function createSchemaValueDraft(
+  schema: Record<string, FlowV1SchemaEntry>,
+  currentValues: Record<string, unknown> = {},
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(schema).map(([name, definition]) => {
+      const hasCurrentValue = Object.hasOwn(currentValues, name);
+      const value = hasCurrentValue
+        ? currentValues[name]
+        : definition.config.default;
+      if (!hasCurrentValue && !definition.hasDefault) {
+        return [name, ""];
+      }
+      if (schemaHelperKind(definition.helper) === "json") {
+        return [name, JSON.stringify(value, null, 2)];
+      }
+      return [name, String(value)];
+    }),
+  );
+}
+
+class SchemaFieldError extends Error {
+  readonly field: string;
+
+  constructor(field: string, message: string) {
+    super(message);
+    this.name = "SchemaFieldError";
+    this.field = field;
+  }
+}
+
+function parseSchemaValues(
+  schema: Record<string, FlowV1SchemaEntry>,
+  draft: Record<string, string>,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const [name, definition] of Object.entries(schema)) {
+    const source = draft[name]?.trim() ?? "";
+    if (!source) {
+      if (definition.required && !definition.hasDefault) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} is required.`,
+        );
+      }
+      if (definition.hasDefault) {
+        values[name] = definition.config.default;
+      }
+      continue;
+    }
+    const kind = schemaHelperKind(definition.helper);
+    if (kind === "number") {
+      const numberValue = Number(source);
+      if (!Number.isFinite(numberValue)) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} must be a number.`,
+        );
+      }
+      if (
+        definition.config.integer === true &&
+        !Number.isInteger(numberValue)
+      ) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} must be a whole number.`,
+        );
+      }
+      if (
+        typeof definition.config.min === "number" &&
+        numberValue < definition.config.min
+      ) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} must be at least ${definition.config.min}.`,
+        );
+      }
+      if (
+        typeof definition.config.max === "number" &&
+        numberValue > definition.config.max
+      ) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} must be at most ${definition.config.max}.`,
+        );
+      }
+      values[name] = numberValue;
+      continue;
+    }
+    if (kind === "boolean") {
+      if (source !== "true" && source !== "false") {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} must be true or false.`,
+        );
+      }
+      values[name] = source === "true";
+      continue;
+    }
+    if (kind === "json") {
+      try {
+        values[name] = JSON.parse(source);
+      } catch (error) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} must be valid JSON: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      continue;
+    }
+    if (
+      typeof definition.config.minLength === "number" &&
+      source.length < definition.config.minLength
+    ) {
+      throw new SchemaFieldError(
+        name,
+        `${humanizeIdentifier(name)} must be at least ${definition.config.minLength} characters.`,
+      );
+    }
+    if (
+      typeof definition.config.maxLength === "number" &&
+      source.length > definition.config.maxLength
+    ) {
+      throw new SchemaFieldError(
+        name,
+        `${humanizeIdentifier(name)} must be at most ${definition.config.maxLength} characters.`,
+      );
+    }
+    values[name] = source;
+  }
+  return values;
+}
+
+function schemaHelperKind(
+  helper: string,
+): "string" | "number" | "boolean" | "json" {
+  if (helper.startsWith("number")) {
+    return "number";
+  }
+  if (helper.startsWith("boolean")) {
+    return "boolean";
+  }
+  if (helper.startsWith("json")) {
+    return "json";
+  }
+  return "string";
+}
+
+function humanizeIdentifier(value: string): string {
+  const words = value.replaceAll("_", " ").replace(/([a-z])([A-Z])/g, "$1 $2");
+  return `${words.slice(0, 1).toUpperCase()}${words.slice(1)}`;
+}
+
+function inputConstraintLabel(definition: FlowV1SchemaEntry): string | null {
+  const labels: string[] = [];
+  if (definition.hasDefault) {
+    labels.push("A default is already filled in");
+  }
+  if (typeof definition.config.minLength === "number") {
+    labels.push(`Minimum ${definition.config.minLength} characters`);
+  }
+  if (typeof definition.config.maxLength === "number") {
+    labels.push(`Maximum ${definition.config.maxLength} characters`);
+  }
+  if (typeof definition.config.min === "number") {
+    labels.push(`Minimum ${definition.config.min}`);
+  }
+  if (typeof definition.config.max === "number") {
+    labels.push(`Maximum ${definition.config.max}`);
+  }
+  return labels.length > 0 ? labels.join(" · ") : null;
 }
 
 function readActionError(payload: Record<string, unknown> | null): string {
@@ -1467,26 +2250,6 @@ function formatHumanValue(value: WorkflowValue): string {
     return value;
   }
   return JSON.stringify(value, null, 2);
-}
-
-function parseJsonObject(
-  source: string,
-  label: string,
-): Record<string, unknown> {
-  let value: unknown;
-  try {
-    value = JSON.parse(source);
-  } catch (error) {
-    throw new Error(
-      `${label} must be valid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object.`);
-  }
-  return value as Record<string, unknown>;
 }
 
 async function patchFlow(

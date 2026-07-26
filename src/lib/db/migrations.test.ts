@@ -108,6 +108,9 @@ describe("migrateDb", () => {
       expect(readColumnNames(database, "workflow_generations")).toContain(
         "agent",
       );
+      expect(readColumnNames(database, "workflow_node_attempts")).toContain(
+        "agent_session_key",
+      );
       expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
     } finally {
       database.close();
@@ -226,7 +229,7 @@ describe("migrateDb", () => {
     }
   });
 
-  it("preserves Flow v1 data while migrating schema 18 to 19", () => {
+  it("preserves Flow v1 data while migrating schema 18 to the current version", () => {
     const database = new Database(":memory:");
     try {
       database.exec(`
@@ -254,6 +257,22 @@ describe("migrateDb", () => {
           'flow-18', 'Preserved Flow', 'Existing Flow v1 data', 'active',
           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
         );
+
+        CREATE TABLE workflow_node_attempts (
+          id TEXT PRIMARY KEY,
+          cycle_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          input_json TEXT NOT NULL,
+          output_json TEXT,
+          error_json TEXT,
+          control_outcome TEXT,
+          agent_session_id TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT
+        );
       `);
 
       migrateDb(database);
@@ -276,6 +295,62 @@ describe("migrateDb", () => {
         default_agent: null,
         default_model: null,
         default_permission_mode: null,
+      });
+      expect(readColumnNames(database, "workflow_node_attempts")).toContain(
+        "agent_session_key",
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves Agent session ids while migrating schema 19 to 20", () => {
+    const database = new Database(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        INSERT INTO schema_migrations (version, applied_at)
+        VALUES (19, '2026-01-01T00:00:00.000Z');
+
+        CREATE TABLE workflow_node_attempts (
+          id TEXT PRIMARY KEY,
+          cycle_id TEXT NOT NULL,
+          run_id TEXT NOT NULL,
+          node_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          input_json TEXT NOT NULL,
+          output_json TEXT,
+          error_json TEXT,
+          control_outcome TEXT,
+          agent_session_id TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT
+        );
+        INSERT INTO workflow_node_attempts (
+          id, cycle_id, run_id, node_id, sequence, status, input_json,
+          agent_session_id, started_at
+        ) VALUES (
+          'attempt-1', 'cycle-1', 'run-1', 'implement', 1, 'completed', '{}',
+          'session-1', '2026-01-01T00:00:00.000Z'
+        );
+      `);
+
+      migrateDb(database);
+
+      expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(
+        database
+          .prepare(
+            "SELECT agent_session_id, agent_session_key FROM workflow_node_attempts WHERE id = ?",
+          )
+          .get("attempt-1"),
+      ).toEqual({
+        agent_session_id: "session-1",
+        agent_session_key: null,
       });
     } finally {
       database.close();

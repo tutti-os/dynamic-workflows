@@ -273,6 +273,8 @@ describe("flow v1 parser", () => {
                 agent({
                   id: "review",
                   prompt: "Review repository truth.",
+                  appendPrompt: "Re-review {{previousStep}}.",
+                  session: { mode: "inherit", key: "review_room" },
                   execution: { access: "review", isolation: "required" },
                   output: json({
                     validationMaxAttempts: 3,
@@ -320,12 +322,51 @@ describe("flow v1 parser", () => {
     });
     expect(acceptance?.loop?.steps[0]).toEqual(
       expect.objectContaining({
+        appendPrompt: "Re-review {{previousStep}}.",
+        session: { mode: "inherit", key: "review_room" },
         execution: { access: "review", isolation: "required" },
         output: expect.objectContaining({
           kind: "json",
           validationMaxAttempts: 3,
         }),
       }),
+    );
+  });
+
+  it("parses independent Agent sessions and rejects session reuse in Map steps", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const source = agent({
+              id: "source",
+              prompt: "Return items.",
+              session: { mode: "independent" },
+            });
+            const items = map({
+              id: "items",
+              source,
+              maxItems: 2,
+              steps: [
+                agent({
+                  id: "worker",
+                  prompt: "Handle {{item}}.",
+                  session: { mode: "inherit", key: "shared_map_room" },
+                }),
+              ],
+            });
+          `,
+        },
+      ]),
+    );
+
+    expect(parsed.nodes.find((node) => node.id === "source")?.session).toEqual({
+      mode: "independent",
+    });
+    expect(parsed.diagnostics.map((entry) => entry.code)).toContain(
+      "flow.map_session_invalid",
     );
   });
 

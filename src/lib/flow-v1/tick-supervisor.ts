@@ -7,6 +7,7 @@ import {
 } from "@/lib/db/workflows/human-tasks";
 import {
   finishFlowV1NodeAttempt,
+  getFlowV1NodeAttempt,
   listFlowV1NodeAttempts,
   setFlowV1NodeAttemptAgentSession,
   startFlowV1Effect,
@@ -456,6 +457,7 @@ export async function runFlowV1Tick(input: {
           ownerToken: token,
           nodeId: node.id,
           nodeInput,
+          agentSessionKey: inheritedSessionKey(node.session),
         });
         return { node, nodeInput, agentPrompt, attempt };
       });
@@ -555,6 +557,7 @@ export async function runFlowV1Tick(input: {
       let result: FlowV1NodeResult;
       let nodeAttempt = 0;
       let validationError: string | undefined;
+      let validationSessionId: string | undefined;
       do {
         nodeAttempt += 1;
         const attempt = startFlowV1NodeAttempt({
@@ -563,6 +566,8 @@ export async function runFlowV1Tick(input: {
           ownerToken: token,
           nodeId: node.id,
           nodeInput,
+          agentSessionKey: inheritedSessionKey(node.session),
+          agentSessionId: validationSessionId,
         });
         result = await executeNode({
           flow,
@@ -580,10 +585,12 @@ export async function runFlowV1Tick(input: {
           defaultPermissionMode: executionDefaultPermissionMode,
           agentPrompt:
             baseAgentPrompt && validationError
-              ? appendStructuredOutputCorrection(
-                  baseAgentPrompt,
-                  validationError,
-                )
+              ? validationSessionId
+                ? structuredOutputCorrectionPrompt(validationError)
+                : appendStructuredOutputCorrection(
+                    baseAgentPrompt,
+                    validationError,
+                  )
               : baseAgentPrompt,
           nodeProgress: checkpoint.nodes[node.id]?.progress,
           onNodeProgress: (progress) => {
@@ -615,6 +622,8 @@ export async function runFlowV1Tick(input: {
             ? { error: result.error }
             : {}),
         });
+        validationSessionId =
+          getFlowV1NodeAttempt(attempt.id)?.agentSessionId ?? undefined;
         executions += 1;
         if (
           !shouldRetryNode(node, result, nodeAttempt) ||
@@ -1741,109 +1750,130 @@ async function executeCompositeAgentStep(input: {
       ? structuredValidationMaxAttempts(input.step.output)
       : 1;
   let validationError: string | undefined;
+  let validationSessionId: string | undefined;
   try {
-  for (let validationAttempt = 1; validationAttempt <= maxAttempts; validationAttempt += 1) {
-    const attempt = startFlowV1NodeAttempt({
-      cycleId: input.parent.cycleId,
-      runId: input.parent.runId,
-      ownerToken: input.parent.ownerToken,
-      nodeId: `${input.parent.node.id}.${input.step.id}`,
-      nodeInput: input.context,
-    });
-    let text = "";
-    let result: FlowV1NodeResult;
-    try {
-      for await (const event of runAgent({
-        runId: `${input.parent.runId}:${input.parent.node.id}:${input.executionId}:validation-${validationAttempt}`,
-        agent:
-          resolveAgentSetting(
-            input.step.agent,
-            input.parent.nodeInput,
-            `$config.${input.step.id}.agent`,
-          ) ?? input.parent.defaultAgent ?? "mock",
-        cwd: executionCwd,
-        prompt: validationError
-          ? appendStructuredOutputCorrection(basePrompt, validationError)
-          : basePrompt,
-        title: input.step.label,
-        model:
-          resolveAgentSetting(
-            input.step.model,
-            input.parent.nodeInput,
-            `$config.${input.step.id}.model`,
-          ) ?? input.parent.defaultModel,
-        permissionMode:
-          resolveAgentSetting(
-            input.step.permissionMode,
-            input.parent.nodeInput,
-            `$config.${input.step.id}.permissionMode`,
-          ) ??
-          input.parent.defaultPermissionMode,
-        signal: input.parent.signal,
-        metadata: {
-          flowVersionId: input.parent.versionId,
-          cycleId: input.parent.cycleId,
-          tickId: input.parent.runId,
-          nodeId: input.parent.node.id,
-          compositeExecutionId: input.executionId,
-          attemptId: attempt.id,
-        },
-      })) {
-        if (event.type === "session_ref") {
-          setFlowV1NodeAttemptAgentSession({
-            attemptId: attempt.id,
-            ownerToken: input.parent.ownerToken,
-            agentSessionId: event.session.agentSessionId,
-          });
-        } else if (event.type === "text_delta") {
-          text += event.text;
-        } else if (event.type === "error") {
-          result = failure(event.code, event.message);
-          finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
-          return result;
-        } else if (
-          event.type === "done" &&
-          (event.status === "failed" || event.status === "canceled")
-        ) {
-          result = failure(
-            event.status === "canceled"
-              ? "flow_agent_canceled"
-              : "flow_agent_failed",
-            event.reason ?? `Agent ${input.step.id} ${event.status}.`,
-          );
-          finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
-          return result;
-        }
-      }
-      if (input.step.output?.kind === "json") {
-        result = readStructuredAgentOutput(
-          input.step.id,
-          text,
-          input.step.output.schema,
-        );
-      } else {
-        result = { status: "completed", output: text };
-      }
-    } catch (error) {
-      result = failure(
-        readErrorCode(error, "flow_agent_execution_failed"),
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
-    if (
-      result.status !== "failed" ||
-      result.error.retryable !== true ||
-      validationAttempt >= maxAttempts
+    for (
+      let validationAttempt = 1;
+      validationAttempt <= maxAttempts;
+      validationAttempt += 1
     ) {
-      return result;
+      const attempt = startFlowV1NodeAttempt({
+        cycleId: input.parent.cycleId,
+        runId: input.parent.runId,
+        ownerToken: input.parent.ownerToken,
+        nodeId: `${input.parent.node.id}.${input.step.id}`,
+        nodeInput: input.context,
+        agentSessionKey: inheritedSessionKey(input.step.session),
+        agentSessionId: validationSessionId,
+      });
+      const appendPrompt =
+        attempt.agentSessionId && input.step.appendPrompt
+          ? renderCompositeTemplate(input.step.appendPrompt, input.context)
+          : undefined;
+      const prompt =
+        validationAttempt > 1 && validationError && attempt.agentSessionId
+          ? structuredOutputCorrectionPrompt(validationError)
+          : appendPrompt
+            ? appendPrompt
+            : validationError
+              ? appendStructuredOutputCorrection(basePrompt, validationError)
+              : basePrompt;
+      let text = "";
+      let result: FlowV1NodeResult;
+      try {
+        for await (const event of runAgent({
+          runId: `${input.parent.runId}:${input.parent.node.id}:${input.executionId}:validation-${validationAttempt}`,
+          agent:
+            resolveAgentSetting(
+              input.step.agent,
+              input.parent.nodeInput,
+              `$config.${input.step.id}.agent`,
+            ) ?? input.parent.defaultAgent ?? "mock",
+          cwd: executionCwd,
+          prompt,
+          title: input.step.label,
+          model:
+            resolveAgentSetting(
+              input.step.model,
+              input.parent.nodeInput,
+              `$config.${input.step.id}.model`,
+            ) ?? input.parent.defaultModel,
+          permissionMode:
+            resolveAgentSetting(
+              input.step.permissionMode,
+              input.parent.nodeInput,
+              `$config.${input.step.id}.permissionMode`,
+            ) ?? input.parent.defaultPermissionMode,
+          resumeSessionId: attempt.agentSessionId ?? undefined,
+          signal: input.parent.signal,
+          metadata: {
+            flowVersionId: input.parent.versionId,
+            cycleId: input.parent.cycleId,
+            tickId: input.parent.runId,
+            nodeId: input.parent.node.id,
+            compositeExecutionId: input.executionId,
+            attemptId: attempt.id,
+          },
+        })) {
+          if (event.type === "session_ref") {
+            validationSessionId = event.session.agentSessionId;
+            setFlowV1NodeAttemptAgentSession({
+              attemptId: attempt.id,
+              ownerToken: input.parent.ownerToken,
+              agentSessionId: event.session.agentSessionId,
+            });
+          } else if (event.type === "text_delta") {
+            text += event.text;
+          } else if (event.type === "error") {
+            result = failure(event.code, event.message);
+            finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
+            return result;
+          } else if (
+            event.type === "done" &&
+            (event.status === "failed" || event.status === "canceled")
+          ) {
+            result = failure(
+              event.status === "canceled"
+                ? "flow_agent_canceled"
+                : "flow_agent_failed",
+              event.reason ?? `Agent ${input.step.id} ${event.status}.`,
+            );
+            finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
+            return result;
+          }
+        }
+        if (input.step.output?.kind === "json") {
+          result = readStructuredAgentOutput(
+            input.step.id,
+            text,
+            input.step.output.schema,
+          );
+        } else {
+          result = { status: "completed", output: text };
+        }
+        validationSessionId =
+          getFlowV1NodeAttempt(attempt.id)?.agentSessionId ??
+          validationSessionId;
+      } catch (error) {
+        result = failure(
+          readErrorCode(error, "flow_agent_execution_failed"),
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
+      if (
+        result.status !== "failed" ||
+        result.error.retryable !== true ||
+        validationAttempt >= maxAttempts
+      ) {
+        return result;
+      }
+      validationError = result.error.message;
     }
-    validationError = result.error.message;
-  }
-  return failure(
-    "flow_agent_json_invalid",
-    `Agent ${input.step.id} exhausted structured output validation attempts.`,
-  );
+    return failure(
+      "flow_agent_json_invalid",
+      `Agent ${input.step.id} exhausted structured output validation attempts.`,
+    );
   } finally {
     await reviewWorkspace?.cleanup();
   }
@@ -2034,7 +2064,11 @@ function readContextReference(
   expression: string,
 ): FlowV1JsonValue | undefined {
   const [source, ...parts] = expression.split(".");
-  return source ? readPath(context[source], parts) : undefined;
+  if (!source) {
+    return undefined;
+  }
+  const root = context[source];
+  return root === null && parts.length > 0 ? null : readPath(root, parts);
 }
 
 async function executeAgent(
@@ -2071,6 +2105,7 @@ async function executeAgent(
     }
   }
   const executionCwd = reviewWorkspace?.cwd ?? cwd;
+  const attempt = getFlowV1NodeAttempt(input.attemptId);
   let text = "";
   try {
     for await (const event of runAgent({
@@ -2096,6 +2131,7 @@ async function executeAgent(
           input.nodeInput,
           "$config.permissionMode",
         ) ?? input.defaultPermissionMode,
+      resumeSessionId: attempt?.agentSessionId ?? undefined,
       signal: input.signal,
       metadata: {
         flowVersionId: input.versionId,
@@ -2640,6 +2676,18 @@ function appendStructuredOutputCorrection(
 Your previous response was rejected by deterministic output validation:
 ${validationError}
 Return only one corrected JSON value matching the declared schema.`;
+}
+
+function structuredOutputCorrectionPrompt(validationError: string): string {
+  return `Your previous response was rejected by deterministic output validation:
+${validationError}
+Do not redo the task. Return only one corrected JSON value matching the declared schema.`;
+}
+
+function inheritedSessionKey(
+  session: FlowV1Node["session"] | FlowV1CompositeAgentStep["session"],
+): string | undefined {
+  return session?.mode === "inherit" ? session.key : undefined;
 }
 
 async function waitForRetry(

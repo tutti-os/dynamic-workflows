@@ -125,6 +125,12 @@ belongs in a Gate checked by later Ticks.
 finding survives a Tick boundary without depending on an inherited Agent
 session.
 
+For an RD → reviewer repair loop, keep the implementation role on one inherited
+session and send only the latest blockers through `appendPrompt`. Start every
+reviewer round with `session: { mode: "independent" }`; return typed JSON and
+carry only stable criteria and blockers into the next fresh review. This avoids
+reviewer anchoring without replaying the entire conversation or report.
+
 ## Human decisions
 
 Human nodes are durable. Put the evidence in `context`, expose explicit action
@@ -141,11 +147,16 @@ Agent. Bind the Agent with `workspace: workspace` and declare
 prompt telling the Agent to change directories. Commit, push, and PR creation
 use separate Effects.
 
-Independent repository reviewers should declare
-`execution: { access: "review", isolation: "required" }`. The local host gives
-the reviewer a disposable Git snapshot containing the current tracked and
-untracked change set. Reviewer writes are discarded and cannot modify the
-implementation workspace.
+Choose reviewer workspace semantics explicitly:
+
+- `execution: { access: "review", isolation: "shared" }` runs in the exact
+  implementation workspace. Use it for an RD → reviewer loop that must inspect
+  the same worktree identity and uncommitted state; pair it with an appropriate
+  reviewer permission mode because the host does not discard writes.
+- `execution: { access: "review", isolation: "required" }` gives the reviewer a
+  disposable Git snapshot containing the current tracked and untracked change
+  set. Use it when write containment matters more than preserving exact
+  worktree identity. Reviewer writes are discarded.
 
 Declare cleanup as a Finally node. Use `retainOnFailure: true` when the failed
 workspace is required for retry or inspection; successful and canceled Cycles

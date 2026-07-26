@@ -28,6 +28,7 @@ import {
   type FlowV1RuntimeDefinition,
   type FlowV1ScheduleDefinition,
   type FlowV1SchemaEntry,
+  type FlowV1SessionSpec,
   type ParsedFlowV1,
 } from "./types";
 
@@ -950,6 +951,20 @@ function addNode(
     }
   }
   const prompt = readString(properties?.get("prompt"));
+  const session =
+    kind === "agent"
+      ? readSessionSpec(properties?.get("session"), `nodes.${id}.session`, state)
+      : undefined;
+  if (kind !== "agent" && properties?.has("session")) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.session_owner_invalid",
+        `Only Agent nodes and Loop Agent steps may declare session.`,
+        `nodes.${id}.session`,
+        properties.get("session"),
+      ),
+    );
+  }
   if (prompt) {
     for (const [index, expression] of extractTemplateReferences(prompt).entries()) {
       const reference = referenceFromExpression(expression);
@@ -1104,6 +1119,7 @@ function addNode(
       ? { file: readString(properties?.get("file")) }
       : {}),
     ...(prompt ? { prompt } : {}),
+    ...(session ? { session } : {}),
     ...(agent ? { agent } : {}),
     ...(model ? { model } : {}),
     ...(permissionMode ? { permissionMode } : {}),
@@ -1272,6 +1288,60 @@ function readExecutionContract(
     diagnostic(
       "flow.execution_contract_invalid",
       'Execution contract requires access "read", "write", or "review" and isolation "shared" or "required".',
+      diagnosticPath,
+      node,
+    ),
+  );
+  return undefined;
+}
+
+function readSessionSpec(
+  node: AstNode | undefined,
+  diagnosticPath: string,
+  state: ParserState,
+): FlowV1SessionSpec | undefined {
+  if (!node) {
+    return undefined;
+  }
+  const properties = readObjectProperties(node);
+  if (!properties) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.session_invalid",
+        "Session must be an object literal.",
+        diagnosticPath,
+        node,
+      ),
+    );
+    return undefined;
+  }
+  const mode = readString(properties.get("mode"));
+  if (mode === "independent") {
+    if (properties.has("key")) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.session_invalid",
+          'Independent sessions must not declare a key.',
+          diagnosticPath,
+          node,
+        ),
+      );
+      return undefined;
+    }
+    return { mode: "independent" };
+  }
+  const key = readString(properties.get("key"))?.trim();
+  if (
+    mode === "inherit" &&
+    key &&
+    /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/u.test(key)
+  ) {
+    return { mode: "inherit", key };
+  }
+  state.diagnostics.push(
+    diagnostic(
+      "flow.session_invalid",
+      'Session requires either { mode: "independent" } or { mode: "inherit", key: "stable_key" }.',
       diagnosticPath,
       node,
     ),
@@ -1572,11 +1642,36 @@ function readCompositeSteps(
       `nodes.${nodeId}.steps.${id}.execution`,
       state,
     );
+    const appendPrompt = allowHuman
+      ? readString(properties?.get("appendPrompt"))
+      : undefined;
+    const session = allowHuman
+      ? readSessionSpec(
+          properties?.get("session"),
+          `nodes.${nodeId}.steps.${id}.session`,
+          state,
+        )
+      : undefined;
+    if (
+      !allowHuman &&
+      (properties?.has("session") || properties?.has("appendPrompt"))
+    ) {
+      state.diagnostics.push(
+        diagnostic(
+          "flow.map_session_invalid",
+          `Map Agent ${nodeId}.${id} cannot reuse a session or declare appendPrompt; Map items must remain independent.`,
+          `nodes.${nodeId}.steps.${id}`,
+          entry,
+        ),
+      );
+    }
     steps.push({
       id,
       kind: "agent",
       label: readString(properties?.get("label")) ?? id,
       prompt,
+      ...(appendPrompt ? { appendPrompt } : {}),
+      ...(session ? { session } : {}),
       ...(readResolvableString(properties?.get("agent"))
         ? { agent: readResolvableString(properties?.get("agent")) }
         : {}),

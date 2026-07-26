@@ -116,6 +116,48 @@ is recorded as a failed Node Attempt and its exact validation error is passed
 to the next attempt. Human Tasks are durable and end the current Tick while
 pending.
 
+Agent nodes and Loop Agent steps may declare an explicit Session policy:
+
+```js
+const implement = agent({
+  id: "implement",
+  session: { mode: "inherit", key: "rd_room" },
+  prompt: "Implement the requirement.",
+});
+
+const acceptance = loop({
+  id: "acceptance",
+  maxIterations: 3,
+  steps: [
+    agent({
+      id: "repair",
+      session: { mode: "inherit", key: "rd_room" },
+      prompt: "Repair from a complete fallback context.",
+      appendPrompt: "Fix only {{previousIteration.outputs.review.blockers}}.",
+    }),
+    agent({
+      id: "review",
+      session: { mode: "independent" },
+      prompt: "Review repository truth. Prior criteria: {{previousStep.criteria}}.",
+    }),
+  ],
+  until: { source: "review", finalStatus: "PASS" },
+});
+```
+
+- `inherit` resumes the latest Agent session with that key in the current Cycle.
+  A key may cross Agent node and Loop-step boundaries when agent target,
+  permission mode, model, and effective cwd remain compatible.
+- On an inherited Loop step, `prompt` initializes a missing session and
+  `appendPrompt` is the incremental turn sent when the session already exists.
+- `independent` always creates a fresh session. Reviewer roles should normally
+  use it and carry only compact structured criteria/blockers through Loop data.
+- Session keys are durable runtime state within a Cycle, not cross-Cycle Memory.
+  Declare data/control ordering between all users of one key; do not race the
+  same conversation from parallel nodes.
+- Map steps cannot declare `session` or `appendPrompt`: items must not leak
+  conversation state into one another.
+
 ## Transform, Script, and Gate
 
 Transform is a pure, replayable JSON projection:
@@ -244,8 +286,10 @@ a write Map must safely serialize it.
 Loop step templates receive `iteration`, `previous` (the preceding step in the
 current iteration), `steps` (current-iteration outputs), `previousIteration`
 (the complete preceding iteration record, or `null`), and `history` (all
-completed iteration records). Use these explicit values for repair feedback;
-completed Agent sessions are not hidden context for a later Tick.
+completed iteration records). Use these explicit values for repair feedback and
+independent roles. An explicitly inherited Agent session may resume in a later
+Tick of the same Cycle; completed sessions never become implicit cross-Cycle
+Memory.
 
 ## Memory
 

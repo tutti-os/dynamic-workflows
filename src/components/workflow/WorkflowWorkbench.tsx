@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
+  ConfirmationDialog,
   CopyIcon,
   DropdownMenu,
   DropdownMenuContent,
@@ -15,7 +16,10 @@ import {
   MoreHorizontalIcon,
 } from "@tutti-os/ui-system";
 import { WorkflowErrorBoundary } from "@/components/workflow/WorkflowErrorBoundary";
-import { FlowRuntimeOverview } from "@/components/workflow/FlowRuntimeOverview";
+import {
+  FlowRuntimeOverview,
+  type FlowView,
+} from "@/components/workflow/FlowRuntimeOverview";
 import { FlowVersionReviewPanel } from "@/components/workflow/FlowVersionReview";
 import {
   hasCurrentVersion,
@@ -51,11 +55,12 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
     null,
   );
-  const [surface, setSurface] = useState<"runtime" | "versions">("runtime");
+  const [surface, setSurface] = useState<FlowView | "versions">("live");
   const initialSurfaceResolved = useRef(false);
   const [mutating, setMutating] = useState<"duplicate" | "delete" | null>(
     null,
   );
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -78,7 +83,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
       setSurface("versions");
       initialSurfaceResolved.current = true;
     } else if (!initialSurfaceResolved.current) {
-      setSurface(next.draftReview ? "versions" : "runtime");
+      setSurface("live");
       initialSurfaceResolved.current = true;
     }
     setError(null);
@@ -196,9 +201,6 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
   }
 
   async function deleteFlow() {
-    if (!window.confirm("Delete this Flow and all of its Cycle history?")) {
-      return;
-    }
     setMutating("delete");
     setError(null);
     try {
@@ -208,6 +210,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
       if (!response.ok) {
         throw new Error("Flow could not be deleted.");
       }
+      setDeleteConfirmOpen(false);
       router.push("/");
     } catch (deleteError) {
       setError(
@@ -298,7 +301,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
                 className="detail-status"
                 data-tone={detailStatusTone(detailStatus)}
               >
-                {detailStatus.replaceAll("_", " ")}
+                {detailStatusLabel(detailStatus)}
               </span>
             </div>
             <div className="detail-meta">
@@ -312,28 +315,32 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
           <div
             className="detail-surface-tabs"
             role="tablist"
-            aria-label="Workflow detail view"
+            aria-label="Workflow detail section"
           >
-            <button
-              aria-selected={surface === "runtime"}
-              className={surface === "runtime" ? "is-active" : undefined}
-              disabled={!detail.flowV1}
-              onClick={() => setSurface("runtime")}
-              role="tab"
-              type="button"
-            >
-              Runtime
-            </button>
-            <button
-              aria-selected={surface === "versions"}
-              className={surface === "versions" ? "is-active" : undefined}
-              disabled={!detail.versionReview}
-              onClick={() => setSurface("versions")}
-              role="tab"
-              type="button"
-            >
-              Versions
-            </button>
+            {(
+              [
+                ["design", "Flow"],
+                ["live", "Activity"],
+                ["review", "History"],
+                ["versions", "Versions"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                aria-selected={surface === value}
+                className={surface === value ? "is-active" : undefined}
+                disabled={
+                  value === "versions"
+                    ? !detail.versionReview
+                    : !detail.flowV1
+                }
+                key={value}
+                onClick={() => setSurface(value)}
+                role="tab"
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -358,7 +365,7 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
               <DropdownMenuItem
                 variant="destructive"
                 disabled={mutating !== null}
-                onSelect={() => void deleteFlow()}
+                onSelect={() => setDeleteConfirmOpen(true)}
               >
                 <FailedLinedIcon data-icon="inline-start" />
                 {mutating === "delete" ? "Deleting…" : "Delete"}
@@ -378,13 +385,27 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
           workflowId={props.workflowId}
         />
       ) : null}
-      {surface === "runtime" && detail.flowV1 ? (
+      {surface !== "versions" && detail.flowV1 ? (
         <FlowRuntimeOverview
           workflowId={props.workflowId}
           projection={detail.flowV1}
+          view={surface}
+          onViewChange={setSurface}
           onRefresh={load}
         />
       ) : null}
+      <ConfirmationDialog
+        cancelLabel="Keep workflow"
+        confirmBusy={mutating === "delete"}
+        confirmLabel={mutating === "delete" ? "Deleting…" : "Delete workflow"}
+        description="This permanently deletes the workflow and its complete run history."
+        disableCloseWhileBusy
+        onConfirm={() => void deleteFlow()}
+        onOpenChange={setDeleteConfirmOpen}
+        open={deleteConfirmOpen}
+        title={`Delete “${detail.workflow.name}”?`}
+        tone="destructive"
+      />
     </main>
   );
 }
@@ -405,4 +426,22 @@ function detailStatusTone(
     return "danger";
   }
   return "neutral";
+}
+
+function detailStatusLabel(status: string): string {
+  switch (status) {
+    case "runnable":
+      return "ready";
+    case "waiting_human":
+      return "needs review";
+    case "waiting_gate":
+      return "waiting";
+    case "paused_failed":
+    case "paused_uncertain":
+    case "paused_conflict":
+    case "paused_budget":
+      return "needs attention";
+    default:
+      return status.replaceAll("_", " ");
+  }
 }

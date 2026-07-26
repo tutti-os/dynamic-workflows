@@ -6,8 +6,10 @@ import type Database from "better-sqlite3";
  *
  * Version 19 is the first incremental Flow v1 migration. From this version
  * forward, existing Flow data must be preserved.
+ *
+ * Version 20 restores explicit Agent session keys for durable session reuse.
  */
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 20;
 
 export function migrateDb(database: Database.Database): void {
   database.exec(`
@@ -26,6 +28,10 @@ export function migrateDb(database: Database.Database): void {
     database.transaction(() => {
       if (currentVersion === 18) {
         migrateFlowV1Schema18To19(database);
+        migrateFlowV1Schema19To20(database);
+        recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
+      } else if (currentVersion === 19) {
+        migrateFlowV1Schema19To20(database);
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       } else {
         dropWorkflowSchema(database);
@@ -55,6 +61,14 @@ function migrateFlowV1Schema18To19(database: Database.Database): void {
     ALTER TABLE workflows ADD COLUMN default_agent TEXT;
     ALTER TABLE workflows ADD COLUMN default_model TEXT;
     ALTER TABLE workflows ADD COLUMN default_permission_mode TEXT;
+  `);
+}
+
+function migrateFlowV1Schema19To20(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE workflow_node_attempts ADD COLUMN agent_session_key TEXT;
+    CREATE INDEX idx_workflow_node_attempts_cycle_session
+      ON workflow_node_attempts(cycle_id, agent_session_key, started_at);
   `);
 }
 
@@ -318,6 +332,7 @@ function createFlowV1Schema(database: Database.Database): void {
       output_json TEXT,
       error_json TEXT,
       control_outcome TEXT,
+      agent_session_key TEXT,
       agent_session_id TEXT,
       started_at TEXT NOT NULL,
       finished_at TEXT,
@@ -328,6 +343,9 @@ function createFlowV1Schema(database: Database.Database): void {
 
     CREATE INDEX idx_workflow_node_attempts_run
       ON workflow_node_attempts(run_id, started_at);
+
+    CREATE INDEX idx_workflow_node_attempts_cycle_session
+      ON workflow_node_attempts(cycle_id, agent_session_key, started_at);
 
     CREATE TABLE workflow_effects (
       id TEXT PRIMARY KEY,

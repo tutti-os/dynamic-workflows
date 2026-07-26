@@ -194,6 +194,7 @@ const implement = agent({
   },
   workspace,
   execution: { access: "write", isolation: "required" },
+  session: { mode: "inherit", key: "rd_room" },
   prompt: "Work only inside the prepared git worktree at {{workspace.path}} on branch {{workspace.branch}}. Implement the approved refactor plan for {{candidate.path}} and reduce it to at most {{lineThreshold}} lines without weakening behavior. Follow {{plan}} and run the smallest focused tests that cover the change. Do not install dependencies or run repository-wide checks unless the focused test cannot otherwise run. Leave the worktree ready for review and do not modify the parent checkout.",
 });
 const acceptance = loop({
@@ -216,7 +217,9 @@ const acceptance = loop({
     agent({
       id: "rd_repair",
       label: "RD repair QA blockers",
-      prompt: "Act as the RD owner inside the prepared worktree. Repair only the blocking findings from the previous QA iteration while preserving the approved boundaries and behavior. Re-inspect repository truth, keep {{candidate.path}} at or below {{lineThreshold}} lines, run focused checks, and leave all changes uncommitted. Do not dismiss blockers without evidence. Approved plan: {{plan}} Previous QA iteration: {{previousIteration}}",
+      session: { mode: "inherit", key: "rd_room" },
+      prompt: "Act as the RD owner inside the prepared worktree at {{workspace.path}}. Repair only the blocking findings from the previous QA iteration while preserving the approved boundaries and behavior. Re-inspect repository truth, keep {{candidate.path}} at or below {{lineThreshold}} lines, run focused checks, and leave all changes uncommitted. Do not dismiss blockers without evidence. Approved plan: {{plan}} QA blockers: {{previousIteration.outputs.qa_review.blockers}} QA suggestions: {{previousIteration.outputs.qa_review.suggestions}}",
+      appendPrompt: "Continue in the same RD session and prepared worktree. Re-anchor on git status, git diff, and the files implicated by QA; repository truth overrides stale session memory. Repair only the latest blocking findings, preserve the approved scope, run focused checks, and leave changes uncommitted. QA blockers: {{previousIteration.outputs.qa_review.blockers}} QA suggestions: {{previousIteration.outputs.qa_review.suggestions}}",
     }),
     agent({
       id: "qa_review",
@@ -224,20 +227,23 @@ const acceptance = loop({
       agent: ref("params.qaAgent"),
       model: ref("params.qaModel"),
       permissionMode: ref("params.qaPermission"),
-      execution: { access: "review", isolation: "required" },
+      session: { mode: "independent" },
+      execution: { access: "review", isolation: "shared" },
       output: json({ schema: {
         type: "object",
-        required: ["status", "blockers", "risks", "checks", "evidence", "unverified"],
+        required: ["status", "criteria", "blockers", "suggestions", "risks", "checks", "evidence", "unverified"],
         properties: {
           status: { enum: ["PASS", "FAIL"] },
+          criteria: { type: "array", items: { type: "string" } },
           blockers: { type: "array", items: { type: "string" } },
+          suggestions: { type: "array", items: { type: "string" } },
           risks: { type: "array", items: { type: "string" } },
           checks: { type: "array", items: { type: "string" } },
           evidence: { type: "array", items: { type: "string" } },
           unverified: { type: "array", items: { type: "string" } },
         },
       } }),
-      prompt: "Act as adversarial QA in a disposable review workspace. Judge repository truth against the approved plan, behavior preservation, the {{lineThreshold}}-line limit for {{candidate.path}}, edge cases, and focused test results. Inspect the diff and run appropriate read-safe or test commands; never trust the RD narrative as evidence. PASS only when there are no blocking defects and every required claim is supported. Return valid JSON with status PASS or FAIL plus blockers, risks, checks, evidence, and unverified arrays. Approved plan: {{plan}} Initial implementation record: {{implement}} Previous QA record: {{previousStep}}",
+      prompt: "Act as adversarial QA in a fresh independent session, using the prepared worktree at {{workspace.path}} as repository truth. Judge the approved plan, behavior preservation, the {{lineThreshold}}-line limit for {{candidate.path}}, edge cases, and focused test results; do not consume or trust any RD narrative. Reuse the previous criteria when the requirement is unchanged and re-check every previous blocker. On intermediate FAIL rounds, focus on blocker repairs, their impact area, and all new diff; before PASS, cover the complete change surface and required checks. PASS only when there are no blocking defects and every required claim is supported. Return valid JSON with status PASS or FAIL plus criteria, blockers, suggestions, risks, checks, evidence, and unverified arrays. Approved plan: {{plan}} Previous QA criteria: {{previousStep.criteria}} Previous QA blockers: {{previousStep.blockers}}",
     }),
   ],
   until: { source: "qa_review", finalStatus: "PASS" },

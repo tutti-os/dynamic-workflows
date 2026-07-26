@@ -214,6 +214,148 @@ describe("Flow v1 Tick supervisor", () => {
     ).toEqual(["failed", "completed"]);
   });
 
+  it("reuses the RD session while starting every reviewer round independently", async () => {
+    let reviewerRound = 0;
+    runAgentMock.mockImplementation(async function* (input) {
+      const isReviewer = input.title === "Independent QA";
+      const isRepair = input.title === "RD repair";
+      if (isReviewer) {
+        reviewerRound += 1;
+      }
+      const sessionId = isReviewer
+        ? `review-session-${reviewerRound}`
+        : input.resumeSessionId ?? "rd-session-1";
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: sessionId,
+          agent: input.agent,
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: isReviewer
+          ? JSON.stringify({
+              status: reviewerRound === 1 ? "FAIL" : "PASS",
+              criteria: ["behavior preserved"],
+              blockers:
+                reviewerRound === 1 ? ["missing focused test"] : [],
+            })
+          : isRepair
+            ? "repaired"
+            : "implemented",
+      };
+      yield { type: "done", status: "completed" };
+    });
+    const fixture = await createRunnableFlow(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const implement = agent({
+              id: "implement",
+              label: "RD implement",
+              prompt: "Implement the requirement.",
+              session: { mode: "inherit", key: "rd_room" },
+            });
+            const acceptance = loop({
+              id: "acceptance",
+              inputs: { implement },
+              maxIterations: 2,
+              onMaxIterations: "fail",
+              firstIteration: { startAt: "qa" },
+              steps: [
+                agent({
+                  id: "repair",
+                  label: "RD repair",
+                  session: { mode: "inherit", key: "rd_room" },
+                  prompt: "Repair from a fresh fallback context.",
+                  appendPrompt: "Fix only {{previousIteration.outputs.qa.blockers}}.",
+                }),
+                agent({
+                  id: "qa",
+                  label: "Independent QA",
+                  session: { mode: "independent" },
+                  prompt: "Review independently. Previous criteria: {{previousStep.criteria}}.",
+                  output: json({
+                    schema: {
+                      type: "object",
+                      required: ["status", "criteria", "blockers"],
+                      properties: {
+                        status: { enum: ["PASS", "FAIL"] },
+                        criteria: { type: "array", items: { type: "string" } },
+                        blockers: { type: "array", items: { type: "string" } },
+                      },
+                    },
+                  }),
+                }),
+              ],
+              until: { source: "qa", finalStatus: "PASS" },
+            });
+            completeCycle({ id: "done", inputs: { acceptance } });
+          `,
+        },
+      ]),
+    );
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const attempts = await import("@/lib/db/workflows/flow-attempts");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "session-aware-loop",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    const result = await runFlowV1Tick({
+      runId: started.run.id,
+      projectCwd: dataDir,
+      defaultAgent: "local:codex",
+    });
+
+    expect(result.stopReason).toBe("cycle_completed");
+    expect(runAgentMock).toHaveBeenCalledTimes(4);
+    expect(
+      runAgentMock.mock.calls.map(([input]) => ({
+        title: input.title,
+        prompt: input.prompt,
+        resumeSessionId: input.resumeSessionId,
+      })),
+    ).toEqual([
+      {
+        title: "RD implement",
+        prompt: "Implement the requirement.",
+        resumeSessionId: undefined,
+      },
+      {
+        title: "Independent QA",
+        prompt: "Review independently. Previous criteria: null.",
+        resumeSessionId: undefined,
+      },
+      {
+        title: "RD repair",
+        prompt: 'Fix only ["missing focused test"].',
+        resumeSessionId: "rd-session-1",
+      },
+      {
+        title: "Independent QA",
+        prompt:
+          'Review independently. Previous criteria: ["behavior preserved"].',
+        resumeSessionId: undefined,
+      },
+    ]);
+    expect(
+      attempts
+        .listFlowV1NodeAttempts(started.cycle.id)
+        .filter((attempt) => attempt.agentSessionKey === "rd_room")
+        .map((attempt) => attempt.agentSessionId),
+    ).toEqual(["rd-session-1", "rd-session-1"]);
+  });
+
   it("retries Script only for declared structural error codes and records every Attempt", async () => {
     const fixture = await createRunnableFlow(scriptRetryBundle());
     const runtime = await import("@/lib/db/workflows/flow-runtime");

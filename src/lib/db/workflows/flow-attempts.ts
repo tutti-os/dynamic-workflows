@@ -29,6 +29,7 @@ type AttemptRow = {
   output_json: string | null;
   error_json: string | null;
   control_outcome: string | null;
+  agent_session_key: string | null;
   agent_session_id: string | null;
   started_at: string;
   finished_at: string | null;
@@ -56,6 +57,7 @@ export function startFlowV1NodeAttempt(input: {
   ownerToken: string;
   nodeId: string;
   nodeInput: FlowV1JsonObject;
+  agentSessionKey?: string;
   agentSessionId?: string;
 }): FlowV1NodeAttemptRecord {
   assertTickOwnership(input.runId, input.cycleId, input.ownerToken);
@@ -68,6 +70,27 @@ export function startFlowV1NodeAttempt(input: {
   const database = getDb();
   return database.transaction(() => {
     const id = randomUUID();
+    const agentSessionKey = input.agentSessionKey?.trim() || null;
+    const inheritedSessionId =
+      input.agentSessionId?.trim() ||
+      (agentSessionKey
+        ? (
+            database
+              .prepare(
+                `
+                SELECT agent_session_id
+                FROM workflow_node_attempts
+                WHERE cycle_id = ? AND agent_session_key = ?
+                  AND agent_session_id IS NOT NULL
+                ORDER BY started_at DESC, rowid DESC
+                LIMIT 1
+              `,
+              )
+              .get(input.cycleId, agentSessionKey) as
+              | { agent_session_id: string }
+              | undefined
+          )?.agent_session_id
+        : undefined);
     const sequence = (
       database
         .prepare(
@@ -84,9 +107,10 @@ export function startFlowV1NodeAttempt(input: {
         `
         INSERT INTO workflow_node_attempts (
           id, cycle_id, run_id, node_id, sequence, status, input_json,
-          output_json, error_json, control_outcome, agent_session_id,
+          output_json, error_json, control_outcome, agent_session_key,
+          agent_session_id,
           started_at, finished_at
-        ) VALUES (?, ?, ?, ?, ?, 'running', ?, NULL, NULL, NULL, ?, ?, NULL)
+        ) VALUES (?, ?, ?, ?, ?, 'running', ?, NULL, NULL, NULL, ?, ?, ?, NULL)
       `,
       )
       .run(
@@ -100,7 +124,8 @@ export function startFlowV1NodeAttempt(input: {
           column: "input_json",
           id,
         }),
-        input.agentSessionId ?? null,
+        agentSessionKey,
+        inheritedSessionId ?? null,
         new Date().toISOString(),
       );
     return requireAttempt(id);
@@ -444,6 +469,7 @@ function mapAttempt(row: AttemptRow): FlowV1NodeAttemptRecord {
         })
       : null,
     controlOutcome: row.control_outcome,
+    agentSessionKey: row.agent_session_key,
     agentSessionId: row.agent_session_id,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
