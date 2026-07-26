@@ -4,10 +4,24 @@ import {
   Background,
   Controls,
   MarkerType,
+  Position,
   ReactFlow,
   type Edge as ReactFlowEdge,
   type Node as ReactFlowNode,
 } from "@xyflow/react";
+import {
+  Ban,
+  Bot,
+  Braces,
+  Brain,
+  CheckCircle2,
+  Code2,
+  GitBranch,
+  Layers3,
+  Repeat2,
+  UserRound,
+  Zap,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
 import {
@@ -609,15 +623,32 @@ function buildFlowGraphElements(
   );
   const nodes = projection.graph.nodes.map((node) => {
     const level = levels.get(node.id) ?? 0;
-    const row = groups.get(level)?.indexOf(node.id) ?? 0;
+    const levelNodes = groups.get(level) ?? [];
+    const column = levelNodes.indexOf(node.id);
+    const centeredColumn = column - (levelNodes.length - 1) / 2;
     const state = projection.checkpoint?.nodes[node.id];
     const status =
       projection.mode === "live" ? state?.status ?? "idle" : "design";
+    const summary =
+      projection.mode === "live"
+        ? [
+            status,
+            state?.outcome ? `outcome ${state.outcome}` : undefined,
+            state?.attemptCount
+              ? `${state.attemptCount} attempt(s)`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : flowNodeDesignSummary(node);
     return {
       id: node.id,
-      position: { x: level * 260, y: row * 125 },
+      position: { x: centeredColumn * 300, y: level * 178 },
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top,
       className: [
         "flow-graph-node",
+        `flow-graph-node-kind-${node.kind}`,
         `flow-graph-node-${status}`,
         currentNodeId === node.id ? "is-current" : "",
       ]
@@ -626,27 +657,19 @@ function buildFlowGraphElements(
       data: {
         label: (
           <div className="flow-graph-node-content">
-            <span>{node.kind}</span>
-            <strong>{node.label}</strong>
-            <small>
-              {projection.mode === "live"
-                ? [
-                    status,
-                    state?.outcome
-                      ? `outcome ${state.outcome}`
-                      : undefined,
-                    state?.attemptCount
-                      ? `${state.attemptCount} attempt(s)`
-                      : undefined,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")
-                : node.execution
-                  ? `${node.execution.access} · ${node.execution.isolation}`
-                  : Object.keys(node.inputs).length > 0
-                    ? `${Object.keys(node.inputs).length} input(s)`
-                    : "root"}
-            </small>
+            <div className="flow-graph-node-kind-row">
+              <span className="flow-graph-node-icon" aria-hidden="true">
+                <FlowNodeKindIcon kind={node.kind} />
+              </span>
+              <span className="flow-graph-node-kind-label">
+                {flowNodeKindLabel(node.kind)}
+              </span>
+              {node.kind === "agent" ? (
+                <span className="flow-graph-agent-badge">Reasoning</span>
+              ) : null}
+            </div>
+            <strong className="flow-graph-node-title">{node.label}</strong>
+            <small className="flow-graph-node-summary">{summary}</small>
           </div>
         ),
       },
@@ -685,6 +708,91 @@ function buildFlowGraphElements(
     };
   });
   return { nodes, edges };
+}
+
+function FlowNodeKindIcon(props: { kind: FlowV1Node["kind"] }) {
+  switch (props.kind) {
+    case "agent":
+      return <Bot size={15} />;
+    case "human":
+      return <UserRound size={15} />;
+    case "script":
+      return <Code2 size={15} />;
+    case "transform":
+      return <Braces size={15} />;
+    case "gate":
+      return <GitBranch size={15} />;
+    case "effect":
+      return <Zap size={15} />;
+    case "finally":
+      return <CheckCircle2 size={15} />;
+    case "loop":
+      return <Repeat2 size={15} />;
+    case "map":
+      return <Layers3 size={15} />;
+    case "remember":
+      return <Brain size={15} />;
+    case "complete_cycle":
+      return <CheckCircle2 size={15} />;
+    case "cancel_cycle":
+      return <Ban size={15} />;
+  }
+}
+
+function flowNodeKindLabel(kind: FlowV1Node["kind"]): string {
+  switch (kind) {
+    case "complete_cycle":
+      return "Complete";
+    case "cancel_cycle":
+      return "Cancel";
+    default:
+      return capitalize(kind);
+  }
+}
+
+function flowNodeDesignSummary(node: FlowV1Node): string {
+  if (node.kind === "agent") {
+    const agent = typeof node.agent === "string" ? node.agent : "Agent";
+    const model = typeof node.model === "string" ? node.model : null;
+    return [agent, model, node.execution?.access]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (node.kind === "human") {
+    return "Human decision checkpoint";
+  }
+  if (node.kind === "effect") {
+    return node.file ? `External effect · ${node.file}` : "External effect";
+  }
+  if (
+    node.kind === "script" ||
+    node.kind === "transform" ||
+    node.kind === "finally"
+  ) {
+    return node.file
+      ? `${flowNodeKindLabel(node.kind)} · ${node.file}`
+      : "Code execution";
+  }
+  if (node.kind === "gate") {
+    return `${node.outcomes.length} routed outcome(s)`;
+  }
+  if (node.kind === "loop") {
+    return `${node.loop?.steps.length ?? 0} step loop`;
+  }
+  if (node.kind === "map") {
+    return `${node.map?.steps.length ?? 0} step map`;
+  }
+  if (node.kind === "remember") {
+    return "Persist workflow memory";
+  }
+  if (node.kind === "complete_cycle" || node.kind === "cancel_cycle") {
+    return "Terminal node";
+  }
+  if (node.execution) {
+    return `${node.execution.access} · ${node.execution.isolation}`;
+  }
+  const inputCount = Object.keys(node.inputs).length;
+  return inputCount > 0 ? `${inputCount} input(s)` : "Entry node";
 }
 
 function layoutFlowGraph(

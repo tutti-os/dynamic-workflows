@@ -62,6 +62,93 @@ describe("official Blueprint behavior", () => {
     }
   });
 
+  it("puts adversarial QA, RD repair, and Human review before large-file delivery", () => {
+    const blueprint = getWorkflowBlueprint("large-file-governance-v1");
+    expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
+    if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
+      throw new Error("Large-file Blueprint is unavailable.");
+    }
+
+    const flow = parseFlowV1Bundle(blueprint.bundle);
+    expect(flow.diagnostics).toEqual([]);
+    const acceptance = flow.nodes.find(
+      (node) => node.id === "rd_qa_acceptance",
+    );
+    expect(acceptance).toEqual(
+      expect.objectContaining({
+        kind: "loop",
+        execution: { access: "write", isolation: "required" },
+        outcomes: ["matched", "exhausted"],
+      }),
+    );
+    expect(acceptance?.loop).toEqual(
+      expect.objectContaining({
+        firstIterationStartAt: "qa_review",
+        onMaxIterations: "complete",
+        until: { source: "qa_review", finalStatus: "PASS" },
+      }),
+    );
+    expect(acceptance?.loop?.steps.map((step) => step.id)).toEqual([
+      "rd_repair",
+      "qa_review",
+    ]);
+    expect(acceptance?.loop?.steps[1]).toEqual(
+      expect.objectContaining({
+        label: "Adversarial QA acceptance",
+        execution: { access: "review", isolation: "required" },
+        output: expect.objectContaining({ kind: "json" }),
+      }),
+    );
+
+    const humanReview = flow.nodes.find(
+      (node) => node.id === "human_delivery_review",
+    );
+    expect(humanReview).toEqual(
+      expect.objectContaining({
+        kind: "human",
+        outcomes: ["approve_delivery", "reject_delivery"],
+      }),
+    );
+    expect(humanReview?.human?.context.map((item) => item.label)).toEqual([
+      "Candidate",
+      "Approved plan",
+      "RD + QA acceptance",
+      "Final review package",
+      "Review worktree",
+    ]);
+
+    const controlEdges = flow.edges.filter((edge) => edge.kind === "control");
+    expect(controlEdges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceNodeId: "rd_qa_acceptance",
+          outcome: "matched",
+          targetNodeId: "prepare_human_review",
+        }),
+        expect.objectContaining({
+          sourceNodeId: "rd_qa_acceptance",
+          outcome: "exhausted",
+          targetNodeId: "qa_not_accepted_report",
+        }),
+        expect.objectContaining({
+          sourceNodeId: "human_delivery_review",
+          outcome: "approve_delivery",
+          targetNodeId: "check_changes",
+        }),
+        expect.objectContaining({
+          sourceNodeId: "human_delivery_review",
+          outcome: "reject_delivery",
+          targetNodeId: "close_human_rejected_issue",
+        }),
+      ]),
+    );
+    expect(
+      flow.nodes
+        .filter((node) => node.kind === "complete_cycle")
+        .map((node) => node.terminalOutcome),
+    ).toEqual(expect.arrayContaining(["qa_not_accepted", "human_rejected"]));
+  });
+
   it("treats an empty large-file scan as a routable healthy outcome", async () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");

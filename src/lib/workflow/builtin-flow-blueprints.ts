@@ -8,9 +8,18 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     id: "large-file-governance-v1",
     title: "Large File Governance Loop",
     description:
-      "Periodically finds one oversized source file, proposes an Issue plan, waits for approval, implements it, opens a PR, waits for merge, closes the Issue, and starts the next Cycle.",
+      "Periodically refactors one oversized file, runs an adversarial RD and QA acceptance loop, asks a Human to review the evidence, then opens and tracks a pull request.",
     category: "coding",
-    tags: ["large-file", "github", "issue", "pull-request", "schedule", "memory"],
+    tags: [
+      "large-file",
+      "github",
+      "issue",
+      "pull-request",
+      "schedule",
+      "memory",
+      "acceptance",
+      "human-review",
+    ],
     difficulty: "advanced",
     requiresCwd: true,
     schemaVersion: "tutti.flow.v1",
@@ -24,12 +33,17 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "finally",
       "immediate-continuation",
       "github-cli",
+      "loop",
+      "json-output",
+      "review-isolation",
+      "human",
     ],
     patternSummary:
-      "A scheduled singleton Cycle uses deterministic code nodes for discovery, Effects for repository sync, per-Cycle worktree setup, and GitHub mutations, Gates for approval and merge checks, Agent planning and implementation, terminal cleanup, Markdown Memory, and immediate continuation after merge.",
+      "A scheduled singleton Cycle plans and implements one refactor in an isolated worktree. An independent QA Agent reviews repository truth first; failures send only explicit blockers to an RD repair Agent. QA PASS produces a structured evidence package for a Human delivery gate before any commit, push, or pull-request mutation.",
     useCases: [
       "Continuously reduce monolithic source files without spending Agent tokens while approvals or merges are pending.",
-      "Turn repository maintenance into an auditable Issue-to-PR loop.",
+      "Make RD repairs and adversarial QA findings visible before delivery.",
+      "Give a Human one compact final-artifact review package before any commit or pull request.",
       "Use as a complete Bundle template for scheduled governance automations.",
     ],
     bundle: createFlowV1Bundle([
@@ -38,7 +52,7 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
         content: `export const schemaVersion = "tutti.flow.v1";
 export const meta = {
   name: "Large File Governance Loop",
-  description: "Find, approve, refactor, and merge one oversized file per Cycle.",
+  description: "Find, refactor, adversarially accept, Human-review, and merge one oversized file per Cycle.",
   requiresCwd: true,
 };
 export const params = defineParams({
@@ -48,13 +62,17 @@ export const params = defineParams({
   lineThreshold: numberParam({ default: 1200, min: 1, integer: true }),
   scanRoot: stringParam({ default: "" }),
   approvalLabel: stringParam({ default: "flow-approved", minLength: 1, maxLength: 50 }),
+  maxAcceptanceRounds: numberParam({ default: 3, min: 1, max: 10, integer: true }),
+  qaAgent: stringParam({ default: "" }),
+  qaModel: stringParam({ default: "" }),
+  qaPermission: stringParam({ default: "" }),
 });
 export const secrets = defineSecrets({
   GH_TOKEN: connectionSecret({ provider: "github", required: false }),
 });
 export const cycles = defineCycles({ mode: "singleton" });
 export const runtime = {
-  maxNodeExecutionsPerTick: 40,
+  maxNodeExecutionsPerTick: 60,
   maxImmediateContinuations: 1,
   maxParallelNodes: 2,
 };
@@ -166,6 +184,7 @@ const workspace = effect({
 });
 const implement = agent({
   id: "implement_plan",
+  label: "RD implement approved plan",
   inputs: {
     candidate,
     plan,
@@ -177,12 +196,167 @@ const implement = agent({
   execution: { access: "write", isolation: "required" },
   prompt: "Work only inside the prepared git worktree at {{workspace.path}} on branch {{workspace.branch}}. Implement the approved refactor plan for {{candidate.path}} and reduce it to at most {{lineThreshold}} lines without weakening behavior. Follow {{plan}} and run the smallest focused tests that cover the change. Do not install dependencies or run repository-wide checks unless the focused test cannot otherwise run. Leave the worktree ready for review and do not modify the parent checkout.",
 });
+const acceptance = loop({
+  id: "rd_qa_acceptance",
+  label: "RD + QA adversarial acceptance",
+  inputs: {
+    candidate,
+    plan,
+    approval,
+    implement,
+    workspace,
+    lineThreshold: ref("params.lineThreshold"),
+  },
+  workspace,
+  execution: { access: "write", isolation: "required" },
+  maxIterations: ref("params.maxAcceptanceRounds"),
+  onMaxIterations: "complete",
+  firstIteration: { startAt: "qa_review" },
+  steps: [
+    agent({
+      id: "rd_repair",
+      label: "RD repair QA blockers",
+      prompt: "Act as the RD owner inside the prepared worktree. Repair only the blocking findings from the previous QA iteration while preserving the approved boundaries and behavior. Re-inspect repository truth, keep {{candidate.path}} at or below {{lineThreshold}} lines, run focused checks, and leave all changes uncommitted. Do not dismiss blockers without evidence. Approved plan: {{plan}} Previous QA iteration: {{previousIteration}}",
+    }),
+    agent({
+      id: "qa_review",
+      label: "Adversarial QA acceptance",
+      agent: ref("params.qaAgent"),
+      model: ref("params.qaModel"),
+      permissionMode: ref("params.qaPermission"),
+      execution: { access: "review", isolation: "required" },
+      output: json({ schema: {
+        type: "object",
+        required: ["status", "blockers", "risks", "checks", "evidence", "unverified"],
+        properties: {
+          status: { enum: ["PASS", "FAIL"] },
+          blockers: { type: "array", items: { type: "string" } },
+          risks: { type: "array", items: { type: "string" } },
+          checks: { type: "array", items: { type: "string" } },
+          evidence: { type: "array", items: { type: "string" } },
+          unverified: { type: "array", items: { type: "string" } },
+        },
+      } }),
+      prompt: "Act as adversarial QA in a disposable review workspace. Judge repository truth against the approved plan, behavior preservation, the {{lineThreshold}}-line limit for {{candidate.path}}, edge cases, and focused test results. Inspect the diff and run appropriate read-safe or test commands; never trust the RD narrative as evidence. PASS only when there are no blocking defects and every required claim is supported. Return valid JSON with status PASS or FAIL plus blockers, risks, checks, evidence, and unverified arrays. Approved plan: {{plan}} Initial implementation record: {{implement}} Previous QA record: {{previousStep}}",
+    }),
+  ],
+  until: { source: "qa_review", finalStatus: "PASS" },
+});
+const reviewPackage = agent({
+  id: "prepare_human_review",
+  label: "Prepare Human review package",
+  inputs: {
+    candidate,
+    plan,
+    acceptance,
+    workspace,
+    lineThreshold: ref("params.lineThreshold"),
+  },
+  workspace,
+  execution: { access: "read", isolation: "required" },
+  output: json({ schema: {
+    type: "object",
+    required: [
+      "title",
+      "summary",
+      "changedFiles",
+      "checks",
+      "qaEvidence",
+      "residualRisks",
+      "unverified",
+    ],
+    properties: {
+      title: { type: "string" },
+      summary: { type: "string" },
+      changedFiles: { type: "array", items: { type: "string" } },
+      checks: { type: "array", items: { type: "string" } },
+      qaEvidence: { type: "array", items: { type: "string" } },
+      residualRisks: { type: "array", items: { type: "string" } },
+      unverified: { type: "array", items: { type: "string" } },
+    },
+  } }),
+  prompt: "Prepare a compact, evidence-first package for a Human reviewer. Inspect the final worktree diff against {{workspace.baseCommit}} and the accepted QA record. Report the behavioral intent, exact changed files, checks with results, proof that {{candidate.path}} is at or below {{lineThreshold}} lines, QA evidence, residual risks, and anything unverified. Do not modify files or perform Git/GitHub mutations. Approved plan: {{plan}} Acceptance: {{acceptance}}",
+});
+const humanReview = human({
+  id: "human_delivery_review",
+  label: "Human final-artifact review",
+  description: "Review the final diff and RD + QA evidence before any commit, push, or pull request.",
+  inputs: { candidate, plan, acceptance, reviewPackage, workspace },
+  context: [
+    { label: "Candidate", value: "{{candidate}}", display: "json" },
+    { label: "Approved plan", value: "{{plan}}", display: "json" },
+    { label: "RD + QA acceptance", value: "{{acceptance}}", display: "json" },
+    { label: "Final review package", value: "{{reviewPackage}}", display: "json" },
+    { label: "Review worktree", value: "{{workspace}}", display: "json" },
+  ],
+  actions: [
+    {
+      id: "approve_delivery",
+      label: "Approve delivery",
+      intent: "primary",
+      fields: [
+        {
+          id: "rationale",
+          type: "textarea",
+          label: "Approval rationale",
+          required: true,
+        },
+      ],
+    },
+    {
+      id: "reject_delivery",
+      label: "Reject delivery",
+      intent: "danger",
+      fields: [
+        {
+          id: "reason",
+          type: "textarea",
+          label: "Blocking reason",
+          required: true,
+        },
+      ],
+    },
+  ],
+});
+const notAccepted = agent({
+  id: "qa_not_accepted_report",
+  label: "Report remaining QA blockers",
+  inputs: { candidate, plan, acceptance, workspace },
+  workspace,
+  execution: { access: "read", isolation: "required" },
+  output: "json",
+  prompt: "Inspect repository truth and return valid JSON with result not_accepted, the changed files, remaining QA blockers, checks, risks, and unverified areas. Do not commit, push, or create a pull request. Candidate: {{candidate}} Approved plan: {{plan}} Acceptance: {{acceptance}}",
+});
+const closeNotAcceptedIssue = effect({
+  id: "close_qa_not_accepted_issue",
+  file: "scripts/resolve-issue.mjs",
+  inputs: { issue, notAccepted },
+  idempotencyKey: template("{{cycle.id}}:close-qa-not-accepted"),
+});
+const qaNotAccepted = completeCycle({
+  id: "qa_not_accepted",
+  outcome: "qa_not_accepted",
+  inputs: { closeNotAcceptedIssue, notAccepted },
+  continue: "scheduled",
+});
+const closeHumanRejectedIssue = effect({
+  id: "close_human_rejected_issue",
+  file: "scripts/resolve-issue.mjs",
+  inputs: { issue, humanReview, reviewPackage },
+  idempotencyKey: template("{{cycle.id}}:close-human-rejected"),
+});
+const humanRejected = completeCycle({
+  id: "human_rejected",
+  outcome: "human_rejected",
+  inputs: { closeHumanRejectedIssue, humanReview, reviewPackage },
+  continue: "scheduled",
+});
 const changes = script({
   id: "check_changes",
   file: "scripts/check-changes.mjs",
-  inputs: { implement, workspace },
+  inputs: { implement, acceptance, reviewPackage, humanReview, workspace },
   workspace,
-  execution: { access: "write", isolation: "required" },
+  execution: { access: "read", isolation: "required" },
   outcomes: ["changed", "no_changes"],
 });
 const commit = effect({
@@ -208,6 +382,9 @@ const pullRequest = effect({
     issue,
     candidate,
     plan,
+    acceptance,
+    reviewPackage,
+    humanReview,
     commit,
     push,
     workspace,
@@ -295,6 +472,14 @@ finalize({
   retainOnFailure: true,
 });
 route(approval, { approved: workspace, rejected });
+route(acceptance, {
+  matched: reviewPackage,
+  exhausted: notAccepted,
+});
+route(humanReview, {
+  approve_delivery: changes,
+  reject_delivery: closeHumanRejectedIssue,
+});
 route(changes, { changed: commit, no_changes: noChangesIssue });
 route(merged, { merged: closeIssue, closed: rejectedDeliveryIssue });
 route(candidate, { found: deliveryReady, empty: noWork });
@@ -723,6 +908,22 @@ export async function apply(ctx) {
     "## Validation plan",
     ctx.plan.tests.map((test) => "- " + test).join("\\n"),
     "",
+    "## Accepted validation evidence",
+    ctx.reviewPackage.checks.map((check) => "- " + check).join("\\n"),
+    "",
+    "## QA evidence",
+    ctx.reviewPackage.qaEvidence.map((item) => "- " + item).join("\\n"),
+    "",
+    "## Residual risks",
+    ctx.reviewPackage.residualRisks.length
+      ? ctx.reviewPackage.residualRisks.map((risk) => "- " + risk).join("\\n")
+      : "- None reported",
+    "",
+    "Human delivery review: approved." +
+      (ctx.humanReview.values?.rationale
+        ? " Rationale: " + ctx.humanReview.values.rationale
+        : ""),
+    "",
     "Closes " + ctx.issue.url,
   ].join("\\n");
   const url = run("gh", ["pr", "create", "--head", ctx.push.branch, "--base", ctx.mainBranch, "--title", "Refactor " + ctx.candidate.path, "--body", body]);
@@ -751,9 +952,21 @@ function issueApiPath(url) {
   return "repos/" + owner + "/" + repo + "/issues/" + number;
 }
 function reason(ctx) {
-  return ctx.pullRequest?.url
-    ? "Pull request was closed without merge: " + ctx.pullRequest.url
-    : "Implementation produced no repository changes.";
+  if (ctx.pullRequest?.url) {
+    return "Pull request was closed without merge: " + ctx.pullRequest.url;
+  }
+  if (ctx.humanReview) {
+    const detail = ctx.humanReview.values?.reason || ctx.humanReview.reason || "No reason recorded.";
+    return "Human rejected the final artifact before delivery: " + detail;
+  }
+  if (ctx.notAccepted) {
+    const blockers = ctx.notAccepted.remainingBlockers || ctx.notAccepted.blockers || [];
+    const detail = Array.isArray(blockers) && blockers.length
+      ? " Remaining blockers: " + blockers.slice(0, 8).join("; ")
+      : "";
+    return "RD + QA acceptance exhausted its iteration budget without PASS." + detail;
+  }
+  return "Implementation produced no repository changes.";
 }
 export async function apply(ctx) {
   gh(["issue", "close", ctx.issue.url, "--comment", reason(ctx)]);

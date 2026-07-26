@@ -3,6 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Button,
+  CopyIcon,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  FailedLinedIcon,
+  MoreHorizontalIcon,
+} from "@tutti-os/ui-system";
 import { WorkflowErrorBoundary } from "@/components/workflow/WorkflowErrorBoundary";
 import { FlowRuntimeOverview } from "@/components/workflow/FlowRuntimeOverview";
 import { FlowVersionReviewPanel } from "@/components/workflow/FlowVersionReview";
@@ -265,17 +276,30 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
       ? detail.versionReview?.version.meta.description ??
         detail.workflow.description
       : detail.workflow.description;
+  const detailStatus =
+    surface === "versions"
+      ? detail.versionReview?.version.status ?? "version"
+      : detail.flowV1?.selectedCycle?.status ??
+        detail.flowV1?.runtime.lifecycle ??
+        "ready";
 
   return (
-    <main className="app-shell">
+    <main className="app-shell detail-shell">
       <header className="detail-topbar">
         <div className="detail-titlebar">
           <Link href="/" className="flow-back-link">
-            Flows
+            <span aria-hidden="true">←</span>
+            <span>Workflows</span>
           </Link>
           <div className="detail-heading">
             <div className="detail-heading-title">
               <h1>{displayName}</h1>
+              <span
+                className="detail-status"
+                data-tone={detailStatusTone(detailStatus)}
+              >
+                {detailStatus.replaceAll("_", " ")}
+              </span>
             </div>
             <div className="detail-meta">
               <span className="detail-description">
@@ -285,37 +309,62 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
           </div>
         </div>
         <div className="flow-detail-actions">
-          <button
-            className={surface === "versions" ? "is-active" : undefined}
-            disabled={!detail.versionReview}
-            onClick={() => setSurface("versions")}
-            type="button"
+          <div
+            className="detail-surface-tabs"
+            role="tablist"
+            aria-label="Workflow detail view"
           >
-            Versions
-          </button>
-          <button
-            className={surface === "runtime" ? "is-active" : undefined}
-            disabled={!detail.flowV1}
-            onClick={() => setSurface("runtime")}
-            type="button"
-          >
-            Runtime
-          </button>
-          <button
-            disabled={mutating !== null || !detail.currentVersion}
-            onClick={() => void duplicateFlow()}
-            type="button"
-          >
-            {mutating === "duplicate" ? "Duplicating…" : "Duplicate"}
-          </button>
-          <button
-            className="flow-runtime-action-danger"
-            disabled={mutating !== null}
-            onClick={() => void deleteFlow()}
-            type="button"
-          >
-            {mutating === "delete" ? "Deleting…" : "Delete"}
-          </button>
+            <button
+              aria-selected={surface === "runtime"}
+              className={surface === "runtime" ? "is-active" : undefined}
+              disabled={!detail.flowV1}
+              onClick={() => setSurface("runtime")}
+              role="tab"
+              type="button"
+            >
+              Runtime
+            </button>
+            <button
+              aria-selected={surface === "versions"}
+              className={surface === "versions" ? "is-active" : undefined}
+              disabled={!detail.versionReview}
+              onClick={() => setSurface("versions")}
+              role="tab"
+              type="button"
+            >
+              Versions
+            </button>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                className="detail-more-button"
+                variant="outline"
+                size="icon-lg"
+                aria-label="More workflow actions"
+              >
+                <MoreHorizontalIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                disabled={mutating !== null || !detail.currentVersion}
+                onSelect={() => void duplicateFlow()}
+              >
+                <CopyIcon data-icon="inline-start" />
+                {mutating === "duplicate" ? "Duplicating…" : "Duplicate"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                disabled={mutating !== null}
+                onSelect={() => void deleteFlow()}
+              >
+                <FailedLinedIcon data-icon="inline-start" />
+                {mutating === "delete" ? "Deleting…" : "Delete"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
       {error ? <p className="flow-detail-error">{error}</p> : null}
@@ -338,4 +387,22 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
       ) : null}
     </main>
   );
+}
+
+function detailStatusTone(
+  status: string,
+): "neutral" | "success" | "warning" | "danger" | "active" {
+  if (status === "running" || status === "runnable" || status === "active") {
+    return "active";
+  }
+  if (status === "completed" || status === "published") {
+    return "success";
+  }
+  if (status.startsWith("waiting") || status === "draft") {
+    return "warning";
+  }
+  if (status.startsWith("paused") || status === "failed") {
+    return "danger";
+  }
+  return "neutral";
 }

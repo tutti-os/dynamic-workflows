@@ -1382,39 +1382,53 @@ a {
   animation: panel-fade-in 160ms ease-out;
 }
 
+.detail-shell {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--background-fronted) 44%, transparent),
+      transparent 260px
+    ),
+    var(--background);
+}
+
 .detail-topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-workbench-chrome);
   display: grid;
   grid-template-columns: minmax(300px, 1fr) auto;
-  min-height: 82px;
+  min-height: 76px;
   align-items: center;
-  gap: 18px;
-  border-bottom: 1px solid var(--border-1);
-  background: color-mix(in srgb, var(--background-fronted) 90%, transparent);
-  padding: 12px 18px;
-  backdrop-filter: blur(20px);
+  gap: 24px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-1) 82%, transparent);
+  background: color-mix(in srgb, var(--background-fronted) 88%, transparent);
+  padding: 10px 24px;
+  backdrop-filter: blur(20px) saturate(130%);
 }
 
 .detail-titlebar {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: 14px;
 }
 
 .detail-heading {
   display: grid;
   min-width: 0;
-  gap: 6px;
-  padding-left: 12px;
+  gap: 5px;
+  padding-left: 0;
 }
 
 .detail-heading-title {
   position: relative;
-  display: inline-flex;
+  display: flex;
   min-width: 0;
-  max-width: calc(100% - 34px);
+  max-width: 100%;
   align-items: center;
-  width: fit-content;
+  gap: 9px;
+  width: 100%;
 }
 
 .detail-heading-title h1 {
@@ -1428,9 +1442,49 @@ a {
   color: var(--foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: -0.015em;
+}
+
+.detail-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--transparency-block);
+  padding: 3px 7px;
+  color: var(--text-secondary);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.detail-status[data-tone="active"] {
+  border-color: color-mix(in srgb, var(--status-blue, #3b82f6) 28%, var(--border-1));
+  background: color-mix(in srgb, var(--status-blue, #3b82f6) 8%, transparent);
+  color: var(--status-blue, #3b82f6);
+}
+
+.detail-status[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--state-success) 28%, var(--border-1));
+  background: color-mix(in srgb, var(--state-success) 8%, transparent);
+  color: var(--state-success);
+}
+
+.detail-status[data-tone="warning"] {
+  border-color: color-mix(in srgb, var(--state-warning) 30%, var(--border-1));
+  background: color-mix(in srgb, var(--state-warning) 8%, transparent);
+  color: var(--state-warning);
+}
+
+.detail-status[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--state-danger) 30%, var(--border-1));
+  background: color-mix(in srgb, var(--state-danger) 8%, transparent);
+  color: var(--state-danger);
 }
 
 .workflow-details-edit-button {
@@ -1457,7 +1511,7 @@ a {
   flex-wrap: wrap;
   gap: 8px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .workflow-id-copy-button {
@@ -1471,6 +1525,7 @@ a {
   min-width: 180px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.35;
 }
 
 .detail-source {
@@ -1508,10 +1563,14 @@ a {
 
 .flow-runtime-overview {
   display: grid;
-  gap: 12px;
-  border-bottom: 1px solid var(--border-1);
-  background: color-mix(in srgb, var(--background-fronted) 96%, transparent);
-  padding: 14px 18px;
+  width: min(1360px, calc(100% - 48px));
+  margin: 24px auto 40px;
+  gap: 16px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 88%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--background-fronted) 94%, transparent);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 5%);
+  padding: 22px;
 }
 
 .flow-runtime-heading,
@@ -1530,14 +1589,16 @@ a {
 }
 
 .flow-runtime-heading h2 {
-  font-size: 16px;
+  font-size: 18px;
+  letter-spacing: -0.015em;
 }
 
 .flow-runtime-heading p,
 .flow-runtime-history p {
-  margin: 3px 0 0;
+  margin: 5px 0 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .flow-runtime-eyebrow {
@@ -1552,7 +1613,8 @@ a {
   display: flex;
   gap: 3px;
   border: 1px solid var(--border-1);
-  border-radius: 8px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--background) 76%, transparent);
   padding: 3px;
 }
 
@@ -1560,7 +1622,8 @@ a {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  padding: 5px 10px;
+  min-height: 30px;
+  padding: 5px 12px;
   color: var(--text-secondary);
   font: inherit;
   font-size: 11px;
@@ -1568,22 +1631,29 @@ a {
 }
 
 .flow-runtime-tabs button.is-active {
-  background: var(--background);
+  background: var(--background-fronted);
   color: var(--foreground);
-  box-shadow: 0 0 0 1px var(--border-1);
+  box-shadow:
+    0 0 0 1px var(--border-1),
+    0 3px 8px rgb(0 0 0 / 5%);
 }
 
 .flow-runtime-summary {
   display: grid;
   grid-template-columns: repeat(6, minmax(110px, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .flow-runtime-actions {
   display: flex;
+  min-height: 44px;
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 78%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--background) 54%, transparent);
+  padding: 8px 10px;
 }
 
 .flow-runtime-actions button,
@@ -1613,12 +1683,29 @@ a {
 }
 
 .flow-back-link {
-  border: 1px solid var(--border-1);
+  display: inline-flex;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 86%, transparent);
   border-radius: 8px;
-  padding: 7px 11px;
-  color: var(--foreground);
+  background: color-mix(in srgb, var(--background-fronted) 76%, transparent);
+  padding: 0 10px;
+  color: var(--text-secondary);
   font-size: 11px;
   text-decoration: none;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.flow-back-link:hover,
+.flow-back-link:focus-visible {
+  border-color: color-mix(in srgb, var(--foreground) 16%, var(--border-1));
+  background: var(--background-fronted);
+  color: var(--foreground);
 }
 
 .flow-detail-actions {
@@ -1627,29 +1714,53 @@ a {
   gap: 8px;
 }
 
-.flow-detail-actions button {
+.detail-surface-tabs {
+  display: flex;
+  gap: 3px;
   border: 1px solid var(--border-1);
-  border-radius: 8px;
-  padding: 7px 11px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--background) 72%, transparent);
+  padding: 3px;
+}
+
+.detail-surface-tabs button {
+  min-width: 76px;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 5px 11px;
+  color: var(--text-secondary);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 
-.flow-detail-actions button:disabled {
-  cursor: wait;
+.detail-surface-tabs button:disabled {
+  cursor: not-allowed;
   opacity: 0.58;
 }
 
-.flow-detail-actions button.is-active {
-  border-color: var(--status-blue, #3b82f6);
+.detail-surface-tabs button.is-active {
+  background: var(--background-fronted);
   color: var(--foreground);
+  box-shadow:
+    0 0 0 1px var(--border-1),
+    0 3px 8px rgb(0 0 0 / 5%);
+}
+
+.detail-more-button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  background: color-mix(in srgb, var(--background-fronted) 82%, transparent);
 }
 
 .flow-detail-error {
-  margin: 12px 24px 0;
+  width: min(1360px, calc(100% - 48px));
+  margin: 16px auto 0;
   color: var(--state-danger);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .flow-runtime-actions > span {
@@ -1684,7 +1795,13 @@ a {
 .flow-runtime-metric {
   display: grid;
   min-width: 0;
-  gap: 2px;
+  min-height: 70px;
+  align-content: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 78%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--background) 52%, transparent);
+  padding: 10px 12px;
 }
 
 .flow-runtime-metric > span,
@@ -1700,7 +1817,8 @@ a {
   color: var(--foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .flow-runtime-metric > small {
@@ -1764,27 +1882,103 @@ a {
 
 .flow-runtime-graph {
   width: 100%;
-  height: 420px;
+  height: 620px;
   overflow: hidden;
   border: 1px solid var(--border-1);
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--background);
 }
 
 .react-flow__node.flow-graph-node {
-  width: 210px;
-  border: 1px solid var(--border-1);
-  border-radius: 8px;
-  background: var(--background-fronted);
+  --flow-node-accent: var(--text-tertiary);
+  --flow-node-tint: var(--transparency-block);
+  width: 224px;
+  min-height: 104px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--flow-node-accent) 28%, var(--border-1));
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--flow-node-tint) 70%, var(--background-fronted)),
+      var(--background-fronted) 58%
+    );
   padding: 0;
   color: var(--foreground);
-  box-shadow: 0 3px 12px color-mix(in srgb, #000 8%, transparent);
+  box-shadow:
+    0 8px 22px color-mix(in srgb, #000 8%, transparent),
+    0 1px 0 rgb(255 255 255 / 6%) inset;
   text-align: left;
+}
+
+.react-flow__node.flow-graph-node::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--flow-node-accent);
+  content: "";
+}
+
+.react-flow__node.flow-graph-node-kind-agent {
+  --flow-node-accent: var(--tutti-purple);
+  --flow-node-tint: color-mix(in srgb, var(--tutti-purple) 12%, transparent);
+  width: 272px;
+  min-height: 132px;
+  border-width: 1.5px;
+  box-shadow:
+    0 14px 34px color-mix(in srgb, var(--tutti-purple) 12%, transparent),
+    0 1px 0 rgb(255 255 255 / 8%) inset;
+}
+
+.react-flow__node.flow-graph-node-kind-agent::before {
+  width: 5px;
+}
+
+.react-flow__node.flow-graph-node-kind-script,
+.react-flow__node.flow-graph-node-kind-transform {
+  --flow-node-accent: var(--status-blue, #3b82f6);
+  --flow-node-tint: color-mix(in srgb, var(--status-blue, #3b82f6) 8%, transparent);
+}
+
+.react-flow__node.flow-graph-node-kind-effect {
+  --flow-node-accent: var(--state-warning);
+  --flow-node-tint: color-mix(in srgb, var(--state-warning) 10%, transparent);
+  border-style: dashed;
+}
+
+.react-flow__node.flow-graph-node-kind-human {
+  --flow-node-accent: var(--state-warning);
+  --flow-node-tint: color-mix(in srgb, var(--state-warning) 8%, transparent);
+}
+
+.react-flow__node.flow-graph-node-kind-gate,
+.react-flow__node.flow-graph-node-kind-loop,
+.react-flow__node.flow-graph-node-kind-map {
+  --flow-node-accent: color-mix(in srgb, var(--tutti-purple) 72%, var(--status-blue, #3b82f6));
+  --flow-node-tint: color-mix(in srgb, var(--tutti-purple) 8%, transparent);
+}
+
+.react-flow__node.flow-graph-node-kind-remember {
+  --flow-node-accent: var(--state-success);
+  --flow-node-tint: color-mix(in srgb, var(--state-success) 8%, transparent);
+}
+
+.react-flow__node.flow-graph-node-kind-finally,
+.react-flow__node.flow-graph-node-kind-complete_cycle {
+  --flow-node-accent: var(--state-success);
+  --flow-node-tint: color-mix(in srgb, var(--state-success) 8%, transparent);
+}
+
+.react-flow__node.flow-graph-node-kind-cancel_cycle {
+  --flow-node-accent: var(--state-danger);
+  --flow-node-tint: color-mix(in srgb, var(--state-danger) 8%, transparent);
 }
 
 .react-flow__node.flow-graph-node.is-current {
   border-color: var(--status-blue, #3b82f6);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--status-blue, #3b82f6) 18%, transparent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--status-blue, #3b82f6) 18%, transparent),
+    0 14px 34px color-mix(in srgb, var(--status-blue, #3b82f6) 10%, transparent);
 }
 
 .react-flow__node.flow-graph-node-running,
@@ -1811,30 +2005,91 @@ a {
 
 .flow-graph-node-content {
   display: grid;
-  gap: 4px;
-  padding: 9px 11px;
+  gap: 8px;
+  padding: 12px 13px 12px 15px;
 }
 
-.flow-graph-node-content > span {
-  color: var(--status-blue, #3b82f6);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 8px;
+.flow-graph-node-kind-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
 }
 
-.flow-graph-node-content > strong {
+.flow-graph-node-icon {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--flow-node-accent) 24%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--flow-node-accent) 10%, transparent);
+  color: var(--flow-node-accent);
+}
+
+.flow-graph-node-kind-label {
   overflow: hidden;
+  color: var(--flow-node-accent);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 9px;
+  font-weight: 700;
 }
 
-.flow-graph-node-content > small {
+.flow-graph-agent-badge {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--tutti-purple) 28%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tutti-purple) 9%, transparent);
+  padding: 3px 6px;
+  color: var(--tutti-purple);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.flow-graph-node-title {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.flow-graph-node-summary {
   overflow: hidden;
   color: var(--text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.flow-graph-node-kind-agent .flow-graph-node-content {
+  gap: 10px;
+  padding: 14px 15px 14px 18px;
+}
+
+.flow-graph-node-kind-agent .flow-graph-node-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+}
+
+.flow-graph-node-kind-agent .flow-graph-node-title {
+  white-space: normal;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.flow-graph-node-kind-agent .flow-graph-node-summary {
+  font-size: 11px;
 }
 
 .react-flow__edge.flow-graph-edge .react-flow__edge-path {
@@ -1866,19 +2121,23 @@ a {
 
 .flow-runtime-panel {
   display: grid;
-  gap: 10px;
-  border-top: 1px solid var(--border-1);
-  padding-top: 12px;
+  gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 78%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--background) 36%, transparent);
+  padding: 16px;
 }
 
 .flow-draft-review {
   display: grid;
-  gap: 14px;
-  margin: 16px 0;
-  border: 1px solid var(--border-1);
-  border-radius: 12px;
-  background: var(--background-fronted);
-  padding: 16px;
+  width: min(1360px, calc(100% - 48px));
+  gap: 16px;
+  margin: 24px auto 40px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 88%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--background-fronted) 94%, transparent);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 5%);
+  padding: 22px;
 }
 
 .flow-draft-status {
@@ -1894,6 +2153,8 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-1) 72%, transparent);
+  padding-bottom: 12px;
 }
 
 .flow-draft-version-strip span,
@@ -1901,7 +2162,7 @@ a {
   border: 1px solid var(--border-1);
   border-radius: 999px;
   background: transparent;
-  padding: 4px 8px;
+  padding: 5px 9px;
   color: var(--text-secondary);
   font-size: 10px;
 }
@@ -1922,10 +2183,12 @@ a {
 }
 
 .flow-draft-review-summary {
+  border: 1px solid color-mix(in srgb, var(--state-success) 24%, var(--border-1));
   border-left: 3px solid var(--state-success);
-  background: var(--background);
-  padding: 10px 12px;
-  font-size: 11px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--state-success) 5%, var(--background));
+  padding: 12px 14px;
+  font-size: 12px;
 }
 
 .flow-draft-review-summary p {
@@ -1955,14 +2218,14 @@ a {
 }
 
 .flow-draft-source {
-  max-height: 390px;
+  max-height: 480px;
   margin: 0;
   overflow: auto;
   border: 1px solid var(--border-1);
   border-radius: 8px;
   background: var(--background);
-  padding: 12px;
-  font: 10px/1.55 var(--font-geist-mono);
+  padding: 14px;
+  font: 11px/1.6 var(--font-geist-mono);
   white-space: pre;
 }
 
@@ -2000,10 +2263,10 @@ a {
   border: 1px solid var(--border-1);
   border-radius: 7px;
   background: var(--background);
-  padding: 7px 10px;
+  padding: 8px 11px;
   color: var(--foreground);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .flow-version-changes {
@@ -2056,12 +2319,12 @@ a {
 }
 
 .flow-version-diff {
-  max-height: 460px;
+  max-height: 540px;
   overflow: auto;
   border: 1px solid var(--border-1);
   border-radius: 8px;
   background: var(--background);
-  font: 10px/1.5 var(--font-geist-mono);
+  font: 11px/1.55 var(--font-geist-mono);
 }
 
 .flow-version-diff-line {
@@ -2121,12 +2384,13 @@ a {
 }
 
 .flow-runtime-panel-title h3 {
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .flow-runtime-panel-title > span {
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .flow-runtime-edge-list {
@@ -2145,9 +2409,9 @@ a {
 
 .flow-runtime-configuration {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   border-top: 1px solid var(--border-1);
-  padding-top: 14px;
+  padding-top: 16px;
 }
 
 .flow-runtime-configuration button,
@@ -2201,15 +2465,15 @@ a {
 .flow-runtime-memory,
 .flow-runtime-attempt-detail {
   min-width: 0;
-  border: 1px solid var(--border-1);
-  border-radius: 8px;
-  background: var(--background);
-  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--border-1) 84%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--background-fronted) 58%, var(--background));
+  padding: 11px;
 }
 
 .flow-runtime-history-row {
   border-top: 1px solid var(--border-1);
-  padding: 7px 0;
+  padding: 9px 0;
 }
 
 .flow-runtime-history-row:first-of-type {
@@ -2226,7 +2490,7 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .flow-runtime-history-row span,
@@ -2236,7 +2500,7 @@ a {
 
 .flow-runtime-history-row time {
   flex: none;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .flow-runtime-history-row.is-selected {
@@ -3128,15 +3392,6 @@ a {
   max-height: min(760px, calc(100vh - 40px));
 }
 
-.workflow-input-dialog,
-.workflow-details-dialog,
-.agent-edit-dialog,
-.import-dialog,
-.blueprint-detail-dialog {
-  animation: dialog-enter 150ms ease-out;
-  transform-origin: center top;
-}
-
 .workflow-details-dialog-body {
   display: grid;
   gap: 12px;
@@ -3654,17 +3909,6 @@ a {
   }
 }
 
-@keyframes dialog-enter {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 @keyframes panel-fade-in {
   from {
     opacity: 0;
@@ -3924,10 +4168,47 @@ a {
     padding-left: 0;
   }
 
-  .detail-controls {
-    display: flex;
+  .flow-detail-actions {
     width: 100%;
-    justify-content: flex-start;
+    justify-content: space-between;
+  }
+
+  .detail-surface-tabs {
+    flex: 1;
+  }
+
+  .detail-surface-tabs button {
+    flex: 1;
+  }
+
+  .flow-runtime-overview,
+  .flow-draft-review {
+    width: calc(100% - 24px);
+    margin-top: 12px;
+    margin-bottom: 24px;
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .flow-runtime-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .flow-runtime-tabs {
+    width: 100%;
+  }
+
+  .flow-runtime-tabs button {
+    flex: 1;
+  }
+
+  .flow-runtime-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .flow-runtime-graph {
+    height: 520px;
   }
 
   .status-strip {
