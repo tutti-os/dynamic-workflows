@@ -390,9 +390,11 @@ export function getFlowV1RuntimeSummary(
   const latestRunRow = database
     .prepare(
       `
-      SELECT id FROM workflow_runs
-      WHERE workflow_id = ? AND cycle_id IS NOT NULL
-      ORDER BY tick_sequence DESC, started_at DESC
+      SELECT run.id
+      FROM workflow_runs AS run
+      JOIN workflow_cycles AS cycle ON cycle.id = run.cycle_id
+      WHERE run.workflow_id = ? AND run.cycle_id IS NOT NULL
+      ORDER BY cycle.sequence DESC, run.tick_sequence DESC, run.started_at DESC
       LIMIT 1
     `,
     )

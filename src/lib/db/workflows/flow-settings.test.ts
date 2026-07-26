@@ -154,6 +154,55 @@ describe("Flow v1 params, Schedule, and runtime projection", () => {
         completedCycleCount: 0,
       }),
     );
+
+    const firstClaim = runtime.claimFlowV1Tick({ runId: tick.run.id });
+    runtime.finishFlowV1Tick({
+      runId: tick.run.id,
+      ownerToken: firstClaim!.token,
+      status: "completed",
+      stopReason: "waiting_gate",
+    });
+    runtime.compareAndSetFlowV1CycleCheckpoint({
+      cycleId: tick.cycle.id,
+      expectedRevision: 0,
+      state: { waiting: true },
+      cycleStatus: "waiting_gate",
+    });
+    const laterTickInFirstCycle = runtime.startFlowV1Tick({
+      cycleId: tick.cycle.id,
+      origin: { kind: "recovery", reason: "resume" },
+      idempotencyKey: "resume-first-cycle",
+    });
+    const laterClaim = runtime.claimFlowV1Tick({
+      runId: laterTickInFirstCycle.run.id,
+    });
+    runtime.finishFlowV1Tick({
+      runId: laterTickInFirstCycle.run.id,
+      ownerToken: laterClaim!.token,
+      status: "completed",
+      stopReason: "cycle_completed",
+    });
+    runtime.compareAndSetFlowV1CycleCheckpoint({
+      cycleId: tick.cycle.id,
+      expectedRevision: 1,
+      state: { terminal: true },
+      cycleStatus: "completed",
+    });
+    const nextCycle = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "next-cycle",
+      inputSnapshot: {},
+      paramsRevision: 2,
+      paramsSnapshot: { threshold: 5000 },
+    });
+
+    expect(laterTickInFirstCycle.run.tickSequence).toBe(2);
+    expect(nextCycle.run.tickSequence).toBe(1);
+    expect(settings.getFlowV1RuntimeSummary(fixture.flowId)?.latestRun?.id).toBe(
+      nextCycle.run.id,
+    );
   });
 });
 
