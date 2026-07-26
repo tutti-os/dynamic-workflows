@@ -42,11 +42,12 @@ export const meta = {
   requiresCwd: true,
 };
 export const params = defineParams({
-  scanCron: cronParam({ default: "*/30 * * * *" }),
+  scanCron: cronParam({ default: "0 0 * * *" }),
   timezone: stringParam({ default: "UTC" }),
-  mainBranch: stringParam({ default: "main" }),
-  lineThreshold: numberParam({ default: 1200 }),
+  mainBranch: stringParam({ default: "main", minLength: 1 }),
+  lineThreshold: numberParam({ default: 1200, min: 1, integer: true }),
   scanRoot: stringParam({ default: "" }),
+  approvalLabel: stringParam({ default: "flow-approved", minLength: 1, maxLength: 50 }),
 });
 export const secrets = defineSecrets({
   GH_TOKEN: connectionSecret({ provider: "github", required: false }),
@@ -81,10 +82,15 @@ export const memory = defineMemory({
   },
 });
 
+const preflight = script({
+  id: "preflight_environment",
+  file: "scripts/preflight-environment.mjs",
+  inputs: { branch: ref("params.mainBranch") },
+});
 const sync = effect({
   id: "sync_main",
   file: "scripts/sync-main.mjs",
-  inputs: { branch: ref("params.mainBranch") },
+  inputs: { preflight, branch: ref("params.mainBranch") },
   idempotencyKey: template("{{cycle.id}}:sync-main"),
 });
 const candidate = script({
@@ -103,10 +109,24 @@ const noWork = completeCycle({
   continue: "scheduled",
   inputs: { candidate },
 });
+const deliveryReady = script({
+  id: "preflight_delivery",
+  file: "scripts/preflight-delivery.mjs",
+  inputs: { candidate, preflight },
+});
+const approvalLabel = effect({
+  id: "ensure_approval_label",
+  file: "scripts/ensure-approval-label.mjs",
+  inputs: {
+    deliveryReady,
+    label: ref("params.approvalLabel"),
+  },
+  idempotencyKey: template("{{cycle.id}}:ensure-approval-label"),
+});
 const plan = agent({
   id: "plan_refactor",
-  inputs: { candidate },
-  memory: { include: ["currentUnderstanding", "decisions"] },
+  inputs: { approvalLabel, candidate, deliveryReady },
+  memory: { include: ["currentUnderstanding"] },
   output: json({ schema: {
     type: "object",
     required: ["title", "rationale", "boundaries", "orderedSteps", "tests", "risks"],
@@ -124,7 +144,7 @@ const plan = agent({
 const issue = effect({
   id: "create_issue",
   file: "scripts/create-issue.mjs",
-  inputs: { candidate, plan },
+  inputs: { approvalLabel, candidate, plan },
   idempotencyKey: template("{{cycle.id}}:create-issue"),
 });
 const approval = gate({
@@ -277,7 +297,7 @@ finalize({
 route(approval, { approved: workspace, rejected });
 route(changes, { changed: commit, no_changes: noChangesIssue });
 route(merged, { merged: closeIssue, closed: rejectedDeliveryIssue });
-route(candidate, { found: plan, empty: noWork });
+route(candidate, { found: deliveryReady, empty: noWork });
 `,
       },
       {
@@ -299,16 +319,68 @@ No file has been refactored yet.
         path: "scripts/build-memory-update.mjs",
         content: `export async function run(ctx) {
   const currentUnderstanding = [
-    "Candidate: " + ctx.candidate.path + " (" + ctx.candidate.lines + " lines)",
+    "Last completed candidate: " + ctx.candidate.path + " (" + ctx.candidate.lines + " lines before refactor)",
+    "Plan: " + ctx.plan.title,
     "Issue: " + ctx.issue.url,
     "Pull request: " + ctx.pullRequest.url,
     "Merged: " + Boolean(ctx.merged?.mergedAt),
-    "Plan: " + JSON.stringify(ctx.plan),
   ].join("\\n");
   return {
     currentUnderstanding,
-    decision: "Cycle " + ctx.cycle.id + ": approved plan for " + ctx.candidate.path,
+    decision: "Cycle " + ctx.cycle.id + ": " + ctx.plan.title + " for " + ctx.candidate.path,
     timeline: "Cycle " + ctx.cycle.id + ": merged " + ctx.pullRequest.url,
+  };
+}
+`,
+      },
+      {
+        path: "scripts/preflight-environment.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function exec(command, args) {
+  try {
+    return execFileSync(command, args, { encoding: "utf8" }).trim();
+  } catch (error) {
+    const detail = String(error?.stderr || error?.message || error).trim();
+    throw new Error("Preflight failed while running " + command + " " + args.join(" ") + ": " + detail);
+  }
+}
+function repositoryFromRemote(url) {
+  const match = url.match(/github\\.com[/:]([^/]+)\\/([^/]+?)(?:\\.git)?$/u);
+  if (!match) throw new Error("Preflight requires origin to point to a GitHub repository.");
+  return match[1] + "/" + match[2];
+}
+export async function run(ctx) {
+  exec("git", ["--version"]);
+  if (exec("git", ["rev-parse", "--is-inside-work-tree"]) !== "true") {
+    throw new Error("Preflight requires the configured cwd to be a git worktree.");
+  }
+  const remoteUrl = exec("git", ["remote", "get-url", "origin"]);
+  const repository = repositoryFromRemote(remoteUrl);
+  return {
+    branch: ctx.branch,
+    remote: "origin",
+    repository,
+  };
+}
+`,
+      },
+      {
+        path: "scripts/preflight-delivery.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function exec(command, args) {
+  try {
+    return execFileSync(command, args, { encoding: "utf8" }).trim();
+  } catch (error) {
+    const detail = String(error?.stderr || error?.message || error).trim();
+    throw new Error("Delivery preflight failed while running " + command + " " + args.join(" ") + ": " + detail);
+  }
+}
+export async function run(ctx) {
+  exec("git", ["config", "--get", "user.name"]);
+  exec("git", ["config", "--get", "user.email"]);
+  exec("gh", ["auth", "status"]);
+  return {
+    repository: ctx.preflight.repository,
   };
 }
 `,
@@ -353,31 +425,42 @@ import path from "node:path";
 const extensions = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java"]);
 const ignoredDirectory = /(?:^|\\/)(?:node_modules|\\.next|dist|build|coverage|vendor|generated|__tests__|tests?)(?:\\/|$)/u;
 const ignoredFile = /(?:^|\\/)[^/]+\\.(?:test|spec|gen|generated)\\.[^/]+$/u;
-function git(args) { return execFileSync("git", args, { encoding: "utf8" }); }
-function lineCount(content) {
-  if (!content) return 0;
-  const lines = content.split(/\\r?\\n/u);
-  return lines.at(-1) === "" ? lines.length - 1 : lines.length;
+function gitLineCounts(commit) {
+  let output = "";
+  try {
+    output = execFileSync(
+      "git",
+      ["grep", "-I", "--count", "-e", "^", commit, "--"],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+    );
+  } catch (error) {
+    if (error?.status !== 1) throw error;
+    output = String(error?.stdout || "");
+  }
+  const prefix = commit + ":";
+  return output
+    .trim()
+    .split(/\\r?\\n/u)
+    .flatMap((line) => {
+      if (!line.startsWith(prefix)) return [];
+      const separator = line.lastIndexOf(":");
+      const lines = Number(line.slice(separator + 1));
+      return Number.isInteger(lines)
+        ? [{ path: line.slice(prefix.length, separator), lines }]
+        : [];
+    });
 }
 export async function run(ctx) {
   const root = String(ctx.root ?? "")
     .replace(/^\\.\\//u, "")
     .replace(/\\/+$/u, "");
-  const paths = git(["ls-tree", "-r", "--name-only", ctx.sync.commit])
-    .trim()
-    .split(/\\r?\\n/u)
+  const candidate = gitLineCounts(ctx.sync.commit)
     .filter((file) =>
-      file &&
-      (!root || file === root || file.startsWith(root + "/")) &&
-      !ignoredDirectory.test(file) &&
-      !ignoredFile.test(file) &&
-      extensions.has(path.extname(file))
-    );
-  const files = paths.map((file) => ({
-    path: file,
-    lines: lineCount(git(["show", ctx.sync.commit + ":" + file])),
-  }));
-  const candidate = files
+      (!root || file.path === root || file.path.startsWith(root + "/")) &&
+      !ignoredDirectory.test(file.path) &&
+      !ignoredFile.test(file.path) &&
+      extensions.has(path.extname(file.path))
+    )
     .filter((file) => file.lines > ctx.threshold)
     .sort((left, right) => right.lines - left.lines || left.path.localeCompare(right.path))[0];
   return candidate
@@ -387,22 +470,96 @@ export async function run(ctx) {
 `,
       },
       {
+        path: "scripts/ensure-approval-label.mjs",
+        content: `import { execFileSync } from "node:child_process";
+function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
+function apiPath(ctx) {
+  return "repos/" + ctx.deliveryReady.repository + "/labels/" + encodeURIComponent(ctx.label);
+}
+function output(ctx) {
+  return { name: ctx.label, repository: ctx.deliveryReady.repository };
+}
+function labelExists(ctx) {
+  try {
+    gh(["api", apiPath(ctx)]);
+    return true;
+  } catch (error) {
+    const message = String(error?.stderr || error?.message || error);
+    if (/HTTP 404|Not Found/iu.test(message)) return false;
+    throw error;
+  }
+}
+export async function apply(ctx) {
+  if (!labelExists(ctx)) {
+    gh([
+      "label",
+      "create",
+      ctx.label,
+      "--repo",
+      ctx.deliveryReady.repository,
+      "--color",
+      "1D76DB",
+      "--description",
+      "Approve a Tutti Flow plan for execution",
+    ]);
+  }
+  return {
+    externalRef: ctx.deliveryReady.repository + ":" + ctx.label,
+    output: output(ctx),
+  };
+}
+export async function reconcile(ctx) {
+  if (labelExists(ctx)) {
+    return {
+      status: "completed",
+      externalRef: ctx.deliveryReady.repository + ":" + ctx.label,
+      output: output(ctx),
+    };
+  }
+  return { status: "not_applied" };
+}
+`,
+      },
+      {
         path: "scripts/create-issue.mjs",
         content: `import { execFileSync } from "node:child_process";
 function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
+function bullets(values, prefix = "- ") {
+  return values.map((value, index) => prefix === "1. " ? (index + 1) + ". " + value : prefix + value).join("\\n");
+}
 export async function apply(ctx) {
   const marker = "[flow:" + ctx.cycle.id + "]";
   const title = marker + " Refactor " + ctx.candidate.path;
-  const body = "Automated proposal\\n\\n\\\`\\\`\\\`json\\n" + JSON.stringify(ctx.plan, null, 2) + "\\n\\\`\\\`\\\`";
+  const body = [
+    "## Candidate",
+    "\`" + ctx.candidate.path + "\` — " + ctx.candidate.lines + " lines",
+    "",
+    "## Rationale",
+    ctx.plan.rationale,
+    "",
+    "## Boundaries",
+    bullets(ctx.plan.boundaries),
+    "",
+    "## Plan",
+    bullets(ctx.plan.orderedSteps, "1. "),
+    "",
+    "## Validation",
+    bullets(ctx.plan.tests, "- [ ] "),
+    "",
+    "## Risks",
+    bullets(ctx.plan.risks),
+    "",
+    "Add the \`" + ctx.approvalLabel.name + "\` label to approve this plan.",
+  ].join("\\n");
   const url = gh(["issue", "create", "--title", title, "--body", body]);
-  return { externalRef: url, output: { url, title, marker } };
+  return { externalRef: url, output: { url, title, marker, approvalLabel: ctx.approvalLabel.name } };
 }
 export async function reconcile(ctx) {
   const marker = "[flow:" + ctx.cycle.id + "]";
   const raw = gh(["issue", "list", "--state", "all", "--search", marker + " in:title", "--json", "url,title"]);
   const issue = JSON.parse(raw)[0];
   return issue
-    ? { status: "completed", externalRef: issue.url, output: { ...issue, marker } }
+    ? { status: "completed", externalRef: issue.url, output: { ...issue, marker, approvalLabel: ctx.approvalLabel.name } }
     : { status: "not_applied" };
 }
 `,
@@ -415,18 +572,25 @@ function issueApiPath(url) {
   if (!owner || !repo || kind !== "issues" || !number) throw new Error("Invalid GitHub Issue URL: " + url);
   return "repos/" + owner + "/" + repo + "/issues/" + number;
 }
+function isTransient(error) {
+  const message = String(error?.stderr || error?.message || error);
+  return /\\b(?:EOF|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH)\\b|timed? out|connection reset|TLS handshake|HTTP (?:408|429|5\\d\\d)|rate limit/iu.test(message);
+}
 export async function check(ctx) {
   const apiPath = issueApiPath(ctx.issue.url);
   try {
     const issue = JSON.parse(execFileSync("gh", ["api", apiPath], { encoding: "utf8" }));
     const output = { state: issue.state, labels: issue.labels, url: issue.html_url };
     if (issue.state === "closed") return { status: "completed", outcome: "rejected", output };
-    const approved = issue.labels.some((label) => label.name === "flow-approved");
+    const approved = issue.labels.some((label) => label.name === ctx.issue.approvalLabel);
     return approved
       ? { status: "completed", outcome: "approved", output }
-      : { status: "waiting", reason: "Add the flow-approved label to approve the Issue plan." };
-  } catch {
-    return { status: "waiting", reason: "GitHub Issue status is temporarily unavailable; retry on the next Tick." };
+      : { status: "waiting", reason: "Add the " + ctx.issue.approvalLabel + " label to approve the Issue plan." };
+  } catch (error) {
+    if (isTransient(error)) {
+      return { status: "waiting", reason: "GitHub Issue status is temporarily unavailable; retry on the next Tick." };
+    }
+    throw error;
   }
 }
 `,
@@ -444,7 +608,7 @@ function identity(ctx) {
   return {
     root,
     path: path.join(root, "cycle-" + ctx.cycle.id),
-    branch: "flow/large-file-" + ctx.cycle.sequence,
+    branch: "flow/large-file-" + ctx.cycle.id.slice(0, 12),
   };
 }
 export async function apply(ctx) {
@@ -550,7 +714,18 @@ function run(command, args, cwd = process.cwd()) {
   return execFileSync(command, args, { cwd, encoding: "utf8" }).trim();
 }
 export async function apply(ctx) {
-  const url = run("gh", ["pr", "create", "--head", ctx.push.branch, "--base", ctx.mainBranch, "--title", "Refactor " + ctx.candidate.path, "--body", "Closes " + ctx.issue.url]);
+  const body = [
+    "## Summary",
+    ctx.plan.title,
+    "",
+    "Refactors \`" + ctx.candidate.path + "\` from its previous " + ctx.candidate.lines + "-line form.",
+    "",
+    "## Validation plan",
+    ctx.plan.tests.map((test) => "- " + test).join("\\n"),
+    "",
+    "Closes " + ctx.issue.url,
+  ].join("\\n");
+  const url = run("gh", ["pr", "create", "--head", ctx.push.branch, "--base", ctx.mainBranch, "--title", "Refactor " + ctx.candidate.path, "--body", body]);
   return {
     externalRef: url,
     output: { url, branch: ctx.push.branch, commit: ctx.commit.sha },
@@ -598,6 +773,7 @@ export async function reconcile(ctx) {
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 export async function run(ctx) {
+  const branch = "flow/large-file-" + ctx.cycle.id.slice(0, 12);
   const workspace = path.join(
     process.cwd(),
     ".tutti-flow-worktrees",
@@ -613,9 +789,27 @@ export async function run(ctx) {
     cwd: process.cwd(),
     encoding: "utf8",
   });
+  try {
+    execFileSync("git", ["branch", "-D", branch], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+  } catch {}
+  const commonDir = path.resolve(
+    process.cwd(),
+    execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    }).trim(),
+  );
+  fs.rmSync(
+    path.join(commonDir, "tutti-flow-state", "sync-" + ctx.cycle.id + ".json"),
+    { force: true },
+  );
   return {
     cleaned: true,
     workspace,
+    branch,
     terminalStatus: ctx.terminal.status,
   };
 }
@@ -629,6 +823,10 @@ function pullRequestApiPath(url) {
   if (!owner || !repo || kind !== "pull" || !number) throw new Error("Invalid GitHub Pull Request URL: " + url);
   return "repos/" + owner + "/" + repo + "/pulls/" + number;
 }
+function isTransient(error) {
+  const message = String(error?.stderr || error?.message || error);
+  return /\\b(?:EOF|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH)\\b|timed? out|connection reset|TLS handshake|HTTP (?:408|429|5\\d\\d)|rate limit/iu.test(message);
+}
 export async function check(ctx) {
   const apiPath = pullRequestApiPath(ctx.pullRequest.url);
   try {
@@ -637,8 +835,11 @@ export async function check(ctx) {
     if (pr.merged_at) return { status: "completed", outcome: "merged", output };
     if (pr.state === "closed") return { status: "completed", outcome: "closed", output };
     return { status: "waiting", reason: "Pull request is still open." };
-  } catch {
-    return { status: "waiting", reason: "GitHub Pull Request status is temporarily unavailable; retry on the next Tick." };
+  } catch (error) {
+    if (isTransient(error)) {
+      return { status: "waiting", reason: "GitHub Pull Request status is temporarily unavailable; retry on the next Tick." };
+    }
+    throw error;
   }
 }
 `,
