@@ -314,6 +314,7 @@ export function parseFlowV1Bundle(bundle: FlowV1Bundle): ParsedFlowV1 {
   const controlEdges = buildControlEdges(state);
   const edges = [...dataEdges, ...controlEdges];
   validateSchemaReferences({ params, inputs, secrets, nodes: state.nodes }, state);
+  validateNodeSecretAccess(secrets, state);
   validateSchedule(schedule, inputs, state);
   validateCycleAndMemory(cycles, memory, state);
   validateControlOutcomes(state.nodes, controlEdges, state);
@@ -1096,6 +1097,33 @@ function addNode(
   const permissionMode = readResolvableString(
     properties?.get("permissionMode"),
   );
+  const secretAccessNode = unwrapExpression(properties?.get("secrets"));
+  const secretNames = readStringArray(properties?.get("secrets"));
+  if (
+    properties?.has("secrets") &&
+    (secretAccessNode?.type !== "ArrayExpression" ||
+      secretNames.length !== asNodeArray(secretAccessNode.elements).length ||
+      secretNames.some((name) => !name.trim()))
+  ) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.node_secret_access_invalid",
+        `Node ${id} Secret access must be an array of non-empty Secret names.`,
+        `nodes.${id}.secrets`,
+        properties.get("secrets"),
+      ),
+    );
+  }
+  if (properties?.has("secrets") && !CODE_NODE_EXPORTS[kind]) {
+    state.diagnostics.push(
+      diagnostic(
+        "flow.node_secret_owner_invalid",
+        `Only Code nodes may declare Secret access.`,
+        `nodes.${id}.secrets`,
+        properties.get("secrets"),
+      ),
+    );
+  }
   const output = readAgentOutput(
     properties?.get("output"),
     id,
@@ -1166,6 +1194,9 @@ function addNode(
       ? readString(properties?.get("outcome"))
         ? { terminalOutcome: readString(properties?.get("outcome")) }
         : {}
+      : {}),
+    ...(secretNames.length > 0 && CODE_NODE_EXPORTS[kind]
+      ? { secretNames: [...new Set(secretNames)] }
       : {}),
     ...(rangeOf(initializer) ? { sourceRange: rangeOf(initializer) } : {}),
   };
@@ -1917,6 +1948,25 @@ function validateSchemaReferences(
             ),
           );
         }
+      }
+    }
+  }
+}
+
+function validateNodeSecretAccess(
+  secrets: Record<string, FlowV1SchemaEntry>,
+  state: ParserState,
+): void {
+  for (const node of state.nodes) {
+    for (const secretName of node.secretNames ?? []) {
+      if (!secrets[secretName]) {
+        state.diagnostics.push(
+          diagnostic(
+            "flow.node_secret_unknown",
+            `Node ${node.id} declares unknown Secret "${secretName}".`,
+            `nodes.${node.id}.secrets`,
+          ),
+        );
       }
     }
   }

@@ -173,6 +173,35 @@ describe("Flow v1 CodeRunner", () => {
       }),
     ).toThrow(/does not match its immutable hash/u);
   });
+
+  it("rejects structured results containing an injected Secret", async () => {
+    const runner = await import("./code-runner");
+    const bundle = codeBundle([
+      {
+        path: "scripts/leak.mjs",
+        content: `
+          export async function run() {
+            return { nested: { token: "prefix-" + process.env.FLOW_TEST_TOKEN } };
+          }
+        `,
+      },
+    ]);
+
+    await expect(
+      runner.runFlowV1CodeModule({
+        versionId: "version-secret-output",
+        bundle,
+        file: "scripts/leak.mjs",
+        exportName: "run",
+        context: {},
+        secrets: { FLOW_TEST_TOKEN: "credential-value" },
+      }),
+    ).rejects.toMatchObject({
+      code: "flow_runner_secret_output",
+      message:
+        "Code module scripts/leak.mjs returned a value containing a Secret.",
+    });
+  });
 });
 
 function codeBundle(

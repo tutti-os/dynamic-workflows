@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { looksLikeSecretValue } from "@/lib/flow-v1/secret-bindings";
 
 /**
  * Version 17 is the Flow v1 cutover. It intentionally rebuilt workflow
@@ -8,10 +9,15 @@ import type Database from "better-sqlite3";
  * forward, existing Flow data must be preserved.
  *
  * Version 20 restores explicit Agent session keys for durable session reuse.
+ *
+ * Version 21 removes legacy environment bindings that contain GitHub token
+ * values. Those values were accepted as syntactically valid environment names
+ * and could be returned through configuration projections.
  */
-export const CURRENT_SCHEMA_VERSION = 20;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 export function migrateDb(database: Database.Database): void {
+  database.pragma("secure_delete = ON");
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -22,16 +28,24 @@ export function migrateDb(database: Database.Database): void {
   if (currentVersion >= CURRENT_SCHEMA_VERSION) {
     return;
   }
+  const scrubLegacyCredentialPages =
+    currentVersion >= 18 && currentVersion <= 20;
 
   database.pragma("foreign_keys = OFF");
+  let migrated = false;
   try {
     database.transaction(() => {
       if (currentVersion === 18) {
         migrateFlowV1Schema18To19(database);
         migrateFlowV1Schema19To20(database);
+        migrateFlowV1Schema20To21(database);
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       } else if (currentVersion === 19) {
         migrateFlowV1Schema19To20(database);
+        migrateFlowV1Schema20To21(database);
+        recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
+      } else if (currentVersion === 20) {
+        migrateFlowV1Schema20To21(database);
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       } else {
         dropWorkflowSchema(database);
@@ -40,8 +54,12 @@ export function migrateDb(database: Database.Database): void {
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       }
     })();
+    migrated = true;
   } finally {
     database.pragma("foreign_keys = ON");
+  }
+  if (migrated && scrubLegacyCredentialPages) {
+    database.pragma("wal_checkpoint(TRUNCATE)");
   }
 }
 
@@ -70,6 +88,56 @@ function migrateFlowV1Schema19To20(database: Database.Database): void {
     CREATE INDEX idx_workflow_node_attempts_cycle_session
       ON workflow_node_attempts(cycle_id, agent_session_key, started_at);
   `);
+}
+
+function migrateFlowV1Schema20To21(database: Database.Database): void {
+  const bindingTable = database
+    .prepare(
+      `
+      SELECT 1 AS present
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'workflow_secret_bindings'
+    `,
+    )
+    .get() as { present: number } | undefined;
+  if (!bindingTable) {
+    return;
+  }
+  const rows = database
+    .prepare(
+      `
+      SELECT flow_id, secret_name, binding_json
+      FROM workflow_secret_bindings
+    `,
+    )
+    .all() as Array<{
+    flow_id: string;
+    secret_name: string;
+    binding_json: string;
+  }>;
+  const removeBinding = database.prepare(
+    `
+    DELETE FROM workflow_secret_bindings
+    WHERE flow_id = ? AND secret_name = ?
+  `,
+  );
+  for (const row of rows) {
+    try {
+      const binding = JSON.parse(row.binding_json) as {
+        kind?: unknown;
+        env?: unknown;
+      };
+      if (
+        binding.kind === "environment" &&
+        typeof binding.env === "string" &&
+        looksLikeSecretValue(binding.env)
+      ) {
+        removeBinding.run(row.flow_id, row.secret_name);
+      }
+    } catch {
+      // Corrupt bindings remain visible to the existing corruption diagnostics.
+    }
+  }
 }
 
 function getCurrentSchemaVersion(database: Database.Database): number {

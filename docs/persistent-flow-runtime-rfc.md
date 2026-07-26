@@ -378,9 +378,23 @@ The namespaces are deliberately separate:
 Source-text substitution such as `${param.repo}` is not used. Values are
 resolved as typed references.
 
-Secrets are never legal prompt template values. Each Script or Effect must
-declare the Secret names it can access. Secret values are not written to
-inputs, outputs, events, logs, Memory, or semantic review payloads.
+Secrets are never legal prompt template values. Each Script, Transform, Gate,
+Effect, or Finally node must declare the Secret names it can access with
+`secrets: ["NAME"]`; Code nodes receive none by default. A structured result
+containing an injected Secret is rejected before checkpointing. Secret values
+are not written to inputs, outputs, events, logs, Memory, or semantic review
+payloads.
+
+`connectionSecret` bindings persist only a provider connection reference. For
+GitHub, the local runtime discovers accounts authenticated by GitHub CLI,
+stores the selected host and login, and resolves the token from the CLI
+credential store immediately before execution. Environment-variable bindings
+remain an advanced fallback and persist only the variable name. Values that
+look like credentials must be rejected instead of being accepted as variable
+names. Migration removes legacy token-shaped bindings with SQLite secure-delete
+enabled and truncates the WAL as a best-effort local scrub. Because previously
+exposed credentials may also exist in backups, logs, or copied databases, the
+credential must still be rotated.
 
 A recurring Schedule must bind every required Cycle input to a Param, literal,
 or default. A Flow cannot be enabled if its Schedule cannot start unattended.

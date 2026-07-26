@@ -370,6 +370,7 @@ const push = effect({
 const pullRequest = effect({
   id: "create_pull_request",
   file: "scripts/create-delivery-pr.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: {
     push,
     title: ref("delivery.title"),
@@ -605,6 +606,7 @@ const push = effect({
 const pullRequest = effect({
   id: "create_pull_request",
   file: "scripts/create-delivery-pr.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: {
     push,
     title: ref("delivery.title"),
@@ -1000,6 +1002,7 @@ const push = effect({
 const pullRequest = effect({
   id: "create_pull_request",
   file: "scripts/create-delivery-pr.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: {
     push,
     title: ref("delivery.title"),

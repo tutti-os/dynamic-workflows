@@ -130,11 +130,13 @@ const noWork = completeCycle({
 const deliveryReady = script({
   id: "preflight_delivery",
   file: "scripts/preflight-delivery.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { candidate, preflight },
 });
 const approvalLabel = effect({
   id: "ensure_approval_label",
   file: "scripts/ensure-approval-label.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: {
     deliveryReady,
     label: ref("params.approvalLabel"),
@@ -162,12 +164,14 @@ const plan = agent({
 const issue = effect({
   id: "create_issue",
   file: "scripts/create-issue.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { approvalLabel, candidate, plan },
   idempotencyKey: template("{{cycle.id}}:create-issue"),
 });
 const approval = gate({
   id: "wait_issue_approval",
   file: "scripts/issue-approval.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { issue },
   outcomes: ["approved", "rejected"],
 });
@@ -336,6 +340,7 @@ const notAccepted = agent({
 const closeNotAcceptedIssue = effect({
   id: "close_qa_not_accepted_issue",
   file: "scripts/resolve-issue.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { issue, notAccepted },
   idempotencyKey: template("{{cycle.id}}:close-qa-not-accepted"),
 });
@@ -348,6 +353,7 @@ const qaNotAccepted = completeCycle({
 const closeHumanRejectedIssue = effect({
   id: "close_human_rejected_issue",
   file: "scripts/resolve-issue.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { issue, humanReview, reviewPackage },
   idempotencyKey: template("{{cycle.id}}:close-human-rejected"),
 });
@@ -384,6 +390,7 @@ const push = effect({
 const pullRequest = effect({
   id: "create_pull_request",
   file: "scripts/create-pr.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: {
     issue,
     candidate,
@@ -403,6 +410,7 @@ const pullRequest = effect({
 const noChangesIssue = effect({
   id: "close_no_changes_issue",
   file: "scripts/resolve-issue.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { issue, changes },
   idempotencyKey: template("{{cycle.id}}:close-no-changes"),
 });
@@ -415,12 +423,14 @@ const noChanges = completeCycle({
 const merged = gate({
   id: "wait_pull_request_merge",
   file: "scripts/pr-merged.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { pullRequest },
   outcomes: ["merged", "closed"],
 });
 const closeIssue = effect({
   id: "close_issue",
   file: "scripts/close-issue.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { issue, pullRequest, merged },
   idempotencyKey: template("{{cycle.id}}:close-issue"),
 });
@@ -462,6 +472,7 @@ const rejected = cancelCycle({
 const rejectedDeliveryIssue = effect({
   id: "close_rejected_delivery_issue",
   file: "scripts/resolve-issue.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { issue, pullRequest, merged },
   idempotencyKey: template("{{cycle.id}}:close-rejected-delivery"),
 });

@@ -66,6 +66,7 @@ const plan = agent({
 const issue = effect({
   id: "issue",
   file: "scripts/create-issue.mjs",
+  secrets: ["githubConnection"],
   inputs: { plan: ref("plan") },
   idempotencyKey: template("{{cycle.id}}:issue"),
 });
@@ -118,6 +119,9 @@ describe("flow v1 parser", () => {
         permissionMode: "workspace-write",
         cwd: "packages/app",
       }),
+    );
+    expect(parsed.nodes.find((node) => node.id === "issue")?.secretNames).toEqual(
+      ["githubConnection"],
     );
     expect(parsed.nodes.find((node) => node.id === "candidate")?.retry).toEqual(
       {
@@ -195,6 +199,43 @@ describe("flow v1 parser", () => {
         "flow.schema_required_invalid",
         "flow.schema_number_constraint_invalid",
         "flow.schema_secret_provider_invalid",
+      ]),
+    );
+  });
+
+  it("restricts explicit Secret access to Code nodes and declared names", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            export const secrets = defineSecrets({
+              GH_TOKEN: connectionSecret({ provider: "github" }),
+            });
+            script({
+              id: "unknown",
+              file: "scripts/run.mjs",
+              secrets: ["MISSING_TOKEN"],
+            });
+            agent({
+              id: "agent",
+              secrets: ["GH_TOKEN"],
+              prompt: "Inspect.",
+            });
+          `,
+        },
+        {
+          path: "scripts/run.mjs",
+          content: "export async function run() { return {}; }",
+        },
+      ]),
+    );
+
+    expect(parsed.diagnostics.map((entry) => entry.code)).toEqual(
+      expect.arrayContaining([
+        "flow.node_secret_unknown",
+        "flow.node_secret_owner_invalid",
       ]),
     );
   });

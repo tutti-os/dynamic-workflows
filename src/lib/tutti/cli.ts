@@ -68,7 +68,10 @@ import {
 } from "@/lib/flow-v1/bundle";
 import { parseFlowV1Bundle } from "@/lib/flow-v1/parser";
 import type { FlowV1JsonObject } from "@/lib/flow-v1/types";
-import type { FlowV1SecretBinding } from "@/lib/flow-v1/runtime-config";
+import {
+  parseFlowV1SecretBinding,
+  type FlowV1SecretBinding,
+} from "@/lib/flow-v1/secret-bindings";
 import {
   hasWorkflowDiagnosticErrors,
   summarizeWorkflowDiagnostics,
@@ -1122,20 +1125,15 @@ function readSecretBindings(
   }
   const bindings: Record<string, FlowV1SecretBinding> = {};
   for (const [name, value] of Object.entries(raw)) {
-    if (
-      !value ||
-      typeof value !== "object" ||
-      Array.isArray(value) ||
-      value.kind !== "environment" ||
-      typeof value.env !== "string"
-    ) {
+    const binding = parseFlowV1SecretBinding(value);
+    if (!binding) {
       throw new CliHttpError(
         "invalid_input",
-        `Secret binding ${name} must be {"kind":"environment","env":"ENV_NAME"}.`,
+        `Secret binding ${name} must be an environment binding or a supported connection reference.`,
         400,
       );
     }
-    bindings[name] = { kind: "environment", env: value.env };
+    bindings[name] = binding;
   }
   return bindings;
 }

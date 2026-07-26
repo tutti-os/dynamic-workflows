@@ -51,8 +51,10 @@ Read `dsl-reference.md`, `patterns.md`, and `blueprint-guide.md` before writing.
   not hidden Memory.
 - Loop and Map are bounded composite nodes inside one Cycle.
 - Every control outcome closes honestly at `completeCycle` or `cancelCycle`.
-- Secrets are declared, bound by name, injected as environment variables, and
-  never interpolated into Agent prompts or returned in node output.
+- Secrets are declared, bound to provider connections or environment variable
+  names, and injected only into Code nodes that explicitly list them with
+  `secrets: ["NAME"]`. They are never interpolated into Agent prompts or
+  accepted in node output.
 - If `meta.requiresCwd` is true, the caller must configure a project cwd before
   activation.
 - Prefer clear node ids and labels: the graph, current position, Attempts, and

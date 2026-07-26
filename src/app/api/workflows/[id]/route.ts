@@ -13,11 +13,12 @@ import {
 } from "@/lib/flow-v1/version-projection";
 import {
   configureFlowV1,
+  FlowV1ServiceError,
   setFlowV1Lifecycle,
 } from "@/lib/flow-v1/flow-service";
 import { getFlowV1BundleForVersion } from "@/lib/db/workflows/flow-bundles";
+import { parseFlowV1SecretBindings } from "@/lib/flow-v1/secret-bindings";
 import type { FlowV1JsonObject } from "@/lib/flow-v1/types";
-import type { FlowV1SecretBinding } from "@/lib/flow-v1/runtime-config";
 
 export async function GET(
   request: Request,
@@ -68,8 +69,21 @@ export async function PATCH(
     defaultAgent?: string | null;
     defaultModel?: string | null;
     defaultPermissionMode?: string | null;
-    secretBindings?: Record<string, FlowV1SecretBinding>;
+    secretBindings?: unknown;
   };
+  const parsedSecretBindings =
+    body.secretBindings === undefined
+      ? undefined
+      : parseFlowV1SecretBindings(body.secretBindings);
+  if (body.secretBindings !== undefined && !parsedSecretBindings) {
+    return NextResponse.json(
+      apiError("WORKFLOW_UPDATE_FAILED", {
+        message: "Secret bindings must use a supported binding shape.",
+      }),
+      { status: 400 },
+    );
+  }
+  const secretBindings = parsedSecretBindings ?? undefined;
 
   if (
     body.params ||
@@ -77,7 +91,7 @@ export async function PATCH(
     body.defaultAgent !== undefined ||
     body.defaultModel !== undefined ||
     body.defaultPermissionMode !== undefined ||
-    body.secretBindings
+    body.secretBindings !== undefined
   ) {
     try {
       const config = configureFlowV1({
@@ -88,14 +102,20 @@ export async function PATCH(
         defaultAgent: body.defaultAgent,
         defaultModel: body.defaultModel,
         defaultPermissionMode: body.defaultPermissionMode,
-        secretBindings: body.secretBindings,
+        secretBindings,
       });
       return NextResponse.json({
         config,
         flowV1: getFlowV1DetailProjection(id),
       });
     } catch (error) {
-      return toWorkflowApiErrorResponse(error, "WORKFLOW_UPDATE_FAILED");
+      return toWorkflowApiErrorResponse(error, "WORKFLOW_UPDATE_FAILED", {
+        status:
+          error instanceof FlowV1ServiceError &&
+          error.code === "flow_secret_binding_invalid"
+            ? 400
+            : undefined,
+      });
     }
   }
 

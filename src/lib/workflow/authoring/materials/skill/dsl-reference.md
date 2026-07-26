@@ -174,6 +174,7 @@ const record = transform({
 const candidate = script({
   id: "candidate",
   file: "scripts/find.mjs",
+  secrets: ["GH_TOKEN"],
   inputs: { threshold: ref("params.threshold") },
   retry: {
     maxAttempts: 3,
@@ -191,6 +192,11 @@ const approval = gate({
 ```
 
 JavaScript modules export `run(ctx)` for Script and `check(ctx)` for Gate.
+Code nodes receive no Secrets by default. A Script, Transform, Gate, Effect, or
+Finally node must list every Secret it needs in `secrets: ["NAME"]`; undeclared
+or unknown names are rejected. Secret values are injected only into that
+node's environment. A structured result containing an injected Secret is
+rejected before it can be checkpointed.
 Script returns JSON. A Script with declared `outcomes` returns
 `{ outcome, output }` and can be routed like a Gate. Gate returns one of:
 

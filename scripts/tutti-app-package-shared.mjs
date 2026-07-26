@@ -58,7 +58,7 @@ export function cliManifest(options = {}) {
           params: string("JSON object containing initial Params."),
           cwd: string("Project directory used by code nodes."),
           "secret-bindings": string(
-            "JSON object mapping Secrets to environment variable names.",
+            "JSON object mapping Secrets to provider connections or environment variable names.",
           ),
           publish: boolean("Publish the imported Version."),
           activate: boolean("Activate the Flow after import."),
@@ -97,7 +97,7 @@ export function cliManifest(options = {}) {
         scope,
         ["configure"],
         "Configure a Flow",
-        "Update Params, project cwd, and Secret environment bindings.",
+        "Update Params, project cwd, and Secret provider/environment bindings.",
         {
           "workflow-id": string("Flow id."),
           params: string("JSON object containing Params."),
@@ -285,7 +285,7 @@ export function commandsMarkdown(options = {}) {
     "",
     "- Script and Gate nodes must be deterministic checks; external mutations belong in Effect nodes with idempotency keys and reconcile handlers.",
     "- Recurring schedules re-check waiting Gates without Agent token use.",
-    "- Params are revisioned configuration; Inputs are immutable per Cycle; Secrets store only environment variable bindings.",
+    "- Params are revisioned configuration; Inputs are immutable per Cycle; Secrets store only provider connection references or environment variable names.",
     "- Human responses and failed-node retries create new Ticks in the same Cycle.",
     "- `runs get` exposes Checkpoint, Attempts, Effect ledger, and pending Human tasks for audit.",
     "- Blueprints are copied authoring templates, never runtime dependencies.",

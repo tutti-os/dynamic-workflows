@@ -269,6 +269,7 @@ export type FlowV1Node = {
   memoryUpdates?: Record<string, FlowV1MemoryUpdateSpec>;
   continueMode?: "immediate" | "scheduled";
   terminalOutcome?: string;
+  secretNames?: string[];
   sourceRange?: { start: number; end: number };
 };
 
@@ -636,7 +637,7 @@ export type FlowV1DetailProjection = {
     defaultPermissionMode: string | null;
     secretBindings: Record<
       string,
-      { kind: "environment"; env: string }
+      import("./secret-bindings").FlowV1SecretBinding
     >;
   };
   memory: FlowV1MemoryProjection | null;

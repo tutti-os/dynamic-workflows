@@ -1,3 +1,11 @@
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { CURRENT_SCHEMA_VERSION, migrateDb } from "./migrations";
@@ -189,6 +197,7 @@ describe("migrateDb", () => {
       migrateDb(database);
 
       expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(database.pragma("secure_delete", { simple: true })).toBe(1);
       expect(
         database
           .prepare("SELECT name FROM workflows WHERE id = ?")
@@ -354,6 +363,122 @@ describe("migrateDb", () => {
       });
     } finally {
       database.close();
+    }
+  });
+
+  it("removes GitHub token values misfiled as environment names in schema 20", () => {
+    const database = new Database(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        INSERT INTO schema_migrations (version, applied_at)
+        VALUES (20, '2026-01-01T00:00:00.000Z');
+
+        CREATE TABLE workflow_secret_bindings (
+          flow_id TEXT NOT NULL,
+          secret_name TEXT NOT NULL,
+          binding_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (flow_id, secret_name)
+        );
+      `);
+      const insertBinding = database.prepare(`
+        INSERT INTO workflow_secret_bindings (
+          flow_id, secret_name, binding_json, updated_at
+        ) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')
+      `);
+      insertBinding.run(
+        "flow-1",
+        "GH_TOKEN",
+        JSON.stringify({
+          kind: "environment",
+          env: `ghp_${"a".repeat(36)}`,
+        }),
+      );
+      insertBinding.run(
+        "flow-1",
+        "SAFE_TOKEN",
+        JSON.stringify({
+          kind: "environment",
+          env: "TUTTI_FLOW_SAFE_TOKEN",
+        }),
+      );
+
+      migrateDb(database);
+
+      expect(readCurrentVersion(database)).toBe(CURRENT_SCHEMA_VERSION);
+      expect(
+        database
+          .prepare(
+            "SELECT secret_name, binding_json FROM workflow_secret_bindings ORDER BY secret_name",
+          )
+          .all(),
+      ).toEqual([
+        {
+          secret_name: "SAFE_TOKEN",
+          binding_json: JSON.stringify({
+            kind: "environment",
+            env: "TUTTI_FLOW_SAFE_TOKEN",
+          }),
+        },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("scrubs removed legacy credential bytes from a WAL database", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "flow-migration-test-"));
+    const databasePath = path.join(directory, "workflows.sqlite");
+    const token = `ghp_${"z".repeat(36)}`;
+    const database = new Database(databasePath);
+    try {
+      database.pragma("journal_mode = WAL");
+      database.exec(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        INSERT INTO schema_migrations (version, applied_at)
+        VALUES (20, '2026-01-01T00:00:00.000Z');
+        CREATE TABLE workflow_secret_bindings (
+          flow_id TEXT NOT NULL,
+          secret_name TEXT NOT NULL,
+          binding_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (flow_id, secret_name)
+        );
+      `);
+      database
+        .prepare(
+          `
+          INSERT INTO workflow_secret_bindings (
+            flow_id, secret_name, binding_json, updated_at
+          ) VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')
+        `,
+        )
+        .run(
+          "flow-1",
+          "GH_TOKEN",
+          JSON.stringify({ kind: "environment", env: token }),
+        );
+
+      migrateDb(database);
+    } finally {
+      database.close();
+    }
+
+    try {
+      expect(
+        readdirSync(directory).some((file) =>
+          readFileSync(path.join(directory, file)).includes(token),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

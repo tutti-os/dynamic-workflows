@@ -38,12 +38,17 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
+import { SecretBindingField } from "@/components/workflow/SecretBindingField";
 import {
   WorkflowAgentSelect,
   WorkflowModelSelect,
   WorkflowPermissionModeSelect,
 } from "@/components/workflow/WorkflowRunSelectors";
 import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
+import {
+  looksLikeSecretValue,
+  type FlowV1SecretBinding,
+} from "@/lib/flow-v1/secret-bindings";
 import type {
   FlowV1DetailProjection,
   FlowV1Edge,
@@ -63,7 +68,7 @@ type FlowAction = "start" | "resume" | "retry" | "cancel";
 type RuntimeConfigDraft = {
   params: Record<string, string>;
   projectCwd: string;
-  secretEnvs: Record<string, string>;
+  secretBindings: Record<string, FlowV1SecretBinding>;
   agent: string;
   model: string;
   permissionMode: string;
@@ -524,14 +529,9 @@ function ConfigurationEditor(props: {
   const [projectCwd, setProjectCwd] = useState(
     configuration.projectCwd ?? "",
   );
-  const [secretEnvs, setSecretEnvs] = useState<Record<string, string>>(
-    Object.fromEntries(
-      Object.keys(configuration.secretsSchema).map((name) => [
-        name,
-        configuration.secretBindings[name]?.env ?? "",
-      ]),
-    ),
-  );
+  const [secretBindings, setSecretBindings] = useState<
+    Record<string, FlowV1SecretBinding>
+  >(() => ({ ...configuration.secretBindings }));
   const [pending, setPending] = useState<"save" | "lifecycle" | null>(
     null,
   );
@@ -546,7 +546,7 @@ function ConfigurationEditor(props: {
   const currentConfigDraft: RuntimeConfigDraft = {
     params: paramsDraft,
     projectCwd,
-    secretEnvs,
+    secretBindings,
     agent: runSettings.effectiveAgent,
     model: runSettings.model,
     permissionMode: runSettings.permissionMode,
@@ -565,7 +565,7 @@ function ConfigurationEditor(props: {
   function restoreConfigDraft(snapshot: RuntimeConfigDraft) {
     setParamsDraft(snapshot.params);
     setProjectCwd(snapshot.projectCwd);
-    setSecretEnvs(snapshot.secretEnvs);
+    setSecretBindings(snapshot.secretBindings);
     runSettings.setAgent(snapshot.agent);
     runSettings.setModel(snapshot.model);
     runSettings.setPermissionMode(snapshot.permissionMode);
@@ -593,14 +593,7 @@ function ConfigurationEditor(props: {
         configuration.paramsSchema,
         paramsDraft,
       );
-      const secretBindings = Object.fromEntries(
-        Object.entries(secretEnvs)
-          .filter(([, env]) => env.trim())
-          .map(([name, env]) => [
-            name,
-            { kind: "environment", env: env.trim() },
-          ]),
-      );
+      const savedSecretBindings = prepareSecretBindings(secretBindings);
       await patchFlow(props.workflowId, {
         params,
         expectedParamsRevision: configuration.params?.revision ?? 0,
@@ -609,7 +602,7 @@ function ConfigurationEditor(props: {
         defaultModel: runSettings.model.trim() || null,
         defaultPermissionMode:
           runSettings.permissionMode.trim() || null,
-        secretBindings,
+        secretBindings: savedSecretBindings,
       });
       await props.onRefresh();
       setMessage("Configuration saved.");
@@ -619,7 +612,10 @@ function ConfigurationEditor(props: {
       if (error instanceof SchemaFieldError) {
         setConfigFieldErrors({ [error.field]: error.message });
         window.setTimeout(() => {
-          document.getElementById(`runtime-param-${error.field}`)?.focus();
+          const field =
+            document.getElementById(`runtime-param-${error.field}`) ??
+            document.getElementById(`runtime-secret-${error.field}`);
+          field?.focus();
         });
       }
       setMessage(
@@ -784,22 +780,23 @@ function ConfigurationEditor(props: {
               </label>
               {Object.entries(configuration.secretsSchema).map(
                 ([name, definition]) => (
-                  <label key={name}>
-                    <span>
-                      Secret {name}
-                      {definition.required ? " · required" : ""}
-                    </span>
-                    <input
-                      onChange={(event) =>
-                        setSecretEnvs((current) => ({
-                          ...current,
-                          [name]: event.currentTarget.value,
-                        }))
-                      }
-                      placeholder="ENVIRONMENT_VARIABLE_NAME"
-                      value={secretEnvs[name] ?? ""}
-                    />
-                  </label>
+                  <SecretBindingField
+                    binding={secretBindings[name]}
+                    definition={definition}
+                    key={name}
+                    name={name}
+                    onChange={(binding) =>
+                      setSecretBindings((current) => {
+                        const next = { ...current };
+                        if (binding) {
+                          next[name] = binding;
+                        } else {
+                          delete next[name];
+                        }
+                        return next;
+                      })
+                    }
+                  />
                 ),
               )}
             </div>
@@ -845,8 +842,9 @@ function ConfigurationEditor(props: {
               onRetry={runSettings.retryAgents}
             />
             <p className="flow-dialog-hint">
-              Secret values stay in the environment. Only variable names are
-              stored.
+              Connection selections store only account references. Tokens stay
+              in the provider credential store. Environment variables remain
+              available as an advanced fallback.
             </p>
             {message ? (
               <p className="flow-dialog-message" role="status">
@@ -2088,6 +2086,30 @@ class SchemaFieldError extends Error {
     this.name = "SchemaFieldError";
     this.field = field;
   }
+}
+
+function prepareSecretBindings(
+  bindings: Record<string, FlowV1SecretBinding>,
+): Record<string, FlowV1SecretBinding> {
+  const prepared: Record<string, FlowV1SecretBinding> = {};
+  for (const [name, binding] of Object.entries(bindings)) {
+    if (binding.kind === "environment") {
+      const env = binding.env.trim();
+      if (!env) {
+        continue;
+      }
+      if (looksLikeSecretValue(env)) {
+        throw new SchemaFieldError(
+          name,
+          `${humanizeIdentifier(name)} looks like a token value. Select a connection or enter only an environment variable name.`,
+        );
+      }
+      prepared[name] = { kind: "environment", env };
+      continue;
+    }
+    prepared[name] = binding;
+  }
+  return prepared;
 }
 
 function parseSchemaValues(

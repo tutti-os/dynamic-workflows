@@ -2741,6 +2741,65 @@ a {
   gap: 4px;
 }
 
+.flow-secret-binding-field {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.flow-secret-binding-label {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.flow-secret-binding-select {
+  width: 100%;
+}
+
+.flow-secret-environment-field {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.flow-secret-environment-field > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.flow-secret-environment-field input[aria-invalid="true"] {
+  border-color: color-mix(in srgb, var(--state-danger) 58%, var(--border-1));
+}
+
+.flow-secret-binding-message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.flow-secret-binding-message[data-tone="warning"] {
+  color: var(--state-warning);
+}
+
+.flow-secret-binding-message button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .flow-runtime-param-fields {
   display: grid;
   gap: 10px;

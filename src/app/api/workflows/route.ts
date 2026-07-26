@@ -7,12 +7,15 @@ import {
 import { listWorkflows } from "@/lib/db/workflows/workflow-repository";
 import { ensureWorkflowGenerationStarted } from "@/lib/workflow/generation-jobs";
 import { createFlowV1Bundle } from "@/lib/flow-v1/bundle";
-import { createFlowV1 } from "@/lib/flow-v1/flow-service";
+import {
+  createFlowV1,
+  FlowV1ServiceError,
+} from "@/lib/flow-v1/flow-service";
+import { parseFlowV1SecretBindings } from "@/lib/flow-v1/secret-bindings";
 import type {
   FlowV1BundleSourceFile,
   FlowV1JsonObject,
 } from "@/lib/flow-v1/types";
-import type { FlowV1SecretBinding } from "@/lib/flow-v1/runtime-config";
 
 export async function GET() {
   return NextResponse.json({ workflows: listWorkflows() });
@@ -32,10 +35,23 @@ export async function POST(request: Request) {
     defaultAgent?: string;
     defaultModel?: string;
     defaultPermissionMode?: string;
-    secretBindings?: Record<string, FlowV1SecretBinding>;
+    secretBindings?: unknown;
   };
 
   if (body.bundle) {
+    const parsedSecretBindings =
+      body.secretBindings === undefined
+        ? undefined
+        : parseFlowV1SecretBindings(body.secretBindings);
+    if (body.secretBindings !== undefined && !parsedSecretBindings) {
+      return NextResponse.json(
+        apiError("WORKFLOW_SAVE_FAILED", {
+          message: "Secret bindings must use a supported binding shape.",
+        }),
+        { status: 400 },
+      );
+    }
+    const secretBindings = parsedSecretBindings ?? undefined;
     try {
       const bundle = createFlowV1Bundle(body.bundle.files ?? []);
       const created = createFlowV1({
@@ -47,11 +63,17 @@ export async function POST(request: Request) {
         defaultAgent: body.defaultAgent,
         defaultModel: body.defaultModel,
         defaultPermissionMode: body.defaultPermissionMode,
-        secretBindings: body.secretBindings,
+        secretBindings,
       });
       return NextResponse.json(created, { status: 201 });
     } catch (error) {
-      return toWorkflowApiErrorResponse(error, "WORKFLOW_SAVE_FAILED");
+      return toWorkflowApiErrorResponse(error, "WORKFLOW_SAVE_FAILED", {
+        status:
+          error instanceof FlowV1ServiceError &&
+          error.code === "flow_secret_binding_invalid"
+            ? 400
+            : undefined,
+      });
     }
   }
 

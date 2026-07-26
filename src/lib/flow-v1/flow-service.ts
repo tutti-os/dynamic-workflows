@@ -57,10 +57,11 @@ import {
   type FlowV1TickExecutionResult,
 } from "./tick-supervisor";
 import {
-  resolveFlowV1ExecutionConfig,
+  getFlowV1RuntimeConfig,
   setFlowV1RuntimeConfig,
   type FlowV1SecretBinding,
 } from "./runtime-config";
+import { validateFlowV1SecretBindingsAgainstSchema } from "./secret-bindings";
 import type {
   FlowV1Bundle,
   FlowV1JsonObject,
@@ -99,6 +100,7 @@ export function createFlowV1(input: {
   bundleHash: string;
 } {
   const flow = requireValidBundle(input.bundle);
+  requireValidSecretBindings(flow, input.secretBindings);
   if (
     input.activate &&
     flowRequiresDefaultAgent(flow) &&
@@ -516,6 +518,22 @@ export function publishFlowV1Version(input: {
   return { versionId: input.versionId, bundleHash: bundle.hash };
 }
 
+function requireValidSecretBindings(
+  flow: ParsedFlowV1,
+  bindings: Record<string, FlowV1SecretBinding> | undefined,
+): void {
+  if (!bindings) {
+    return;
+  }
+  const error = validateFlowV1SecretBindingsAgainstSchema(
+    flow.secrets,
+    bindings,
+  );
+  if (error) {
+    throw new FlowV1ServiceError("flow_secret_binding_invalid", error);
+  }
+}
+
 export function setFlowV1Lifecycle(input: {
   flowId: string;
   lifecycle: "active" | "paused" | "archived";
@@ -540,20 +558,31 @@ export function setFlowV1Lifecycle(input: {
       );
     }
     const flow = requireValidBundle(bundle);
-    const config = resolveFlowV1ExecutionConfig({
-      flowId: input.flowId,
-      flow,
-    });
+    const config = getFlowV1RuntimeConfig(input.flowId);
+    requireValidSecretBindings(flow, config.secretBindings);
     if (flow.meta.requiresCwd && !config.projectCwd) {
       throw new FlowV1ServiceError(
         "flow_project_cwd_missing",
         "Flow requires a configured project cwd before activation.",
       );
     }
-    if (config.missingSecretNames.length > 0) {
+    const missingSecretNames = Object.entries(flow.secrets)
+      .filter(([name, definition]) => {
+        if (!definition.required) {
+          return false;
+        }
+        const binding = config.secretBindings[name];
+        return (
+          !binding ||
+          (binding.kind === "environment" &&
+            process.env[binding.env] === undefined)
+        );
+      })
+      .map(([name]) => name);
+    if (missingSecretNames.length > 0) {
       throw new FlowV1ServiceError(
         "flow_secret_binding_missing",
-        `Flow is missing required Secret bindings: ${config.missingSecretNames.join(", ")}.`,
+        `Flow is missing required Secret bindings: ${missingSecretNames.join(", ")}.`,
       );
     }
     if (flowRequiresDefaultAgent(flow) && !config.defaultAgent) {
@@ -617,6 +646,7 @@ export function configureFlowV1(input: {
     );
   }
   const flow = requireValidBundle(bundle);
+  requireValidSecretBindings(flow, input.secretBindings);
   const database = getDb();
   return database.transaction(() => {
     let paramsRecord = getCurrentFlowV1Params(input.flowId);
@@ -649,7 +679,7 @@ export function configureFlowV1(input: {
       ...(input.defaultPermissionMode !== undefined
         ? { defaultPermissionMode: input.defaultPermissionMode }
         : {}),
-      ...(input.secretBindings
+      ...(input.secretBindings !== undefined
         ? { secretBindings: input.secretBindings }
         : {}),
     });

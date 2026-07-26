@@ -231,10 +231,39 @@ export async function runFlowV1CodeModule(input: {
         ...processResult,
       });
     }
+    if (containsSecretValue(value, Object.values(input.secrets ?? {}))) {
+      throw new FlowV1CodeRunnerError({
+        code: "flow_runner_secret_output",
+        message: `Code module ${input.file} returned a value containing a Secret.`,
+        ...processResult,
+      });
+    }
     return { value, ...processResult };
   } finally {
     fs.rmSync(executionDir, { recursive: true, force: true });
   }
+}
+
+function containsSecretValue(
+  value: FlowV1JsonValue,
+  secretValues: string[],
+): boolean {
+  const nonEmptySecrets = secretValues.filter(Boolean);
+  if (nonEmptySecrets.length === 0) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return nonEmptySecrets.some((secret) => value.includes(secret));
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsSecretValue(entry, nonEmptySecrets));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((entry) =>
+      containsSecretValue(entry, nonEmptySecrets),
+    );
+  }
+  return false;
 }
 
 function buildEnvironment(

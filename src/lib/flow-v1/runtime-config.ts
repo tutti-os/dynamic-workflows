@@ -5,7 +5,19 @@ import {
   parseJsonObjectColumn,
   stringifyJsonObjectColumn,
 } from "@/lib/db/workflows/json-schemas";
+import {
+  GitHubCliConnectionError,
+  resolveGitHubCliToken,
+} from "@/lib/connections/github-cli";
+import {
+  parseFlowV1SecretBinding,
+  type FlowV1SecretBinding,
+  validateFlowV1SecretBindingsAgainstSchema,
+  validateFlowV1SecretBinding,
+} from "./secret-bindings";
 import type { ParsedFlowV1 } from "./types";
+
+export type { FlowV1SecretBinding } from "./secret-bindings";
 
 export class FlowV1RuntimeConfigError extends Error {
   readonly code: string;
@@ -16,11 +28,6 @@ export class FlowV1RuntimeConfigError extends Error {
     this.code = code;
   }
 }
-
-export type FlowV1SecretBinding = {
-  kind: "environment";
-  env: string;
-};
 
 export type FlowV1RuntimeConfig = {
   projectCwd: string | null;
@@ -134,14 +141,11 @@ export function setFlowV1RuntimeConfig(input: {
         .run(input.flowId);
     }
     for (const [name, binding] of Object.entries(input.secretBindings ?? {})) {
-      if (
-        !name.trim() ||
-        binding.kind !== "environment" ||
-        !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(binding.env)
-      ) {
+      const bindingError = validateFlowV1SecretBinding(name, binding);
+      if (bindingError) {
         throw new FlowV1RuntimeConfigError(
           "flow_secret_binding_invalid",
-          `Secret binding ${name || "(empty)"} is invalid.`,
+          bindingError,
         );
       }
       database
@@ -217,19 +221,17 @@ export function getFlowV1RuntimeConfig(
       column: "binding_json",
       id: `${flowId}:${row.secret_name}`,
     });
+    const parsedBinding = parseFlowV1SecretBinding(binding);
     if (
-      binding.kind !== "environment" ||
-      typeof binding.env !== "string"
+      !parsedBinding ||
+      validateFlowV1SecretBinding(row.secret_name, parsedBinding)
     ) {
       throw new FlowV1RuntimeConfigError(
         "flow_secret_binding_corrupt",
         `Secret binding ${row.secret_name} is invalid.`,
       );
     }
-    secretBindings[row.secret_name] = {
-      kind: "environment",
-      env: binding.env,
-    };
+    secretBindings[row.secret_name] = parsedBinding;
   }
   return {
     projectCwd: flow.project_cwd,
@@ -240,23 +242,48 @@ export function getFlowV1RuntimeConfig(
   };
 }
 
-export function resolveFlowV1ExecutionConfig(input: {
+export async function resolveFlowV1ExecutionConfig(input: {
   flowId: string;
   flow: ParsedFlowV1;
-}): {
+}): Promise<{
   projectCwd: string | undefined;
   defaultAgent: string | undefined;
   defaultModel: string | undefined;
   defaultPermissionMode: string | undefined;
   secrets: Record<string, string>;
   missingSecretNames: string[];
-} {
+}> {
   const config = getFlowV1RuntimeConfig(input.flowId);
+  const bindingSchemaError = validateFlowV1SecretBindingsAgainstSchema(
+    input.flow.secrets,
+    config.secretBindings,
+  );
+  if (bindingSchemaError) {
+    throw new FlowV1RuntimeConfigError(
+      "flow_secret_binding_invalid",
+      bindingSchemaError,
+    );
+  }
   const secrets: Record<string, string> = {};
   const missingSecretNames: string[] = [];
   for (const [name, definition] of Object.entries(input.flow.secrets)) {
     const binding = config.secretBindings[name];
-    const value = binding ? process.env[binding.env] : undefined;
+    let value: string | undefined;
+    if (binding?.kind === "environment") {
+      value = process.env[binding.env];
+    } else if (binding?.kind === "connection") {
+      try {
+        value = await resolveGitHubCliToken({
+          host: binding.host,
+          login: binding.login,
+        });
+      } catch (error) {
+        if (error instanceof GitHubCliConnectionError) {
+          throw new FlowV1RuntimeConfigError(error.code, error.message);
+        }
+        throw error;
+      }
+    }
     if (value !== undefined && binding) {
       secrets[name] = value;
     } else if (definition.required) {

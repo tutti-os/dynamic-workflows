@@ -162,7 +162,11 @@ export async function runFlowV1Tick(input: {
       `Pinned Bundle for Tick ${run.id} no longer passes static validation.`,
     );
   }
-  const storedExecutionConfig = resolveFlowV1ExecutionConfig({
+  const executionEnvironment = omitDeclaredSecretsFromEnvironment(
+    input.environment,
+    Object.keys(flow.secrets),
+  );
+  const storedExecutionConfig = await resolveFlowV1ExecutionConfig({
     flowId: cycle.flowId,
     flow,
   });
@@ -289,7 +293,7 @@ export async function runFlowV1Tick(input: {
         defaultAgent: executionDefaultAgent,
         defaultModel: executionDefaultModel,
         defaultPermissionMode: executionDefaultPermissionMode,
-        environment: input.environment,
+        environment: executionEnvironment,
         secrets: executionSecrets,
         signal:
           terminalStatus === "canceled" ? undefined : executionSignal,
@@ -479,7 +483,7 @@ export async function runFlowV1Tick(input: {
             defaultModel: executionDefaultModel,
             defaultPermissionMode: executionDefaultPermissionMode,
             agentPrompt: job.agentPrompt,
-            environment: input.environment,
+            environment: executionEnvironment,
             secrets: executionSecrets,
             signal: executionSignal,
           }),
@@ -601,7 +605,7 @@ export async function runFlowV1Tick(input: {
             );
             persist(checkpoint, "running", node.id);
           },
-          environment: input.environment,
+          environment: executionEnvironment,
           secrets: executionSecrets,
           signal: executionSignal,
         });
@@ -746,7 +750,7 @@ export async function runFlowV1Tick(input: {
                     defaultModel: executionDefaultModel,
                     defaultPermissionMode:
                       executionDefaultPermissionMode,
-                    environment: input.environment,
+                    environment: executionEnvironment,
                     secrets: executionSecrets,
                     depth:
                       (input.immediateContinuationDepth ?? 0) + 1,
@@ -852,7 +856,7 @@ export async function runFlowV1Tick(input: {
                 defaultAgent: executionDefaultAgent,
                 defaultModel: executionDefaultModel,
                 defaultPermissionMode: executionDefaultPermissionMode,
-                environment: input.environment,
+                environment: executionEnvironment,
                 secrets: executionSecrets,
                 depth: (input.immediateContinuationDepth ?? 0) + 1,
               })
@@ -1092,6 +1096,7 @@ async function executeNode(input: {
   secrets?: Record<string, string>;
   signal?: AbortSignal;
 }): Promise<FlowV1NodeResult> {
+  const nodeSecrets = selectNodeSecrets(input.node, input.secrets);
   if (
     input.node.kind === "complete_cycle" ||
     input.node.kind === "cancel_cycle"
@@ -1140,7 +1145,7 @@ async function executeNode(input: {
           input.projectCwd,
         ),
         environment: input.environment,
-        secrets: input.secrets,
+        secrets: nodeSecrets,
         signal: input.signal,
       });
       if (
@@ -2184,6 +2189,7 @@ async function executeAgent(
 async function executeEffect(
   input: Parameters<typeof executeNode>[0],
 ): Promise<FlowV1NodeResult> {
+  const nodeSecrets = selectNodeSecrets(input.node, input.secrets);
   if (!input.node.file || !input.node.idempotencyKey) {
     return failure(
       "flow_effect_contract_invalid",
@@ -2260,7 +2266,7 @@ async function executeEffect(
         input.projectCwd,
       ),
       environment: input.environment,
-      secrets: input.secrets,
+      secrets: nodeSecrets,
       signal: input.signal,
     });
     const applied = readEffectApplyResult(execution.value);
@@ -2295,6 +2301,7 @@ async function runEffectReconcile(
   input: Parameters<typeof executeNode>[0],
   ledger: ReturnType<typeof startFlowV1Effect>["effect"],
 ): Promise<FlowV1EffectReconcileResult> {
+  const nodeSecrets = selectNodeSecrets(input.node, input.secrets);
   const execution = await runFlowV1CodeModule({
     versionId: input.versionId,
     bundle: input.bundle,
@@ -2314,10 +2321,39 @@ async function runEffectReconcile(
       input.projectCwd,
     ),
     environment: input.environment,
-    secrets: input.secrets,
+    secrets: nodeSecrets,
     signal: input.signal,
   });
   return readEffectReconcileResult(execution.value);
+}
+
+function selectNodeSecrets(
+  node: FlowV1Node,
+  secrets: Record<string, string> | undefined,
+): Record<string, string> {
+  const selected: Record<string, string> = {};
+  for (const name of node.secretNames ?? []) {
+    const value = secrets?.[name];
+    if (value !== undefined) {
+      selected[name] = value;
+    }
+  }
+  return selected;
+}
+
+function omitDeclaredSecretsFromEnvironment(
+  environment: Record<string, string> | undefined,
+  secretNames: string[],
+): Record<string, string> | undefined {
+  if (!environment) {
+    return undefined;
+  }
+  const declaredSecrets = new Set(secretNames);
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      ([name]) => !declaredSecrets.has(name),
+    ),
+  );
 }
 
 function resolveNodeInput(
