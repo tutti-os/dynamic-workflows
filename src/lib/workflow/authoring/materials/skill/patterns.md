@@ -44,7 +44,7 @@ const approval = gate({
 const implement = agent({
   id: "implement",
   inputs: { plan, approval },
-  prompt: "Implement the approved plan: {{plan}}",
+  prompt: "请实现已批准的方案：{{plan}}",
 });
 const rejected = cancelCycle({ id: "rejected", continue: "scheduled" });
 route(approval, { approved: implement, rejected });
@@ -76,8 +76,8 @@ const migrated = map({
     rejected: ["REJECTED"],
   },
   steps: [
-    agent({ id: "migrate", prompt: "Migrate {{item}}.", output: "json" }),
-    agent({ id: "verify", prompt: "Verify {{previous}}.", output: "json" }),
+    agent({ id: "migrate", prompt: "请迁移 {{item}}。", output: "json" }),
+    agent({ id: "verify", prompt: "请验证 {{previous}}。", output: "json" }),
   ],
 });
 ```
@@ -102,7 +102,7 @@ const review = loop({
     agent({
       id: "repair",
       prompt:
-        "Repair iteration {{iteration}} using the blockers in {{previousIteration}}.",
+        "请根据 {{previousIteration}} 中的阻塞项修复第 {{iteration}} 轮。",
     }),
     human({
       id: "approve",

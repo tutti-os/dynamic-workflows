@@ -98,7 +98,7 @@ describe("official Blueprint behavior", () => {
     expect(acceptance?.loop?.steps[0]).toEqual(
       expect.objectContaining({
         session: { mode: "inherit", key: "rd_room" },
-        appendPrompt: expect.stringContaining("QA blockers"),
+        appendPrompt: expect.stringContaining("QA 阻塞项"),
       }),
     );
     expect(acceptance?.loop?.steps[1]).toEqual(
@@ -107,7 +107,7 @@ describe("official Blueprint behavior", () => {
         session: { mode: "independent" },
         execution: { access: "review", isolation: "shared" },
         output: expect.objectContaining({ kind: "json" }),
-        prompt: expect.not.stringContaining("Initial implementation record"),
+        prompt: expect.not.stringContaining("初始实现记录"),
       }),
     );
 

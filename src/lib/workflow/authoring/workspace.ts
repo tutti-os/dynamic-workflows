@@ -39,11 +39,11 @@ export function prepareSemanticReviewWorkspace(input: {
   );
   fs.mkdirSync(dir, { recursive: true });
   const instructions = [
-    "# Workflow Design Reviewer",
+    "# 工作流设计审查者",
     "",
-    "Review only the workflow supplied in the task prompt.",
-    "Do not edit files, execute the workflow, submit it, or start another agent.",
-    "Return exactly the requested review result.",
+    "只审查任务提示词中提供的工作流。",
+    "不要编辑文件、执行工作流、提交工作流或启动其他 Agent。",
+    "严格返回所要求的审查结果。",
     "",
   ].join("\n");
   fs.writeFileSync(path.join(dir, "AGENTS.md"), instructions);

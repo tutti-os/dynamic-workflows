@@ -11,11 +11,11 @@ describe("workflow authoring prompts", () => {
       userCwd: "/workspace/project\nquoted context",
     });
 
-    expect(prompt).toContain("Job id: generation-1");
-    expect(prompt).toContain("Mode: create");
+    expect(prompt).toContain("任务 ID：generation-1");
+    expect(prompt).toContain("模式：create");
     expect(prompt).toContain(JSON.stringify(request));
     expect(prompt).not.toContain("<user_request>");
-    expect(prompt).toContain("Target directory: draft.flow");
+    expect(prompt).toContain("目标目录：draft.flow");
     expect(prompt).toContain(
       "authoring submit --job-id generation-1 --directory draft.flow",
     );
@@ -23,10 +23,10 @@ describe("workflow authoring prompts", () => {
     expect(prompt).toContain("--review-mode agent");
     expect(prompt).toContain("authoring review wait");
     expect(prompt).not.toContain("--skip-semantic-review");
-    expect(prompt).toContain("Script/Gate/Effect boundaries");
-    expect(prompt).toContain("complete standalone tutti.flow.v1 Bundle");
+    expect(prompt).toContain("Script/Gate/Effect 边界");
+    expect(prompt).toContain("完整且独立的 tutti.flow.v1 Bundle");
     expect(prompt).toContain(
-      'Related runtime project directory (JSON string):\n"/workspace/project\\nquoted context"',
+      '相关的运行时项目目录（JSON 字符串）：\n"/workspace/project\\nquoted context"',
     );
     expect(prompt).not.toContain("reason step by step");
   });

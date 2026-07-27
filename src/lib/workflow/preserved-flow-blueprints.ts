@@ -183,7 +183,7 @@ const feedback = loop({
       id: "draft",
       label: "Produce or revise result",
       output: "json",
-      prompt: "Produce the requested result as JSON. On later iterations, revise the previous draft using the human comment in previousIteration. Request: {{request}} Previous iteration: {{previousIteration}}",
+      prompt: "请以 JSON 格式产出所请求的结果。在后续迭代中，根据 previousIteration 中的人工反馈修改上一版草稿。请求：{{request}} 上一轮迭代：{{previousIteration}}",
     }),
     human({
       id: "review",
@@ -285,8 +285,8 @@ const acceptance = loop({
       id: "implement",
       label: "Implement requirement",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "Work in the configured repository. Implement the requirement, run focused checks, and leave changes uncommitted. Requirement: {{requirement}}",
-      appendPrompt: "Continue in the same RD session. Re-anchor on repository truth, repair only the latest acceptance blockers, run focused checks, and leave changes uncommitted. Blockers: {{previousIteration.outputs.review.blockers}} Suggestions: {{previousIteration.outputs.review.suggestions}}",
+      prompt: "请在已配置的代码仓库中工作。实现需求，运行有针对性的检查，并保留所有更改为未提交状态。需求：{{requirement}}",
+      appendPrompt: "请在同一个 RD 会话中继续。重新以代码仓库的实际状态为准，只修复最新的验收阻塞项，运行有针对性的检查，并保留所有更改为未提交状态。阻塞项：{{previousIteration.outputs.review.blockers}} 建议：{{previousIteration.outputs.review.suggestions}}",
     }),
     agent({
       id: "review",
@@ -308,7 +308,7 @@ const acceptance = loop({
           unverified: { type: "array" },
         },
       } }),
-      prompt: "Act as an independent reviewer in a fresh session inside the configured implementation workspace. Judge repository truth against the original requirement and do not rely on the implementer narrative. Reuse only the prior criteria and blockers below; intermediate rounds focus on repaired blockers and new diff, while a prospective PASS requires complete coverage. Return valid JSON with status, criteria, blockers, suggestions, checks, and unverified fields. Requirement: {{requirement}} Previous criteria: {{previousStep.criteria}} Previous blockers: {{previousStep.blockers}}",
+      prompt: "请在已配置的实现工作区中开启一个全新会话，担任独立审查者。依据代码仓库的实际状态和原始需求进行判断，不要依赖实现者的叙述。仅复用下方之前的验收标准与阻塞项；中间轮次重点检查已修复的阻塞项和新增差异，而准备给出 PASS 时必须覆盖全部变更。返回有效 JSON，包含 status、criteria、blockers、suggestions、checks 和 unverified 字段。需求：{{requirement}} 上一轮标准：{{previousStep.criteria}} 上一轮阻塞项：{{previousStep.blockers}}",
     }),
   ],
   until: { source: "review", finalStatus: "PASS" },
@@ -334,14 +334,14 @@ const delivery = agent({
       unverified: { type: "array" },
     },
   } }),
-  prompt: "Inspect repository truth and the accepted review. Return valid JSON with title, body, changedFiles, checks, and unverified fields for the commit and pull request. Do not perform Git or GitHub mutations. Requirement: {{requirement}} Acceptance: {{acceptance}}",
+  prompt: "请检查代码仓库的实际状态和已通过的审查结果。返回用于提交和拉取请求的有效 JSON，包含 title、body、changedFiles、checks 和 unverified 字段。不要执行任何 Git 或 GitHub 写操作。需求：{{requirement}} 验收结果：{{acceptance}}",
 });
 const notAccepted = agent({
   id: "not_accepted_report",
   label: "Report remaining blockers",
   inputs: { acceptance },
   output: "json",
-  prompt: "Return valid JSON describing the unfinished implementation, remaining blockers, checks, changed files, and an explicit result of not_accepted. Do not commit, push, or create a PR. Acceptance: {{acceptance}}",
+  prompt: "请返回有效 JSON，说明未完成的实现、剩余阻塞项、检查结果、变更文件，并明确将 result 设为 not_accepted。不要提交、推送或创建拉取请求。验收结果：{{acceptance}}",
 });
 const changes = script({
   id: "check_changes",
@@ -474,8 +474,8 @@ const alignment = loop({
       id: "implement",
       label: "Implement or revise",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "Implement the requirement in the configured repository. Run focused checks and do not commit. Requirement: {{requirement}}",
-      appendPrompt: "Continue in the same RD session. Re-anchor on repository truth and address only the latest explicit Human feedback. Run focused checks and do not commit. Human feedback: {{previousIteration.outputs.human_review.values.comment}}",
+      prompt: "请在已配置的代码仓库中实现需求。运行有针对性的检查，不要提交更改。需求：{{requirement}}",
+      appendPrompt: "请在同一个 RD 会话中继续。重新以代码仓库的实际状态为准，只处理最新且明确的人工反馈。运行有针对性的检查，不要提交更改。人工反馈：{{previousIteration.outputs.human_review.values.comment}}",
     }),
     human({
       id: "human_review",
@@ -524,8 +524,8 @@ const acceptance = loop({
       id: "repair",
       label: "Repair acceptance blockers",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "Continue as the Human-approved RD owner. Repair only the latest blocking findings against the original requirement, inspect repository truth, run focused checks, and do not commit. Requirement: {{requirement}} Blockers: {{previousIteration.outputs.review.blockers}} Suggestions: {{previousIteration.outputs.review.suggestions}}",
-      appendPrompt: "Continue in the same RD session. Re-anchor on repository truth, repair only the latest acceptance blockers, run focused checks, and do not commit. Blockers: {{previousIteration.outputs.review.blockers}} Suggestions: {{previousIteration.outputs.review.suggestions}}",
+      prompt: "请作为已获人工批准的 RD 负责人继续工作。仅修复相对于原始需求的最新阻塞问题，检查代码仓库的实际状态，运行有针对性的检查，不要提交更改。需求：{{requirement}} 阻塞项：{{previousIteration.outputs.review.blockers}} 建议：{{previousIteration.outputs.review.suggestions}}",
+      appendPrompt: "请在同一个 RD 会话中继续。重新以代码仓库的实际状态为准，只修复最新的验收阻塞项，运行有针对性的检查，不要提交更改。阻塞项：{{previousIteration.outputs.review.blockers}} 建议：{{previousIteration.outputs.review.suggestions}}",
     }),
     agent({
       id: "review",
@@ -547,7 +547,7 @@ const acceptance = loop({
           unverified: { type: "array" },
         },
       } }),
-      prompt: "Review repository truth independently in a fresh session inside the configured implementation workspace. Human approval permits review but is not acceptance evidence. Reuse only the prior criteria and blockers below; intermediate rounds focus on repaired blockers and new diff, while a prospective PASS requires complete coverage. Return valid JSON with status, criteria, blockers, suggestions, checks, and unverified fields. Requirement: {{requirement}} Previous criteria: {{previousStep.criteria}} Previous blockers: {{previousStep.blockers}}",
+      prompt: "请在已配置的实现工作区中开启一个全新会话，独立审查代码仓库的实际状态。人工批准只表示允许进入审查，并不能作为验收证据。仅复用下方之前的验收标准与阻塞项；中间轮次重点检查已修复的阻塞项和新增差异，而准备给出 PASS 时必须覆盖全部变更。返回有效 JSON，包含 status、criteria、blockers、suggestions、checks 和 unverified 字段。需求：{{requirement}} 上一轮标准：{{previousStep.criteria}} 上一轮阻塞项：{{previousStep.blockers}}",
     }),
   ],
   until: { source: "review", finalStatus: "PASS" },
@@ -570,14 +570,14 @@ const delivery = agent({
       unverified: { type: "array" },
     },
   } }),
-  prompt: "Inspect repository truth and return valid JSON with title, body, changedFiles, checks, and unverified fields for the commit and pull request. Do not perform Git or GitHub mutations. Alignment: {{alignment}} Acceptance: {{acceptance}}",
+  prompt: "请检查代码仓库的实际状态，并返回用于提交和拉取请求的有效 JSON，包含 title、body、changedFiles、checks 和 unverified 字段。不要执行任何 Git 或 GitHub 写操作。对齐结果：{{alignment}} 验收结果：{{acceptance}}",
 });
 const notAccepted = agent({
   id: "not_accepted_report",
   label: "Report remaining blockers",
   inputs: { alignment, acceptance },
   output: "json",
-  prompt: "Return valid JSON with result not_accepted, the durable Human alignment, remaining independent-review blockers, checks, and changed files. Do not commit, push, or create a PR. Alignment: {{alignment}} Acceptance: {{acceptance}}",
+  prompt: "请返回有效 JSON，将 result 设为 not_accepted，并包含持久化的人工对齐结果、独立审查中剩余的阻塞项、检查结果和变更文件。不要提交、推送或创建拉取请求。对齐结果：{{alignment}} 验收结果：{{acceptance}}",
 });
 const changes = script({
   id: "check_changes",
@@ -680,31 +680,31 @@ const inventory = agent({
   label: "Inventory review scope",
   inputs: { scope: ref("inputs.review_scope") },
   output: "json",
-  prompt: "Inspect the configured repository read-only. Return only JSON listing changed or relevant files, key boundaries, tests, and unexamined areas for this scope: {{scope}}",
+  prompt: "请以只读方式检查已配置的代码仓库。仅返回 JSON，列出该范围内已变更或相关的文件、关键边界、测试以及尚未检查的区域。范围：{{scope}}",
 });
 const architecture = agent({
   id: "architecture",
   label: "Architecture review",
   inputs: { inventory },
-  prompt: "Review architecture only. Cite file-level evidence, severity, impact, and recommendation. Do not infer other reviewers' conclusions. Scope inventory: {{inventory}}",
+  prompt: "请只审查架构。提供文件级证据、严重程度、影响和建议。不要推断其他审查者的结论。范围清单：{{inventory}}",
 });
 const security = agent({
   id: "security",
   label: "Security review",
   inputs: { inventory },
-  prompt: "Review security and trust boundaries only. Cite file-level evidence, severity, exploit or failure mode, and recommendation. Scope inventory: {{inventory}}",
+  prompt: "请只审查安全性和信任边界。提供文件级证据、严重程度、利用方式或故障模式以及建议。范围清单：{{inventory}}",
 });
 const correctness = agent({
   id: "correctness",
   label: "Correctness review",
   inputs: { inventory },
-  prompt: "Review correctness, edge cases, and test coverage only. Cite file-level evidence, severity, and recommendation. Scope inventory: {{inventory}}",
+  prompt: "请只审查正确性、边界情况和测试覆盖率。提供文件级证据、严重程度和建议。范围清单：{{inventory}}",
 });
 const synthesis = agent({
   id: "synthesis",
   label: "Synthesize findings",
   inputs: { architecture, security, correctness },
-  prompt: "Merge the three independent reviews. Deduplicate only when evidence points to the same defect, preserve corroboration, order findings by severity, and end with Coverage and Unexamined areas. Architecture: {{architecture}} Security: {{security}} Correctness: {{correctness}}",
+  prompt: "请合并三份独立审查。仅当证据指向同一缺陷时去重，保留相互印证的信息，按严重程度排列发现项，并以“覆盖情况”和“未检查区域”两部分结尾。架构审查：{{architecture}} 安全审查：{{security}} 正确性审查：{{correctness}}",
 });
 completeCycle({ id: "complete", outcome: "reviewed", inputs: { synthesis } });
 `,
@@ -758,7 +758,7 @@ const discover = agent({
   label: "Discover work items",
   inputs: { focus: ref("inputs.discovery_focus") },
   output: "json",
-  prompt: "Inspect the configured repository read-only and return only a JSON array of at most 12 work items shaped {id, file, goal}. Do not silently truncate; make the last item disclose omitted scope. Focus: {{focus}}",
+  prompt: "请以只读方式检查已配置的代码仓库，仅返回最多包含 12 个工作项的 JSON 数组，每项格式为 {id, file, goal}。不要静默截断；如有省略，必须在最后一项中说明未覆盖的范围。重点：{{focus}}",
 });
 const process = map({
   id: "process",
@@ -779,13 +779,13 @@ const process = map({
     agent({
       id: "process_one",
       label: "Process item",
-      prompt: "Handle exactly this item in the configured repository, make only the necessary changes, run focused checks, and report evidence. Item: {{item}}",
+      prompt: "请在已配置的代码仓库中只处理这一项，仅进行必要的更改，运行有针对性的检查，并报告证据。工作项：{{item}}",
     }),
     agent({
       id: "verify_one",
       label: "Verify item",
       output: "json",
-      prompt: "Independently verify this one item against repository truth. Return only JSON shaped {status: VERIFIED|REJECTED, evidence: [], blockers: []}. Item: {{item}} Proposed result: {{previous}}",
+      prompt: "请依据代码仓库的实际状态独立验证这一项。仅返回格式为 {status: VERIFIED|REJECTED, evidence: [], blockers: []} 的 JSON。工作项：{{item}} 待验证结果：{{previous}}",
     }),
   ],
 });
@@ -793,7 +793,7 @@ const synthesis = agent({
   id: "synthesis",
   label: "Synthesize fan-out",
   inputs: { process },
-  prompt: "Summarize completed items, rejected items, failed items, checks, and uncovered scope. Never present partial coverage as complete. Map record: {{process}}",
+  prompt: "请汇总已完成项、被拒绝项、失败项、检查结果和未覆盖范围。绝不能把部分覆盖描述成完整覆盖。Map 记录：{{process}}",
 });
 completeCycle({ id: "complete", outcome: "processed", inputs: { synthesis } });
 finalize({
@@ -872,7 +872,7 @@ const discover = agent({
   workspace,
   execution: { access: "read", isolation: "required" },
   output: "json",
-  prompt: "Inspect the repository read-only. Return only a JSON array of at most 12 migration sites shaped {file, line, change}. Exclude already-migrated and out-of-scope sites, and disclose omitted coverage. Migration brief: {{brief}}",
+  prompt: "请以只读方式检查代码仓库。仅返回最多包含 12 个迁移位置的 JSON 数组，每项格式为 {file, line, change}。排除已迁移和范围外的位置，并说明被省略的覆盖范围。迁移说明：{{brief}}",
 });
 const migrate = map({
   id: "migrate",
@@ -893,13 +893,13 @@ const migrate = map({
     agent({
       id: "migrate_one",
       label: "Migrate site",
-      prompt: "Migrate exactly this site according to the brief, make the smallest necessary change, run focused checks, and do not commit. Brief: {{brief}} Site: {{item}}",
+      prompt: "请严格按照迁移说明只迁移这个位置，进行最小必要更改，运行有针对性的检查，不要提交。迁移说明：{{brief}} 迁移位置：{{item}}",
     }),
     agent({
       id: "verify_one",
       label: "Verify site",
       output: "json",
-      prompt: "Independently verify this site against repository truth. Return only JSON shaped {status: VERIFIED|REJECTED, blockers: [], evidence: []}. Brief: {{brief}} Site: {{item}} Result: {{previous}}",
+      prompt: "请依据代码仓库的实际状态独立验证这个迁移位置。仅返回格式为 {status: VERIFIED|REJECTED, blockers: [], evidence: []} 的 JSON。迁移说明：{{brief}} 迁移位置：{{item}} 迁移结果：{{previous}}",
     }),
   ],
 });
@@ -921,8 +921,8 @@ const acceptance = loop({
       id: "repair",
       label: "Repair whole-change blockers",
       session: { mode: "inherit", key: "migration_repair_room" },
-      prompt: "Repair only the blocking whole-change findings, preserve scope, run focused checks, and do not commit. Brief: {{brief}} Per-site record: {{migrate}} Blockers: {{previousIteration.outputs.review.blockers}}",
-      appendPrompt: "Continue in the same repair session. Re-anchor on repository truth and repair only the latest whole-change blockers without expanding scope. Blockers: {{previousIteration.outputs.review.blockers}}",
+      prompt: "请只修复针对整体变更的阻塞问题，保持既定范围，运行有针对性的检查，不要提交。迁移说明：{{brief}} 各位置记录：{{migrate}} 阻塞项：{{previousIteration.outputs.review.blockers}}",
+      appendPrompt: "请在同一个修复会话中继续。重新以代码仓库的实际状态为准，只修复最新的整体变更阻塞项，不要扩大范围。阻塞项：{{previousIteration.outputs.review.blockers}}",
     }),
     agent({
       id: "review",
@@ -944,7 +944,7 @@ const acceptance = loop({
           unverified: { type: "array" },
         },
       } }),
-      prompt: "Review the entire repository change independently in a fresh session inside the configured implementation workspace. Use repository truth, the migration brief, structured per-site outcomes, and only the prior criteria and blockers below. Return valid JSON with status, criteria, blockers, rejectedSites, checks, and unverified fields. Brief: {{brief}} Per-site record: {{migrate}} Previous criteria: {{previousStep.criteria}} Previous blockers: {{previousStep.blockers}}",
+      prompt: "请在已配置的实现工作区中开启一个全新会话，独立审查代码仓库的全部变更。以代码仓库的实际状态、迁移说明、结构化的各位置结果以及下方之前的验收标准和阻塞项为依据。返回有效 JSON，包含 status、criteria、blockers、rejectedSites、checks 和 unverified 字段。迁移说明：{{brief}} 各位置记录：{{migrate}} 上一轮标准：{{previousStep.criteria}} 上一轮阻塞项：{{previousStep.blockers}}",
     }),
   ],
   until: { source: "review", finalStatus: "PASS" },
@@ -966,14 +966,14 @@ const delivery = agent({
       unverified: { type: "array" },
     },
   } }),
-  prompt: "Inspect repository truth and return valid JSON with title, body, changedFiles, checks, rejectedSites, failedSites, and unverified fields for the commit and pull request. Do not perform Git or GitHub mutations. Per-site record: {{migrate}} Acceptance: {{acceptance}}",
+  prompt: "请检查代码仓库的实际状态，并返回用于提交和拉取请求的有效 JSON，包含 title、body、changedFiles、checks、rejectedSites、failedSites 和 unverified 字段。不要执行任何 Git 或 GitHub 写操作。各位置记录：{{migrate}} 验收结果：{{acceptance}}",
 });
 const notAccepted = agent({
   id: "not_accepted_report",
   label: "Report incomplete migration",
   inputs: { migrate, acceptance },
   output: "json",
-  prompt: "Return valid JSON with result not_accepted, changed files, remaining blockers, rejected and failed sites, checks, and unverified scope. Do not commit, push, or create a PR. Per-site record: {{migrate}} Acceptance: {{acceptance}}",
+  prompt: "请返回有效 JSON，将 result 设为 not_accepted，并包含变更文件、剩余阻塞项、被拒绝和失败的位置、检查结果以及未验证范围。不要提交、推送或创建拉取请求。各位置记录：{{migrate}} 验收结果：{{acceptance}}",
 });
 const changes = script({
   id: "check_changes",
@@ -1076,7 +1076,7 @@ const plan = agent({
   label: "Decompose research topic",
   inputs: { topic: ref("inputs.research_topic") },
   output: "json",
-  prompt: "Return only a JSON array of 3 to 6 independent, non-overlapping sub-questions shaped {id, question, why}. Cover the topic and disclose omitted scope. Topic: {{topic}}",
+  prompt: "请仅返回包含 3 至 6 个相互独立且不重叠子问题的 JSON 数组，每项格式为 {id, question, why}。覆盖整个主题，并说明被省略的范围。主题：{{topic}}",
 });
 const research = map({
   id: "research",
@@ -1090,13 +1090,13 @@ const research = map({
     agent({
       id: "research_one",
       label: "Research sub-question",
-      prompt: "Answer exactly this sub-question. Cite primary sources with URLs when available; mark every unverifiable claim unverified and list open gaps. Overall topic: {{topic}} Sub-question: {{item}}",
+      prompt: "请只回答这个子问题。如有可用资料，请引用带 URL 的一手来源；将所有无法验证的主张标记为 unverified，并列出仍未解决的空白。总体主题：{{topic}} 子问题：{{item}}",
     }),
     agent({
       id: "fact_check_one",
       label: "Fact-check answer",
       output: "json",
-      prompt: "Adversarially fact-check the proposed answer. Return only JSON shaped {answer, confidence: high|medium|low, survivingClaims: [], removedClaims: [], citations: [], unverified: []}. Sub-question: {{item}} Proposed answer: {{previous}}",
+      prompt: "请以对抗式方法核查待验证答案中的事实。仅返回格式为 {answer, confidence: high|medium|low, survivingClaims: [], removedClaims: [], citations: [], unverified: []} 的 JSON。子问题：{{item}} 待验证答案：{{previous}}",
     }),
   ],
 });
@@ -1107,7 +1107,7 @@ const report = agent({
     topic: ref("inputs.research_topic"),
     research,
   },
-  prompt: "Write the final cited report. Preserve per-claim confidence and end with Coverage listing failed items, low-confidence answers, unverified claims, and open gaps. Topic: {{topic}} Research record: {{research}}",
+  prompt: "请撰写带引用的最终报告。保留每项主张的置信度，并以“覆盖情况”部分结尾，列出失败项、低置信度答案、未验证主张和仍未解决的空白。主题：{{topic}} 研究记录：{{research}}",
 });
 completeCycle({ id: "complete", outcome: "reported", inputs: { report } });
 `,
@@ -1164,7 +1164,7 @@ const checks = map({
       id: "check_one",
       label: "Check release dimension",
       output: "json",
-      prompt: "Inspect the configured repository read-only for exactly this release dimension. Return only JSON shaped {check, status: ready|blocked, evidence: [], blockers: [], unverified: []}. Release context: {{context}} Check: {{item}}",
+      prompt: "请以只读方式检查已配置的代码仓库，并且只检查这个发布维度。仅返回格式为 {check, status: ready|blocked, evidence: [], blockers: [], unverified: []} 的 JSON。发布背景：{{context}} 检查项：{{item}}",
     }),
   ],
 });
@@ -1173,7 +1173,7 @@ const summary = agent({
   label: "Summarize readiness",
   inputs: { checks },
   output: "json",
-  prompt: "Return only JSON shaped {recommendation: GO|NO_GO, readyChecks: [], blockedChecks: [], failedChecks: [], unverified: []}. Never hide a failed or unverified check. Checks: {{checks}}",
+  prompt: "请仅返回格式为 {recommendation: GO|NO_GO, readyChecks: [], blockedChecks: [], failedChecks: [], unverified: []} 的 JSON。绝不能隐藏失败或未经验证的检查项。检查结果：{{checks}}",
 });
 const decision = human({
   id: "decision",
@@ -1270,7 +1270,7 @@ const breakdown = loop({
       id: "decompose",
       label: "Decompose epic",
       output: "json",
-      prompt: "Return only a JSON array of 3 to 10 non-overlapping tasks shaped {id, title, goal, dependencies}. Cover definition of done without scope drift. On later iterations revise using previousIteration Human feedback while retaining stable ids. Epic brief: {{brief}} Previous iteration: {{previousIteration}}",
+      prompt: "请仅返回包含 3 至 10 个互不重叠任务的 JSON 数组，每项格式为 {id, title, goal, dependencies}。覆盖完成定义，不要偏离范围。在后续迭代中依据 previousIteration 中的人工反馈进行修改，同时保持 id 稳定。Epic 说明：{{brief}} 上一轮迭代：{{previousIteration}}",
     }),
     human({
       id: "plan_review",
@@ -1318,7 +1318,7 @@ const details = map({
       id: "detail_one",
       label: "Detail task",
       output: "json",
-      prompt: "Detail exactly this approved task. Return only JSON shaped {id, title, scope, nonGoals, acceptanceCriteria, dependencies}. Do not estimate effort or own decisions assigned to dependencies. Epic: {{brief}} Task: {{item}}",
+      prompt: "请只细化这个已批准的任务。仅返回格式为 {id, title, scope, nonGoals, acceptanceCriteria, dependencies} 的 JSON。不要估算工作量，也不要代替依赖方做决定。Epic：{{brief}} 任务：{{item}}",
     }),
   ],
 });
@@ -1326,7 +1326,7 @@ const plan = agent({
   id: "plan",
   label: "Assemble final plan",
   inputs: { details },
-  prompt: "Assemble a dependency-ordered epic plan from the detailed tasks. Preserve full acceptance criteria and end with Coverage listing every failed or missing task. Details: {{details}}",
+  prompt: "请根据已细化的任务组装一份按依赖顺序排列的 Epic 计划。保留完整的验收标准，并以“覆盖情况”部分结尾，列出所有失败或缺失的任务。任务详情：{{details}}",
 });
 completeCycle({ id: "complete", outcome: "planned", inputs: { plan } });
 `,

@@ -21,25 +21,25 @@ export const runtime = {
 const inventory = agent({
   id: "inventory",
   output: "text",
-  prompt: "Inspect the repository structure. Return the runtime stack, main folders, and important extension points.",
+  prompt: "请检查代码仓库结构，并返回运行时技术栈、主要目录和重要扩展点。",
 });
 const architecture = agent({
   id: "architecture_review",
   inputs: { inventory },
   output: "text",
-  prompt: "Review architecture boundaries and data flow using this inventory:\\n\\n{{inventory}}",
+  prompt: "请根据以下清单审查架构边界和数据流：\\n\\n{{inventory}}",
 });
 const security = agent({
   id: "security_review",
   inputs: { inventory },
   output: "text",
-  prompt: "Review auth, secrets, shell execution, file writes, and network access using this inventory:\\n\\n{{inventory}}",
+  prompt: "请根据以下清单审查认证、密钥、Shell 执行、文件写入和网络访问：\\n\\n{{inventory}}",
 });
 const summary = agent({
   id: "final_summary",
   inputs: { architecture, security },
   output: "text",
-  prompt: "Synthesize the architecture and security findings into an implementation brief.\\n\\nArchitecture:\\n{{architecture}}\\n\\nSecurity:\\n{{security}}",
+  prompt: "请将架构和安全审查结果汇总为一份实现说明。\\n\\n架构：\\n{{architecture}}\\n\\n安全：\\n{{security}}",
 });
 completeCycle({ id: "complete", inputs: { summary } });
 `,

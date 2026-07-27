@@ -159,7 +159,7 @@ const plan = agent({
       risks: { type: "array", items: { type: "string" } },
     },
   } }),
-  prompt: "Inspect {{candidate.path}} ({{candidate.lines}} lines). Return one JSON object with string fields title and rationale, plus boundaries, orderedSteps, tests, and risks as arrays of strings. Do not edit files.",
+  prompt: "请检查 {{candidate.path}}（共 {{candidate.lines}} 行）。返回一个 JSON 对象，其中 title 和 rationale 为字符串字段，boundaries、orderedSteps、tests 和 risks 为字符串数组。不要编辑任何文件。",
 });
 const issue = effect({
   id: "create_issue",
@@ -199,7 +199,7 @@ const implement = agent({
   workspace,
   execution: { access: "write", isolation: "required" },
   session: { mode: "inherit", key: "rd_room" },
-  prompt: "Work only inside the prepared git worktree at {{workspace.path}} on branch {{workspace.branch}}. Implement the approved refactor plan for {{candidate.path}} and reduce it to at most {{lineThreshold}} lines without weakening behavior. Follow {{plan}} and run the smallest focused tests that cover the change. Do not install dependencies or run repository-wide checks unless the focused test cannot otherwise run. Leave the worktree ready for review and do not modify the parent checkout.",
+  prompt: "请只在位于 {{workspace.path}}、分支为 {{workspace.branch}} 的已准备 Git worktree 中工作。执行已批准的 {{candidate.path}} 重构方案，在不削弱现有行为的前提下将文件缩减至不超过 {{lineThreshold}} 行。遵循 {{plan}}，并运行能够覆盖本次变更的最小范围测试。除非有针对性的测试无法以其他方式运行，否则不要安装依赖或执行全仓库检查。保持 worktree 可供审查，不要修改父检出目录。",
 });
 const acceptance = loop({
   id: "rd_qa_acceptance",
@@ -222,8 +222,8 @@ const acceptance = loop({
       id: "rd_repair",
       label: "RD repair QA blockers",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "Act as the RD owner inside the prepared worktree at {{workspace.path}}. Repair only the blocking findings from the previous QA iteration while preserving the approved boundaries and behavior. Re-inspect repository truth, keep {{candidate.path}} at or below {{lineThreshold}} lines, run focused checks, and leave all changes uncommitted. Do not dismiss blockers without evidence. Approved plan: {{plan}} QA blockers: {{previousIteration.outputs.qa_review.blockers}} QA suggestions: {{previousIteration.outputs.qa_review.suggestions}}",
-      appendPrompt: "Continue in the same RD session and prepared worktree. Re-anchor on git status, git diff, and the files implicated by QA; repository truth overrides stale session memory. Repair only the latest blocking findings, preserve the approved scope, run focused checks, and leave changes uncommitted. QA blockers: {{previousIteration.outputs.qa_review.blockers}} QA suggestions: {{previousIteration.outputs.qa_review.suggestions}}",
+      prompt: "请在位于 {{workspace.path}} 的已准备 worktree 中担任 RD 负责人。仅修复上一轮 QA 提出的阻塞问题，同时保持已批准的边界和行为。重新检查代码仓库的实际状态，确保 {{candidate.path}} 不超过 {{lineThreshold}} 行，运行有针对性的检查，并保留所有更改为未提交状态。没有证据时不得忽略阻塞项。已批准方案：{{plan}} QA 阻塞项：{{previousIteration.outputs.qa_review.blockers}} QA 建议：{{previousIteration.outputs.qa_review.suggestions}}",
+      appendPrompt: "请在同一个 RD 会话和已准备的 worktree 中继续。重新以 git status、git diff 以及 QA 指出的文件为准；代码仓库的实际状态优先于过时的会话记忆。仅修复最新的阻塞问题，保持已批准的范围，运行有针对性的检查，并保留所有更改为未提交状态。QA 阻塞项：{{previousIteration.outputs.qa_review.blockers}} QA 建议：{{previousIteration.outputs.qa_review.suggestions}}",
     }),
     agent({
       id: "qa_review",
@@ -247,7 +247,7 @@ const acceptance = loop({
           unverified: { type: "array", items: { type: "string" } },
         },
       } }),
-      prompt: "Act as adversarial QA in a fresh independent session, using the prepared worktree at {{workspace.path}} as repository truth. Judge the approved plan, behavior preservation, the {{lineThreshold}}-line limit for {{candidate.path}}, edge cases, and focused test results; do not consume or trust any RD narrative. Reuse the previous criteria when the requirement is unchanged and re-check every previous blocker. On intermediate FAIL rounds, focus on blocker repairs, their impact area, and all new diff; before PASS, cover the complete change surface and required checks. PASS only when there are no blocking defects and every required claim is supported. Return valid JSON with status PASS or FAIL plus criteria, blockers, suggestions, risks, checks, evidence, and unverified arrays. Approved plan: {{plan}} Previous QA criteria: {{previousStep.criteria}} Previous QA blockers: {{previousStep.blockers}}",
+      prompt: "请在全新且独立的会话中担任对抗式 QA，并以位于 {{workspace.path}} 的已准备 worktree 作为代码仓库的实际依据。评估已批准的方案、行为是否保持、{{candidate.path}} 是否满足不超过 {{lineThreshold}} 行的限制、边界情况以及针对性测试结果；不要读取或信任任何 RD 叙述。需求未变化时复用上一轮标准，并重新检查每一个既有阻塞项。中间的 FAIL 轮次重点检查阻塞项修复、其影响范围和所有新增差异；给出 PASS 前必须覆盖完整变更面和所有必要检查。只有不存在阻塞性缺陷且每项必要主张都有证据支持时才能给出 PASS。返回有效 JSON，status 为 PASS 或 FAIL，并包含 criteria、blockers、suggestions、risks、checks、evidence 和 unverified 数组。已批准方案：{{plan}} 上一轮 QA 标准：{{previousStep.criteria}} 上一轮 QA 阻塞项：{{previousStep.blockers}}",
     }),
   ],
   until: { source: "qa_review", finalStatus: "PASS" },
@@ -285,7 +285,7 @@ const reviewPackage = agent({
       unverified: { type: "array", items: { type: "string" } },
     },
   } }),
-  prompt: "Prepare a compact, evidence-first package for a Human reviewer. Inspect the final worktree diff against {{workspace.baseCommit}} and the accepted QA record. Report the behavioral intent, exact changed files, checks with results, proof that {{candidate.path}} is at or below {{lineThreshold}} lines, QA evidence, residual risks, and anything unverified. Do not modify files or perform Git/GitHub mutations. Approved plan: {{plan}} Acceptance: {{acceptance}}",
+  prompt: "请为人工审查者准备一份精简且证据优先的材料包。检查最终 worktree 相对于 {{workspace.baseCommit}} 的差异以及已通过的 QA 记录。报告行为意图、准确的变更文件、检查及其结果、{{candidate.path}} 不超过 {{lineThreshold}} 行的证明、QA 证据、残余风险和所有未经验证的内容。不要修改文件，也不要执行任何 Git 或 GitHub 写操作。已批准方案：{{plan}} 验收结果：{{acceptance}}",
 });
 const humanReview = human({
   id: "human_delivery_review",
@@ -335,7 +335,7 @@ const notAccepted = agent({
   workspace,
   execution: { access: "read", isolation: "required" },
   output: "json",
-  prompt: "Inspect repository truth and return valid JSON with result not_accepted, the changed files, remaining QA blockers, checks, risks, and unverified areas. Do not commit, push, or create a pull request. Candidate: {{candidate}} Approved plan: {{plan}} Acceptance: {{acceptance}}",
+  prompt: "请检查代码仓库的实际状态并返回有效 JSON，将 result 设为 not_accepted，同时包含变更文件、剩余 QA 阻塞项、检查结果、风险和未验证区域。不要提交、推送或创建拉取请求。候选文件：{{candidate}} 已批准方案：{{plan}} 验收结果：{{acceptance}}",
 });
 const closeNotAcceptedIssue = effect({
   id: "close_qa_not_accepted_issue",

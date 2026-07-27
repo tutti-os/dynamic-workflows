@@ -125,7 +125,7 @@ describe("Flow Bundle semantic review", () => {
     });
     expect(validation.valid).toBe(true);
     expect(validation.review?.status).toBe("running");
-    expect(runtime.runInputs[0]?.prompt).toContain("CURRENT FLOW BUNDLE:");
+    expect(runtime.runInputs[0]?.prompt).toContain("当前 FLOW BUNDLE：");
     expect(runtime.runInputs[0]?.prompt).toContain(
       "===== scripts/inspect.mjs =====",
     );

@@ -191,6 +191,14 @@ describe("workflow blueprint catalog", () => {
     expect(results[0]?.bundle?.schemaVersion).toBe("tutti.flow.v1");
   });
 
+  it("preserves English catalog search terms while prompts are localized", () => {
+    expect(
+      searchWorkflowBlueprints({ query: "readiness" }).map(
+        (result) => result.id,
+      ),
+    ).toContain("release-readiness-check-v1");
+  });
+
   it("filters blueprints and omits scripts unless requested", () => {
     const results = searchWorkflowBlueprints({
       category: "coding",

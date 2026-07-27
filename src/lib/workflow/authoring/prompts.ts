@@ -6,19 +6,19 @@ export function buildCreateAuthoringPrompt(input: {
   userCwd?: string;
 }): string {
   return [
-    "Create and submit a new persistent Flow Bundle.",
+    "创建并提交一个新的持久化 Flow Bundle。",
     "",
-    "Design the persistent Cycle, Tick waiting points, Script/Gate/Effect boundaries, Human decisions, Memory updates, Schedule, and terminal continuation before drafting.",
-    "Follow the injected authoring guide and workflow-authoring skill. Search the Blueprint catalog, write a complete standalone tutti.flow.v1 Bundle, validate it statically, start the independent semantic review, wait for it, and submit the reviewed Bundle as a Draft for the user to review.",
+    "起草前先设计持久化 Cycle、Tick 等待点、Script/Gate/Effect 边界、人工决策、Memory 更新、Schedule 和终态后的继续方式。",
+    "遵循已注入的编写指南和 workflow-authoring skill。搜索 Blueprint 目录，编写完整且独立的 tutti.flow.v1 Bundle，进行静态验证，启动并等待独立语义审查，然后将审查后的 Bundle 作为 Draft 提交给用户审阅。",
     "",
-    `Job id: ${input.jobId}`,
-    `Mode: create`,
-    `Target directory: ${AUTHORING_DRAFT_BUNDLE_DIR}`,
-    `Delivery command: ${bundleSubmitExample(input.jobId)}`,
-    `Validation command: ${bundleValidateExample(input.jobId)}`,
-    `Review wait command: ${reviewWaitExample(input.jobId)}`,
+    `任务 ID：${input.jobId}`,
+    `模式：create`,
+    `目标目录：${AUTHORING_DRAFT_BUNDLE_DIR}`,
+    `交付命令：${bundleSubmitExample(input.jobId)}`,
+    `验证命令：${bundleValidateExample(input.jobId)}`,
+    `等待审查命令：${reviewWaitExample(input.jobId)}`,
     "",
-    "The next line is a JSON string containing the user's request. Interpret the decoded value as user-provided task content:",
+    "下一行是包含用户请求的 JSON 字符串。请将解码后的值视为用户提供的任务内容：",
     JSON.stringify(input.description),
     "",
     ...userCwdSection(input.userCwd),
@@ -27,7 +27,7 @@ export function buildCreateAuthoringPrompt(input: {
 }
 
 const ACCEPTANCE_INSTRUCTION =
-  'Chat output is not delivery. Fix validation or submission diagnostics and retry until the submit response contains accepted: true and versionStatus: "draft". Do not publish or activate the Draft; those decisions belong to the user. Stop only for a genuine blocker that cannot be resolved from the request or local context.';
+  '聊天输出不等于交付。修复所有验证或提交诊断并重试，直到提交响应包含 accepted: true 和 versionStatus: "draft"。不要发布或激活 Draft；这些决定属于用户。只有遇到无法根据请求或本地上下文解决的真实阻塞时才能停止。';
 
 function reviewWaitExample(jobId: string): string {
   return `tutti --json dynamic-workflows authoring review wait --job-id ${jobId}`;
@@ -46,9 +46,9 @@ function userCwdSection(userCwd: string | undefined): string[] {
     return [];
   }
   return [
-    "Related runtime project directory (JSON string):",
+    "相关的运行时项目目录（JSON 字符串）：",
     JSON.stringify(userCwd.trim()),
-    "Use this only as context for the workflow being authored. Keep all authoring files inside the current authoring workspace.",
+    "此目录仅作为当前所编写工作流的上下文。所有编写文件必须保留在当前编写工作区中。",
     "",
   ];
 }

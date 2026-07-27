@@ -95,7 +95,7 @@ const plan = agent({
       properties: { title: { type: "string" } },
     },
   }),
-  prompt: "Plan the refactor for {{candidate.path}}.",
+  prompt: "请为 {{candidate.path}} 规划重构方案。",
 });
 
 const decision = human({
@@ -122,7 +122,7 @@ Agent nodes and Loop Agent steps may declare an explicit Session policy:
 const implement = agent({
   id: "implement",
   session: { mode: "inherit", key: "rd_room" },
-  prompt: "Implement the requirement.",
+  prompt: "请实现需求。",
 });
 
 const acceptance = loop({
@@ -132,13 +132,13 @@ const acceptance = loop({
     agent({
       id: "repair",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "Repair from a complete fallback context.",
-      appendPrompt: "Fix only {{previousIteration.outputs.review.blockers}}.",
+      prompt: "请根据完整的后备上下文进行修复。",
+      appendPrompt: "请只修复 {{previousIteration.outputs.review.blockers}}。",
     }),
     agent({
       id: "review",
       session: { mode: "independent" },
-      prompt: "Review repository truth. Prior criteria: {{previousStep.criteria}}.",
+      prompt: "请审查代码仓库的实际状态。上一轮标准：{{previousStep.criteria}}。",
     }),
   ],
   until: { source: "review", finalStatus: "PASS" },
@@ -251,7 +251,7 @@ const review = loop({
   maxIterations: ref("params.maxRounds"),
   onMaxIterations: "complete",
   steps: [
-    agent({ id: "repair", prompt: "Repair iteration {{iteration}}." }),
+    agent({ id: "repair", prompt: "请修复第 {{iteration}} 轮。" }),
     human({
       id: "approve",
       context: [{ label: "Result", value: "{{previous}}", display: "markdown" }],
@@ -274,8 +274,8 @@ const migrated = map({
     rejected: ["REJECTED"],
   },
   steps: [
-    agent({ id: "migrate", prompt: "Migrate {{item}}.", output: "json" }),
-    agent({ id: "verify", prompt: "Verify {{previous}}.", output: "json" }),
+    agent({ id: "migrate", prompt: "请迁移 {{item}}。", output: "json" }),
+    agent({ id: "verify", prompt: "请验证 {{previous}}。", output: "json" }),
   ],
 });
 ```
