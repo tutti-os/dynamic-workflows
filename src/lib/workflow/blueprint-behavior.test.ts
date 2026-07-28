@@ -459,6 +459,73 @@ exec "$REAL_GIT" "$@"
     ).rejects.toMatchObject({ code: "flow_runner_exit_nonzero" });
   });
 
+  it("approves an open labeled Issue and rejects a closed Issue", async () => {
+    const blueprint = getWorkflowBlueprint("large-file-governance-v1");
+    expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
+    if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
+      throw new Error("Large-file Blueprint is unavailable.");
+    }
+    const projectCwd = mkdtempSync(path.join(tmpdir(), "issue-approval-gate-"));
+    temporaryDirectories.push(projectCwd);
+    const bin = path.join(projectCwd, "bin");
+    mkdirSync(bin);
+    const fakeGh = path.join(bin, "gh");
+    const environment = {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    };
+    const context = {
+      issue: {
+        approvalLabel: "flow-approved",
+        url: "https://github.com/example/project/issues/1",
+      },
+    };
+
+    writeFileSync(
+      fakeGh,
+      "#!/bin/sh\necho '{\"state\":\"open\",\"labels\":[{\"name\":\"flow-approved\"}],\"html_url\":\"https://github.com/example/project/issues/1\"}'\n",
+    );
+    chmodSync(fakeGh, 0o755);
+    const approved = await runFlowV1CodeModule({
+      versionId: "large-file-issue-approved",
+      bundle: blueprint.bundle,
+      file: "scripts/issue-approval.mjs",
+      exportName: "check",
+      context,
+      environment,
+      projectCwd,
+    });
+    expect(approved.value).toMatchObject({
+      status: "completed",
+      outcome: "approved",
+      output: {
+        state: "open",
+        url: "https://github.com/example/project/issues/1",
+      },
+    });
+
+    writeFileSync(
+      fakeGh,
+      "#!/bin/sh\necho '{\"state\":\"closed\",\"labels\":[{\"name\":\"flow-approved\"}],\"html_url\":\"https://github.com/example/project/issues/1\"}'\n",
+    );
+    const rejected = await runFlowV1CodeModule({
+      versionId: "large-file-issue-rejected",
+      bundle: blueprint.bundle,
+      file: "scripts/issue-approval.mjs",
+      exportName: "check",
+      context,
+      environment,
+      projectCwd,
+    });
+    expect(rejected.value).toMatchObject({
+      status: "completed",
+      outcome: "rejected",
+      output: {
+        state: "closed",
+        url: "https://github.com/example/project/issues/1",
+      },
+    });
+  });
+
   it("preflights reusable repository state and idempotently prepares the approval label", async () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
@@ -622,6 +689,8 @@ esac
     const issueArguments = readFileSync(issueCall, "utf8");
     expect(issueArguments).toContain("## Candidate");
     expect(issueArguments).toContain("## Analysis snapshot");
+    expect(issueArguments).toContain("## Proposal");
+    expect(issueArguments).toContain("Extract focused modules");
     expect(issueArguments).toContain("## Repository evidence");
     expect(issueArguments).toContain("## Behavior invariants");
     expect(issueArguments).toContain("## Plan");
@@ -629,6 +698,9 @@ esac
     expect(issueArguments).toContain("## Unknowns");
     expect(issueArguments).toContain("abc123");
     expect(issueArguments).toContain("flow-approved");
+    expect(issueArguments).toContain(
+      "Editing this Issue or adding comments does not change the plan",
+    );
   });
 
   it("publishes one pull request containing the final QA conclusion", async () => {

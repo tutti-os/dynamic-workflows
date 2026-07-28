@@ -591,6 +591,9 @@ export async function apply(ctx) {
     "## Analysis snapshot",
     "\`" + ctx.workspace.baseCommit + "\`",
     "",
+    "## Proposal",
+    ctx.plan.title,
+    "",
     "## Rationale",
     ctx.plan.rationale,
     "",
@@ -621,7 +624,8 @@ export async function apply(ctx) {
     "## Unknowns",
     bullets(ctx.plan.unknowns),
     "",
-    "Add the \`" + ctx.approvalLabel.name + "\` label to approve this plan.",
+    "Add the \`" + ctx.approvalLabel.name + "\` label to approve this generated plan snapshot.",
+    "Editing this Issue or adding comments does not change the plan executed by the Flow.",
   ].join("\\n");
   const url = gh(["issue", "create", "--title", title, "--body", body]);
   return { externalRef: url, output: { url, title, marker, approvalLabel: ctx.approvalLabel.name } };
