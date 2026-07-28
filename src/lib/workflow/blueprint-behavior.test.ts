@@ -102,7 +102,7 @@ describe("official Blueprint behavior", () => {
           }),
         }),
         prompt: expect.stringMatching(
-          /# 角色.*# 分析要求.*# 证据标准.*evidence.*affectedFiles.*behaviorInvariants.*unknowns.*# 约束.*<target>/su,
+          /# 角色.*# Issue 正文要求.*仓库证据.*行为约束.*验证命令.*# 输出格式.*"title".*"body".*<target>/su,
         ),
       }),
     );
@@ -113,13 +113,7 @@ describe("official Blueprint behavior", () => {
       expect.objectContaining({
         kind: "json",
         schema: expect.objectContaining({
-          required: expect.arrayContaining([
-            "responsibilities",
-            "evidence",
-            "affectedFiles",
-            "behaviorInvariants",
-            "unknowns",
-          ]),
+          required: ["title", "body"],
         }),
       }),
     );
@@ -149,26 +143,26 @@ describe("official Blueprint behavior", () => {
         label: "RD implement or repair",
         session: { mode: "inherit", key: "rd_room" },
         prompt: expect.stringMatching(
-          /# 角色.*# 工作规则.*# 约束.*<context>/su,
+          /# 角色.*Issue.*唯一需求来源.*# 工作规则.*# 约束.*issue_url: \{\{issue\.url\}\}/su,
         ),
         appendPrompt: expect.stringMatching(
-          /# 本轮任务.*只处理 blockers.*suggestions 仅供参考.*<qa_feedback>/su,
+          /# 本轮任务.*重新读取 Issue.*review 中的阻塞问题.*<reviewer_feedback>.*qa_review\.review/su,
         ),
       }),
     );
     expect(acceptance?.loop?.steps[1]).toEqual(
       expect.objectContaining({
-        label: "Adversarial QA acceptance",
+        label: "Adversarial Reviewer acceptance",
         session: { mode: "independent" },
         execution: { access: "review", isolation: "shared" },
         output: expect.objectContaining({
           kind: "json",
           schema: expect.objectContaining({
-            required: expect.arrayContaining(["status", "conclusion"]),
+            required: ["status", "review"],
           }),
         }),
         prompt: expect.stringMatching(
-          /# 角色.*# 检查要求.*PASS 时 blockers 必须为空.*FAIL 时 blockers 必须至少包含一个可执行的阻塞项.*# 输出约束.*<context>/su,
+          /# 角色.*Issue 是唯一需求来源.*# 检查要求.*FAIL 时.*review 必须明确列出.*# 输出约束.*"status".*"review".*issue_url: \{\{issue\.url\}\}/su,
         ),
       }),
     );
@@ -185,12 +179,16 @@ describe("official Blueprint behavior", () => {
           acceptance: expect.objectContaining({
             expression: "acceptance",
           }),
+          issue: expect.objectContaining({
+            expression: "issue",
+          }),
           workspace: expect.objectContaining({
             expression: "workspace",
           }),
         }),
       }),
     );
+    expect(publish?.inputs).not.toHaveProperty("plan");
     expect(
       flow.nodes.find((node) => node.id === "wait_pull_request_merge"),
     ).toEqual(
@@ -657,22 +655,23 @@ esac
       exportName: "apply",
       context: {
         approvalLabel: { name: "flow-approved" },
-        candidate: { path: "src/large.ts", lines: 1500 },
         cycle: { id: "cycle-readable-issue" },
         plan: {
           title: "Extract focused modules",
-          rationale: "Separate unrelated responsibilities.",
-          responsibilities: ["Coordinates parsing and persistence."],
-          evidence: ["src/large.ts:40 parseInput mixes parsing and storage."],
-          boundaries: ["Preserve public APIs."],
-          affectedFiles: ["src/large.ts", "src/parser.ts"],
-          behaviorInvariants: ["Keep parseInput error semantics."],
-          orderedSteps: ["Extract helpers.", "Update imports."],
-          tests: ["Run focused unit tests."],
-          risks: ["Import cycles."],
-          unknowns: ["No integration fixture covers malformed legacy input."],
+          body: [
+            "## Candidate",
+            "`src/large.ts` — 1500 lines",
+            "",
+            "## Repository evidence",
+            "- `src/large.ts:40` mixes parsing and storage.",
+            "",
+            "## Plan",
+            "1. Extract focused helpers.",
+            "",
+            "## Validation",
+            "- [ ] Run focused unit tests.",
+          ].join("\n"),
         },
-        workspace: { baseCommit: "abc123" },
       },
       environment,
       projectCwd,
@@ -682,24 +681,18 @@ esac
       output: {
         approvalLabel: "flow-approved",
         marker: "[flow:cycle-readable-issue]",
-        title: "[flow:cycle-readable-issue] Refactor src/large.ts",
+        title: "[flow:cycle-readable-issue] Extract focused modules",
         url: "https://github.com/example/project/issues/1",
       },
     });
     const issueArguments = readFileSync(issueCall, "utf8");
     expect(issueArguments).toContain("## Candidate");
-    expect(issueArguments).toContain("## Analysis snapshot");
-    expect(issueArguments).toContain("## Proposal");
-    expect(issueArguments).toContain("Extract focused modules");
     expect(issueArguments).toContain("## Repository evidence");
-    expect(issueArguments).toContain("## Behavior invariants");
     expect(issueArguments).toContain("## Plan");
     expect(issueArguments).toContain("## Validation");
-    expect(issueArguments).toContain("## Unknowns");
-    expect(issueArguments).toContain("abc123");
     expect(issueArguments).toContain("flow-approved");
     expect(issueArguments).toContain(
-      "Editing this Issue or adding comments does not change the plan",
+      "read the latest Issue body and comments as the source of truth",
     );
   });
 
@@ -759,21 +752,18 @@ esac
       acceptance: {
         final: {
           status: "PASS",
-          conclusion: "QA verified behavior preservation and focused tests.",
-          criteria: ["Public behavior is preserved."],
-          blockers: [],
-          suggestions: [],
-          risks: ["Downstream integration remains CI-covered."],
-          checks: ["pnpm vitest run source.test.ts — passed"],
-          evidence: ["source.ts now delegates focused responsibilities."],
-          unverified: [],
+          review: [
+            "QA verified behavior preservation and focused tests.",
+            "",
+            "## Checks",
+            "- `pnpm vitest run source.test.ts` — passed",
+          ].join("\n"),
         },
       },
       candidate: { path: "source.ts", lines: 1500 },
       cycle: { id: "cycle-publish", sequence: 1 },
       issue: { url: "https://github.com/example/project/issues/4" },
       mainBranch: "main",
-      plan: { title: "Split source responsibilities" },
       workspace: { branch, path: projectCwd },
     };
     const environment = {
@@ -794,13 +784,21 @@ esac
       expect.objectContaining({
         url: "https://github.com/example/project/pull/9",
         branch,
-        qaConclusion:
+        qaReview: expect.stringContaining(
           "QA verified behavior preservation and focused tests.",
+        ),
       }),
     );
-    expect(readFileSync(prCall, "utf8")).toContain("## QA conclusion");
+    expect(readFileSync(prCall, "utf8")).toContain("## Source Issue");
+    expect(readFileSync(prCall, "utf8")).toContain(
+      "https://github.com/example/project/issues/4",
+    );
+    expect(readFileSync(prCall, "utf8")).toContain("## Reviewer Report");
     expect(readFileSync(prCall, "utf8")).toContain(
       "QA verified behavior preservation and focused tests.",
+    );
+    expect(readFileSync(prCall, "utf8")).toContain(
+      "Closes https://github.com/example/project/issues/4",
     );
     expect(git(["ls-remote", "origin", `refs/heads/${branch}`], projectCwd)).toContain(
       String(publishOutput.commit),
@@ -910,10 +908,6 @@ esac
         cycle: { id: "cycle-1" },
         issue: { url: "https://github.com/example/project/issues/1" },
         merged: { mergedAt: "2026-07-26T00:00:00.000Z" },
-        plan: {
-          title: "Extract focused modules",
-          rationale: "A deliberately long rationale that belongs in the Issue.",
-        },
         pullRequest: { url: "https://github.com/example/project/pull/2" },
       },
       projectCwd,
@@ -921,17 +915,16 @@ esac
     expect(memory.value).toEqual({
       currentUnderstanding: [
         "Last completed candidate: src/large.ts (1500 lines before refactor)",
-        "Plan: Extract focused modules",
         "Issue: https://github.com/example/project/issues/1",
         "Pull request: https://github.com/example/project/pull/2",
         "Merged: true",
       ].join("\n"),
       decision:
-        "Cycle cycle-1: Extract focused modules for src/large.ts",
+        "Cycle cycle-1: delivered src/large.ts via https://github.com/example/project/issues/1",
       timeline:
         "Cycle cycle-1: merged https://github.com/example/project/pull/2",
     });
-    expect(JSON.stringify(memory.value)).not.toContain("deliberately long");
+    expect(JSON.stringify(memory.value)).not.toContain("Plan:");
   });
 
   it("reconciles commit and push delivery effects independently", async () => {

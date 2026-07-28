@@ -8,7 +8,7 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     id: "large-file-governance-v1",
     title: "Large File Governance Loop",
     description:
-      "Periodically plans and refactors one oversized file, runs an adversarial RD and QA acceptance loop, then publishes and tracks a pull request when QA passes.",
+      "Periodically plans and refactors one oversized file, runs an adversarial RD and Reviewer acceptance loop, then publishes and tracks a pull request when review passes.",
     category: "coding",
     tags: [
       "large-file",
@@ -37,11 +37,11 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "review-isolation",
     ],
     patternSummary:
-      "A scheduled singleton Cycle plans and implements one refactor in an isolated worktree. An independent QA Agent reviews repository truth first; failures send explicit blockers to an RD repair Agent, while QA PASS commits, pushes, and opens a pull request containing the QA conclusion and evidence.",
+      "A scheduled singleton Cycle creates an Issue for one refactor, then RD and an independent Reviewer read that Issue as the source of truth. Failed reviews return one Markdown report to the RD repair Agent, while PASS commits, pushes, and opens a linked pull request.",
     useCases: [
       "Continuously reduce monolithic source files without spending Agent tokens while approvals or merges are pending.",
-      "Make RD repairs and adversarial QA findings visible before delivery.",
-      "Publish a pull request immediately after QA accepts the repository state.",
+      "Make RD repairs and adversarial Reviewer findings visible before delivery.",
+      "Publish a linked pull request immediately after Reviewer acceptance.",
       "Use as a complete Bundle template for scheduled governance automations.",
     ],
     bundle: createFlowV1Bundle([
@@ -167,40 +167,19 @@ const plan = agent({
   memory: { include: ["currentUnderstanding"] },
   output: json({ schema: {
     type: "object",
-    required: [
-      "title",
-      "rationale",
-      "responsibilities",
-      "evidence",
-      "boundaries",
-      "affectedFiles",
-      "behaviorInvariants",
-      "orderedSteps",
-      "tests",
-      "risks",
-      "unknowns",
-    ],
+    required: ["title", "body"],
     properties: {
       title: { type: "string", minLength: 1 },
-      rationale: { type: "string", minLength: 1 },
-      responsibilities: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      evidence: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      boundaries: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      affectedFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      behaviorInvariants: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      orderedSteps: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      tests: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-      risks: { type: "array", items: { type: "string" } },
-      unknowns: { type: "array", items: { type: "string" } },
+      body: { type: "string", minLength: 1 },
     },
   } }),
-  prompt: "# 角色\\n\\n你是只读的代码重构分析员。你的职责是调查代码并制定方案，不实施修改。\\n\\n# 目标\\n\\n为目标文件制定安全、可执行的重构方案，使其在保持现有行为的前提下降至目标行数以内。\\n\\n# 分析要求\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 检查目标文件承担的主要职责。\\n3. 查阅与分析结论直接相关的调用方、依赖、测试、配置和公开 API。\\n4. 识别可以独立迁移的职责边界、耦合关系和实施顺序。\\n5. 给出逐文件、按依赖顺序排列的重构步骤和针对性测试命令。\\n\\n# 证据标准\\n\\n- 每个关键结论必须在 evidence 中引用具体的 path:line 或 path#symbol。\\n- affectedFiles 只列出预计需要修改或新增的文件。\\n- behaviorInvariants 必须写明不可改变的 API、错误处理、副作用和兼容性。\\n- tests 必须同时写明执行命令及其验证目标。\\n- 无法从仓库确认的内容放入 unknowns；不要将推测写成事实。\\n- Flow Memory 仅作历史背景；如果它与仓库实际内容冲突，以仓库为准。\\n\\n# 约束\\n\\n- 不修改任何文件。\\n- 不执行 Git 或 GitHub 写操作。\\n- 只返回符合声明 schema 的 JSON 对象，不附加解释或 Markdown。\\n\\n<target>\\npath: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\nsnapshot_commit: {{workspace.baseCommit}}\\n</target>",
+  prompt: "# 角色\\n\\n你是只读的代码重构分析员。你的职责是调查代码并起草一份可直接提交的 GitHub Issue，不实施修改。\\n\\n# 目标\\n\\n为目标文件制定安全、可执行的重构方案，使其在保持现有行为的前提下降至目标行数以内。\\n\\n# Issue 正文要求\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 写明目标、现状职责、仓库证据、修改边界、受影响文件、行为约束、按依赖排序的实施步骤、验证命令、风险和未知项。\\n3. 每个关键结论引用具体的 path:line 或 path#symbol。\\n4. 验证部分同时写明执行命令及其验证目标。\\n5. 无法从仓库确认的内容明确标为未知；不要将推测写成事实。\\n6. Flow Memory 仅作历史背景；如果它与仓库实际内容冲突，以仓库为准。\\n\\n# 约束\\n\\n- 不修改任何文件。\\n- 不执行 Git 或 GitHub 写操作。\\n- title 是简洁的 Issue 标题，不包含 Flow marker。\\n- body 是完整的 GitHub Markdown Issue 正文。\\n- 只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。\\n\\n# 输出格式\\n\\n{\\n  \\\"title\\\": \\\"Issue title\\\",\\n  \\\"body\\\": \\\"Complete GitHub Issue Markdown body\\\"\\n}\\n\\n<target>\\npath: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\nsnapshot_commit: {{workspace.baseCommit}}\\n</target>",
 });
 const issue = effect({
   id: "create_issue",
   file: "scripts/create-issue.mjs",
   secrets: ["GH_TOKEN"],
-  inputs: { approvalLabel, candidate, plan, workspace },
+  inputs: { approvalLabel, plan },
   idempotencyKey: template("{{cycle.id}}:create-issue"),
 });
 const approval = gate({
@@ -212,10 +191,10 @@ const approval = gate({
 });
 const acceptance = loop({
   id: "rd_qa_acceptance",
-  label: "RD + QA adversarial acceptance",
+  label: "RD + Reviewer adversarial acceptance",
   inputs: {
     candidate,
-    plan,
+    issue,
     approval,
     workspace,
     lineThreshold: ref("params.lineThreshold"),
@@ -229,12 +208,12 @@ const acceptance = loop({
       id: "rd_work",
       label: "RD implement or repair",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "# 角色\\n\\n你是负责实施重构的 RD。只在绑定的隔离 worktree 中工作。\\n\\n# 任务\\n\\n执行已批准的重构方案，在保持现有行为的前提下，将目标文件缩减至目标行数以内。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前检查 git status 和现有差异；仓库实际状态优先于会话记忆。\\n3. 遵循批准方案中的边界和行为约束，只修改完成方案所需的文件。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 不修改父检出目录。\\n- 不执行 commit、push 或 GitHub 写操作。\\n- 不安装非必要依赖。\\n\\n<context>\\nworktree: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\napproved_plan: {{plan}}\\n</context>",
-      appendPrompt: "# 本轮任务\\n\\n在同一个 RD 会话和 worktree 中继续修复最新一轮 QA 阻塞项。\\n\\n# 修复规则\\n\\n1. 重新检查 git status、git diff 和 QA 指出的代码；仓库实际状态优先。\\n2. 只处理 blockers，并保持批准方案的范围。suggestions 仅供参考，除非解决 blocker 必须，否则不要实施。\\n3. 运行覆盖修复内容的针对性测试，并检查最终 diff。\\n4. 保留更改为未提交状态；不要 commit、push 或执行 GitHub 写操作。\\n\\n<qa_feedback>\\nblockers: {{previousIteration.outputs.qa_review.blockers}}\\nsuggestions: {{previousIteration.outputs.qa_review.suggestions}}\\n</qa_feedback>",
+      prompt: "# 角色\\n\\n你是负责实施重构的 RD。只在绑定的隔离 worktree 中工作。\\n\\n# 任务\\n\\n使用 gh 读取 Issue 的最新正文和评论，并以它们作为唯一需求来源。在保持现有行为的前提下，将目标文件缩减至目标行数以内。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前读取 Issue、检查 git status 和现有差异；仓库和 Issue 的实际状态优先于会话记忆。\\n3. 遵循 Issue 中的边界和行为约束，只修改完成 Issue 所需的文件。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 不修改父检出目录。\\n- 不执行 commit、push 或 GitHub 写操作。\\n- 不安装非必要依赖。\\n\\n<context>\\nissue_url: {{issue.url}}\\nworktree: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\n</context>",
+      appendPrompt: "# 本轮任务\\n\\n在同一个 RD 会话和 worktree 中继续处理最新一轮 Reviewer 的验收意见。\\n\\n# 修复规则\\n\\n1. 重新读取 Issue 的最新正文和评论，并检查 git status、git diff 和 Reviewer 指出的代码；实际状态优先。\\n2. 修复 review 中的阻塞问题，并保持 Issue 约定的范围。非阻塞建议仅供参考。\\n3. 运行覆盖修复内容的针对性测试，并检查最终 diff。\\n4. 保留更改为未提交状态；不要 commit、push 或执行 GitHub 写操作。\\n\\n<context>\\nissue_url: {{issue.url}}\\n</context>\\n\\n<reviewer_feedback>\\n{{previousIteration.outputs.qa_review.review}}\\n</reviewer_feedback>",
     }),
     agent({
       id: "qa_review",
-      label: "Adversarial QA acceptance",
+      label: "Adversarial Reviewer acceptance",
       agent: ref("params.qaAgent"),
       model: ref("params.qaModel"),
       permissionMode: ref("params.qaPermission"),
@@ -242,20 +221,13 @@ const acceptance = loop({
       execution: { access: "review", isolation: "shared" },
       output: json({ schema: {
         type: "object",
-        required: ["status", "conclusion", "criteria", "blockers", "suggestions", "risks", "checks", "evidence", "unverified"],
+        required: ["status", "review"],
         properties: {
           status: { enum: ["PASS", "FAIL"] },
-          conclusion: { type: "string", minLength: 1 },
-          criteria: { type: "array", items: { type: "string" } },
-          blockers: { type: "array", items: { type: "string" } },
-          suggestions: { type: "array", items: { type: "string" } },
-          risks: { type: "array", items: { type: "string" } },
-          checks: { type: "array", items: { type: "string" } },
-          evidence: { type: "array", items: { type: "string" } },
-          unverified: { type: "array", items: { type: "string" } },
+          review: { type: "string", minLength: 1 },
         },
       } }),
-      prompt: "# 角色\\n\\n你是独立的对抗式 QA。只以绑定 worktree 的仓库状态和实际检查结果为依据，不采信 RD 的叙述。\\n\\n# 验收目标\\n\\n判断当前实现是否完成批准方案、保持既有行为、满足目标文件行数限制，并经过足够的针对性验证。\\n\\n# 检查要求\\n\\n1. 阅读适用的 AGENTS.md 和项目规范。\\n2. 检查 git status、完整 diff、所有受影响文件及相关测试。\\n3. 对照批准方案的职责边界、行为约束、风险和测试计划进行验收。\\n4. 必要时重新运行针对性测试；checks 写明命令及结果，无法验证的内容放入 unverified。\\n5. 如果存在上一轮标准或阻塞项，逐项复查。中间轮次可以聚焦新增差异，但给出 PASS 前必须覆盖完整变更面。\\n6. evidence 引用具体的 path:line、path#symbol、diff 或测试结果。\\n\\n# 判定规则\\n\\n- 只有不存在阻塞性缺陷，并且每项必要结论都有证据时，才能给出 PASS。\\n- PASS 时 blockers 必须为空。\\n- FAIL 时 blockers 必须至少包含一个可执行的阻塞项，写明位置、问题及预期修正结果。\\n- suggestions 只能包含不影响本次通过的非阻塞建议。\\n- conclusion 简洁说明 PASS 或 FAIL 的依据；PASS 后该结论会直接写入拉取请求。\\n\\n# 输出约束\\n\\n只返回符合声明 schema 的 JSON 对象，不附加解释或 Markdown。\\n\\n<context>\\nworktree: {{workspace.path}}\\ntarget_path: {{candidate.path}}\\nmax_lines: {{lineThreshold}}\\napproved_plan: {{plan}}\\nprevious_criteria: {{previousStep.criteria}}\\nprevious_blockers: {{previousStep.blockers}}\\n</context>",
+      prompt: "# 角色\\n\\n你是独立的对抗式 Reviewer。Issue 是唯一需求来源；仓库状态和实际检查结果是唯一实现证据。不要采信 RD 的文字总结。\\n\\n# 验收目标\\n\\n使用 gh 读取 Issue 的最新正文和评论，判断当前实现是否满足其中的要求、保持既有行为、满足目标文件行数限制，并经过足够的针对性验证。\\n\\n# 检查要求\\n\\n1. 阅读适用的 AGENTS.md 和项目规范。\\n2. 读取 Issue 的最新正文和评论。\\n3. 检查 git status、完整 diff、所有受影响文件及相关测试。\\n4. 对照 Issue 中的职责边界、行为约束、风险和测试计划进行验收。\\n5. 必要时重新运行针对性测试。给出 PASS 前必须覆盖完整变更面。\\n6. review 使用 Markdown，写明结论、执行过的检查、证据、风险和未验证项。证据引用具体的 path:line、path#symbol、diff 或测试结果。\\n\\n# 判定规则\\n\\n- status 只能是 PASS 或 FAIL。\\n- 只有不存在阻塞性缺陷，并且每项必要结论都有证据时，才能给出 PASS。\\n- FAIL 时，review 必须明确列出每个阻塞项的位置、问题、影响和预期修复结果。\\n- 非阻塞建议必须明确标注，不得因此返回 FAIL。\\n\\n# 输出约束\\n\\n只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。以下是 PASS 示例；失败时将 status 改为 FAIL：\\n{\\n  \\\"status\\\": \\\"PASS\\\",\\n  \\\"review\\\": \\\"完整的 Markdown 验收报告\\\"\\n}\\n\\n<context>\\nissue_url: {{issue.url}}\\nworktree: {{workspace.path}}\\ntarget_path: {{candidate.path}}\\nmax_lines: {{lineThreshold}}\\n</context>",
     }),
   ],
   until: { source: "qa_review", finalStatus: "PASS" },
@@ -275,13 +247,12 @@ const qaNotAccepted = completeCycle({
 });
 const pullRequest = effect({
   id: "publish_qa_approved_pr",
-  label: "QA PASS: commit, push, and open pull request",
+  label: "Reviewer PASS: commit, push, and open pull request",
   file: "scripts/publish-qa-approved-pr.mjs",
   secrets: ["GH_TOKEN"],
   inputs: {
     issue,
     candidate,
-    plan,
     acceptance,
     workspace,
     mainBranch: ref("params.mainBranch"),
@@ -307,7 +278,7 @@ const closeIssue = effect({
 const memoryUpdate = transform({
   id: "build_memory_update",
   file: "scripts/build-memory-update.mjs",
-  inputs: { candidate, plan, issue, pullRequest, merged, closeIssue },
+  inputs: { candidate, issue, pullRequest, merged, closeIssue },
 });
 const rememberResult = remember({
   id: "remember_result",
@@ -374,14 +345,13 @@ No file has been refactored yet.
         content: `export async function run(ctx) {
   const currentUnderstanding = [
     "Last completed candidate: " + ctx.candidate.path + " (" + ctx.candidate.lines + " lines before refactor)",
-    "Plan: " + ctx.plan.title,
     "Issue: " + ctx.issue.url,
     "Pull request: " + ctx.pullRequest.url,
     "Merged: " + Boolean(ctx.merged?.mergedAt),
   ].join("\\n");
   return {
     currentUnderstanding,
-    decision: "Cycle " + ctx.cycle.id + ": " + ctx.plan.title + " for " + ctx.candidate.path,
+    decision: "Cycle " + ctx.cycle.id + ": delivered " + ctx.candidate.path + " via " + ctx.issue.url,
     timeline: "Cycle " + ctx.cycle.id + ": merged " + ctx.pullRequest.url,
   };
 }
@@ -578,54 +548,15 @@ export async function reconcile(ctx) {
         path: "scripts/create-issue.mjs",
         content: `import { execFileSync } from "node:child_process";
 function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
-function bullets(values, prefix = "- ") {
-  return values.map((value, index) => prefix === "1. " ? (index + 1) + ". " + value : prefix + value).join("\\n");
-}
 export async function apply(ctx) {
   const marker = "[flow:" + ctx.cycle.id + "]";
-  const title = marker + " Refactor " + ctx.candidate.path;
+  const title = marker + " " + ctx.plan.title;
   const body = [
-    "## Candidate",
-    "\`" + ctx.candidate.path + "\` — " + ctx.candidate.lines + " lines",
+    ctx.plan.body.trim(),
     "",
-    "## Analysis snapshot",
-    "\`" + ctx.workspace.baseCommit + "\`",
-    "",
-    "## Proposal",
-    ctx.plan.title,
-    "",
-    "## Rationale",
-    ctx.plan.rationale,
-    "",
-    "## Current responsibilities",
-    bullets(ctx.plan.responsibilities),
-    "",
-    "## Repository evidence",
-    bullets(ctx.plan.evidence),
-    "",
-    "## Boundaries",
-    bullets(ctx.plan.boundaries),
-    "",
-    "## Affected files",
-    bullets(ctx.plan.affectedFiles),
-    "",
-    "## Behavior invariants",
-    bullets(ctx.plan.behaviorInvariants),
-    "",
-    "## Plan",
-    bullets(ctx.plan.orderedSteps, "1. "),
-    "",
-    "## Validation",
-    bullets(ctx.plan.tests, "- [ ] "),
-    "",
-    "## Risks",
-    bullets(ctx.plan.risks),
-    "",
-    "## Unknowns",
-    bullets(ctx.plan.unknowns),
-    "",
-    "Add the \`" + ctx.approvalLabel.name + "\` label to approve this generated plan snapshot.",
-    "Editing this Issue or adding comments does not change the plan executed by the Flow.",
+    "---",
+    "Add the \`" + ctx.approvalLabel.name + "\` label to approve this Issue.",
+    "After approval, RD and Reviewer agents read the latest Issue body and comments as the source of truth.",
   ].join("\\n");
   const url = gh(["issue", "create", "--title", title, "--body", body]);
   return { externalRef: url, output: { url, title, marker, approvalLabel: ctx.approvalLabel.name } };
@@ -737,9 +668,6 @@ export async function reconcile(ctx) {
 function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
 function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
 function marker(ctx) { return "Flow-Cycle: " + ctx.cycle.id; }
-function bullets(values, fallback = "- None reported") {
-  return values.length ? values.map((value) => "- " + value).join("\\n") : fallback;
-}
 function committedSha(ctx) {
   const records = git(["log", "-n", "100", "--format=%H%x00%B%x00"]).split("\\u0000");
   for (let index = 0; index + 1 < records.length; index += 2) {
@@ -762,52 +690,38 @@ function output(ctx, url, commit) {
     url,
     branch: ctx.workspace.branch,
     commit,
-    qaConclusion: ctx.acceptance.final.conclusion,
+    qaReview: ctx.acceptance.final.review,
   };
 }
 function body(ctx) {
   const qa = ctx.acceptance.final;
   return [
-    "## Summary",
-    ctx.plan.title,
+    "## Source Issue",
+    ctx.issue.url,
     "",
+    "## Change",
     "Refactors \`" + ctx.candidate.path + "\` from its previous " + ctx.candidate.lines + "-line form.",
     "",
-    "## QA conclusion",
-    qa.conclusion,
-    "",
-    "## Acceptance criteria",
-    bullets(qa.criteria),
-    "",
-    "## Checks",
-    bullets(qa.checks),
-    "",
-    "## Evidence",
-    bullets(qa.evidence),
-    "",
-    "## Risks",
-    bullets(qa.risks),
-    "",
-    "## Unverified",
-    bullets(qa.unverified),
+    "## Reviewer Report",
+    qa.review,
     "",
     "Closes " + ctx.issue.url,
   ].join("\\n");
 }
 export async function apply(ctx) {
   if (ctx.acceptance.final.status !== "PASS") {
-    throw new Error("Pull request publication requires a final QA PASS.");
+    throw new Error("Pull request publication requires a final Reviewer PASS.");
   }
   let commit = committedSha(ctx);
   if (!commit) {
     if (!git(["status", "--porcelain"])) {
-      throw new Error("QA passed but the implementation produced no repository changes.");
+      throw new Error("Reviewer passed but the implementation produced no repository changes.");
     }
     git(["add", "-A"]);
     git(["commit", "-s", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
     commit = git(["rev-parse", "HEAD"]);
   } else if (git(["rev-parse", "HEAD"]) !== commit || git(["status", "--porcelain"])) {
-    throw new Error("The QA-approved worktree changed after its delivery commit.");
+    throw new Error("The Reviewer-approved worktree changed after its delivery commit.");
   }
   const publishedSha = remoteSha(ctx.workspace.branch);
   if (publishedSha && publishedSha !== commit) {
@@ -844,12 +758,8 @@ function issueApiPath(url) {
 }
 function reason(ctx) {
   if (ctx.acceptance?.final) {
-    const blockers = ctx.acceptance.final.blockers || [];
-    const detail = Array.isArray(blockers) && blockers.length
-      ? " Remaining blockers: " + blockers.slice(0, 8).join("; ")
-      : "";
-    return "RD + QA acceptance exhausted its iteration budget without PASS. Final QA conclusion: " +
-      ctx.acceptance.final.conclusion + "." + detail;
+    return "RD + Reviewer acceptance exhausted its iteration budget without PASS. Final review:\\n\\n" +
+      ctx.acceptance.final.review;
   }
   return "Implementation produced no repository changes.";
 }
