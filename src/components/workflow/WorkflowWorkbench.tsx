@@ -389,6 +389,11 @@ function WorkflowWorkbenchContent(props: { workflowId: string }) {
         <FlowRuntimeOverview
           workflowId={props.workflowId}
           projection={detail.flowV1}
+          sourceFiles={
+            detail.versionReview?.version.id === detail.currentVersion?.id
+              ? detail.versionReview?.bundle.files
+              : undefined
+          }
           view={surface}
           onViewChange={setSurface}
           onRefresh={load}

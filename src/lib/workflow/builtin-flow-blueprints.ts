@@ -8,7 +8,7 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
     id: "large-file-governance-v1",
     title: "Large File Governance Loop",
     description:
-      "Periodically refactors one oversized file, runs an adversarial RD and QA acceptance loop, asks a Human to review the evidence, then opens and tracks a pull request.",
+      "Periodically plans and refactors one oversized file, runs an adversarial RD and QA acceptance loop, then publishes and tracks a pull request when QA passes.",
     category: "coding",
     tags: [
       "large-file",
@@ -18,7 +18,6 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "schedule",
       "memory",
       "acceptance",
-      "human-review",
     ],
     difficulty: "advanced",
     requiresCwd: true,
@@ -36,14 +35,13 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "loop",
       "json-output",
       "review-isolation",
-      "human",
     ],
     patternSummary:
-      "A scheduled singleton Cycle plans and implements one refactor in an isolated worktree. An independent QA Agent reviews repository truth first; failures send only explicit blockers to an RD repair Agent. QA PASS produces a structured evidence package for a Human delivery gate before any commit, push, or pull-request mutation.",
+      "A scheduled singleton Cycle plans and implements one refactor in an isolated worktree. An independent QA Agent reviews repository truth first; failures send explicit blockers to an RD repair Agent, while QA PASS commits, pushes, and opens a pull request containing the QA conclusion and evidence.",
     useCases: [
       "Continuously reduce monolithic source files without spending Agent tokens while approvals or merges are pending.",
       "Make RD repairs and adversarial QA findings visible before delivery.",
-      "Give a Human one compact final-artifact review package before any commit or pull request.",
+      "Publish a pull request immediately after QA accepts the repository state.",
       "Use as a complete Bundle template for scheduled governance automations.",
     ],
     bundle: createFlowV1Bundle([
@@ -52,7 +50,7 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
         content: `export const schemaVersion = "tutti.flow.v1";
 export const meta = {
   name: "Large File Governance Loop",
-  description: "Find, refactor, adversarially accept, Human-review, and merge one oversized file per Cycle.",
+  description: "Find, plan, refactor, adversarially accept, and publish one oversized file per Cycle.",
   requiresCwd: true,
 };
 export const params = defineParams({
@@ -143,29 +141,66 @@ const approvalLabel = effect({
   },
   idempotencyKey: template("{{cycle.id}}:ensure-approval-label"),
 });
+const workspace = effect({
+  id: "prepare_workspace",
+  file: "scripts/prepare-worktree.mjs",
+  inputs: {
+    deliveryReady,
+    candidate,
+    sync,
+    mainBranch: ref("params.mainBranch"),
+  },
+  idempotencyKey: template("{{cycle.id}}:prepare-workspace"),
+});
 const plan = agent({
   id: "plan_refactor",
-  inputs: { approvalLabel, candidate, deliveryReady },
+  label: "Analyze candidate and propose refactor plan",
+  inputs: {
+    candidate,
+    sync,
+    workspace,
+    lineThreshold: ref("params.lineThreshold"),
+  },
+  workspace,
+  execution: { access: "review", isolation: "required" },
+  session: { mode: "independent" },
   memory: { include: ["currentUnderstanding"] },
   output: json({ schema: {
     type: "object",
-    required: ["title", "rationale", "boundaries", "orderedSteps", "tests", "risks"],
+    required: [
+      "title",
+      "rationale",
+      "responsibilities",
+      "evidence",
+      "boundaries",
+      "affectedFiles",
+      "behaviorInvariants",
+      "orderedSteps",
+      "tests",
+      "risks",
+      "unknowns",
+    ],
     properties: {
-      title: { type: "string" },
-      rationale: { type: "string" },
-      boundaries: { type: "array", items: { type: "string" } },
-      orderedSteps: { type: "array", items: { type: "string" } },
-      tests: { type: "array", items: { type: "string" } },
+      title: { type: "string", minLength: 1 },
+      rationale: { type: "string", minLength: 1 },
+      responsibilities: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      evidence: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      boundaries: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      affectedFiles: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      behaviorInvariants: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      orderedSteps: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+      tests: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
       risks: { type: "array", items: { type: "string" } },
+      unknowns: { type: "array", items: { type: "string" } },
     },
   } }),
-  prompt: "请检查 {{candidate.path}}（共 {{candidate.lines}} 行）。返回一个 JSON 对象，其中 title 和 rationale 为字符串字段，boundaries、orderedSteps、tests 和 risks 为字符串数组。不要编辑任何文件。",
+  prompt: "# 角色\\n\\n你是只读的代码重构分析员。你的职责是调查代码并制定方案，不实施修改。\\n\\n# 目标\\n\\n为目标文件制定安全、可执行的重构方案，使其在保持现有行为的前提下降至目标行数以内。\\n\\n# 分析要求\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 检查目标文件承担的主要职责。\\n3. 查阅与分析结论直接相关的调用方、依赖、测试、配置和公开 API。\\n4. 识别可以独立迁移的职责边界、耦合关系和实施顺序。\\n5. 给出逐文件、按依赖顺序排列的重构步骤和针对性测试命令。\\n\\n# 证据标准\\n\\n- 每个关键结论必须在 evidence 中引用具体的 path:line 或 path#symbol。\\n- affectedFiles 只列出预计需要修改或新增的文件。\\n- behaviorInvariants 必须写明不可改变的 API、错误处理、副作用和兼容性。\\n- tests 必须同时写明执行命令及其验证目标。\\n- 无法从仓库确认的内容放入 unknowns；不要将推测写成事实。\\n- Flow Memory 仅作历史背景；如果它与仓库实际内容冲突，以仓库为准。\\n\\n# 约束\\n\\n- 不修改任何文件。\\n- 不执行 Git 或 GitHub 写操作。\\n- 只返回符合声明 schema 的 JSON 对象，不附加解释或 Markdown。\\n\\n<target>\\npath: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\nsnapshot_commit: {{workspace.baseCommit}}\\n</target>",
 });
 const issue = effect({
   id: "create_issue",
   file: "scripts/create-issue.mjs",
   secrets: ["GH_TOKEN"],
-  inputs: { approvalLabel, candidate, plan },
+  inputs: { approvalLabel, candidate, plan, workspace },
   idempotencyKey: template("{{cycle.id}}:create-issue"),
 });
 const approval = gate({
@@ -175,32 +210,6 @@ const approval = gate({
   inputs: { issue },
   outcomes: ["approved", "rejected"],
 });
-const workspace = effect({
-  id: "prepare_workspace",
-  file: "scripts/prepare-worktree.mjs",
-  inputs: {
-    approval,
-    candidate,
-    sync,
-    mainBranch: ref("params.mainBranch"),
-  },
-  idempotencyKey: template("{{cycle.id}}:prepare-workspace"),
-});
-const implement = agent({
-  id: "implement_plan",
-  label: "RD implement approved plan",
-  inputs: {
-    candidate,
-    plan,
-    approval,
-    workspace,
-    lineThreshold: ref("params.lineThreshold"),
-  },
-  workspace,
-  execution: { access: "write", isolation: "required" },
-  session: { mode: "inherit", key: "rd_room" },
-  prompt: "请只在位于 {{workspace.path}}、分支为 {{workspace.branch}} 的已准备 Git worktree 中工作。执行已批准的 {{candidate.path}} 重构方案，在不削弱现有行为的前提下将文件缩减至不超过 {{lineThreshold}} 行。遵循 {{plan}}，并运行能够覆盖本次变更的最小范围测试。除非有针对性的测试无法以其他方式运行，否则不要安装依赖或执行全仓库检查。保持 worktree 可供审查，不要修改父检出目录。",
-});
 const acceptance = loop({
   id: "rd_qa_acceptance",
   label: "RD + QA adversarial acceptance",
@@ -208,7 +217,6 @@ const acceptance = loop({
     candidate,
     plan,
     approval,
-    implement,
     workspace,
     lineThreshold: ref("params.lineThreshold"),
   },
@@ -216,14 +224,13 @@ const acceptance = loop({
   execution: { access: "write", isolation: "required" },
   maxIterations: ref("params.maxAcceptanceRounds"),
   onMaxIterations: "complete",
-  firstIteration: { startAt: "qa_review" },
   steps: [
     agent({
-      id: "rd_repair",
-      label: "RD repair QA blockers",
+      id: "rd_work",
+      label: "RD implement or repair",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "请在位于 {{workspace.path}} 的已准备 worktree 中担任 RD 负责人。仅修复上一轮 QA 提出的阻塞问题，同时保持已批准的边界和行为。重新检查代码仓库的实际状态，确保 {{candidate.path}} 不超过 {{lineThreshold}} 行，运行有针对性的检查，并保留所有更改为未提交状态。没有证据时不得忽略阻塞项。已批准方案：{{plan}} QA 阻塞项：{{previousIteration.outputs.qa_review.blockers}} QA 建议：{{previousIteration.outputs.qa_review.suggestions}}",
-      appendPrompt: "请在同一个 RD 会话和已准备的 worktree 中继续。重新以 git status、git diff 以及 QA 指出的文件为准；代码仓库的实际状态优先于过时的会话记忆。仅修复最新的阻塞问题，保持已批准的范围，运行有针对性的检查，并保留所有更改为未提交状态。QA 阻塞项：{{previousIteration.outputs.qa_review.blockers}} QA 建议：{{previousIteration.outputs.qa_review.suggestions}}",
+      prompt: "# 角色\\n\\n你是负责实施重构的 RD。只在绑定的隔离 worktree 中工作。\\n\\n# 任务\\n\\n执行已批准的重构方案，在保持现有行为的前提下，将目标文件缩减至目标行数以内。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前检查 git status 和现有差异；仓库实际状态优先于会话记忆。\\n3. 遵循批准方案中的边界和行为约束，只修改完成方案所需的文件。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 不修改父检出目录。\\n- 不执行 commit、push 或 GitHub 写操作。\\n- 不安装非必要依赖。\\n\\n<context>\\nworktree: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\napproved_plan: {{plan}}\\n</context>",
+      appendPrompt: "# 本轮任务\\n\\n在同一个 RD 会话和 worktree 中继续修复最新一轮 QA 阻塞项。\\n\\n# 修复规则\\n\\n1. 重新检查 git status、git diff 和 QA 指出的代码；仓库实际状态优先。\\n2. 只处理 blockers，并保持批准方案的范围。suggestions 仅供参考，除非解决 blocker 必须，否则不要实施。\\n3. 运行覆盖修复内容的针对性测试，并检查最终 diff。\\n4. 保留更改为未提交状态；不要 commit、push 或执行 GitHub 写操作。\\n\\n<qa_feedback>\\nblockers: {{previousIteration.outputs.qa_review.blockers}}\\nsuggestions: {{previousIteration.outputs.qa_review.suggestions}}\\n</qa_feedback>",
     }),
     agent({
       id: "qa_review",
@@ -235,9 +242,10 @@ const acceptance = loop({
       execution: { access: "review", isolation: "shared" },
       output: json({ schema: {
         type: "object",
-        required: ["status", "criteria", "blockers", "suggestions", "risks", "checks", "evidence", "unverified"],
+        required: ["status", "conclusion", "criteria", "blockers", "suggestions", "risks", "checks", "evidence", "unverified"],
         properties: {
           status: { enum: ["PASS", "FAIL"] },
+          conclusion: { type: "string", minLength: 1 },
           criteria: { type: "array", items: { type: "string" } },
           blockers: { type: "array", items: { type: "string" } },
           suggestions: { type: "array", items: { type: "string" } },
@@ -247,185 +255,47 @@ const acceptance = loop({
           unverified: { type: "array", items: { type: "string" } },
         },
       } }),
-      prompt: "请在全新且独立的会话中担任对抗式 QA，并以位于 {{workspace.path}} 的已准备 worktree 作为代码仓库的实际依据。评估已批准的方案、行为是否保持、{{candidate.path}} 是否满足不超过 {{lineThreshold}} 行的限制、边界情况以及针对性测试结果；不要读取或信任任何 RD 叙述。需求未变化时复用上一轮标准，并重新检查每一个既有阻塞项。中间的 FAIL 轮次重点检查阻塞项修复、其影响范围和所有新增差异；给出 PASS 前必须覆盖完整变更面和所有必要检查。只有不存在阻塞性缺陷且每项必要主张都有证据支持时才能给出 PASS。返回有效 JSON，status 为 PASS 或 FAIL，并包含 criteria、blockers、suggestions、risks、checks、evidence 和 unverified 数组。已批准方案：{{plan}} 上一轮 QA 标准：{{previousStep.criteria}} 上一轮 QA 阻塞项：{{previousStep.blockers}}",
+      prompt: "# 角色\\n\\n你是独立的对抗式 QA。只以绑定 worktree 的仓库状态和实际检查结果为依据，不采信 RD 的叙述。\\n\\n# 验收目标\\n\\n判断当前实现是否完成批准方案、保持既有行为、满足目标文件行数限制，并经过足够的针对性验证。\\n\\n# 检查要求\\n\\n1. 阅读适用的 AGENTS.md 和项目规范。\\n2. 检查 git status、完整 diff、所有受影响文件及相关测试。\\n3. 对照批准方案的职责边界、行为约束、风险和测试计划进行验收。\\n4. 必要时重新运行针对性测试；checks 写明命令及结果，无法验证的内容放入 unverified。\\n5. 如果存在上一轮标准或阻塞项，逐项复查。中间轮次可以聚焦新增差异，但给出 PASS 前必须覆盖完整变更面。\\n6. evidence 引用具体的 path:line、path#symbol、diff 或测试结果。\\n\\n# 判定规则\\n\\n- 只有不存在阻塞性缺陷，并且每项必要结论都有证据时，才能给出 PASS。\\n- PASS 时 blockers 必须为空。\\n- FAIL 时 blockers 必须至少包含一个可执行的阻塞项，写明位置、问题及预期修正结果。\\n- suggestions 只能包含不影响本次通过的非阻塞建议。\\n- conclusion 简洁说明 PASS 或 FAIL 的依据；PASS 后该结论会直接写入拉取请求。\\n\\n# 输出约束\\n\\n只返回符合声明 schema 的 JSON 对象，不附加解释或 Markdown。\\n\\n<context>\\nworktree: {{workspace.path}}\\ntarget_path: {{candidate.path}}\\nmax_lines: {{lineThreshold}}\\napproved_plan: {{plan}}\\nprevious_criteria: {{previousStep.criteria}}\\nprevious_blockers: {{previousStep.blockers}}\\n</context>",
     }),
   ],
   until: { source: "qa_review", finalStatus: "PASS" },
-});
-const reviewPackage = agent({
-  id: "prepare_human_review",
-  label: "Prepare Human review package",
-  inputs: {
-    candidate,
-    plan,
-    acceptance,
-    workspace,
-    lineThreshold: ref("params.lineThreshold"),
-  },
-  workspace,
-  execution: { access: "read", isolation: "required" },
-  output: json({ schema: {
-    type: "object",
-    required: [
-      "title",
-      "summary",
-      "changedFiles",
-      "checks",
-      "qaEvidence",
-      "residualRisks",
-      "unverified",
-    ],
-    properties: {
-      title: { type: "string" },
-      summary: { type: "string" },
-      changedFiles: { type: "array", items: { type: "string" } },
-      checks: { type: "array", items: { type: "string" } },
-      qaEvidence: { type: "array", items: { type: "string" } },
-      residualRisks: { type: "array", items: { type: "string" } },
-      unverified: { type: "array", items: { type: "string" } },
-    },
-  } }),
-  prompt: "请为人工审查者准备一份精简且证据优先的材料包。检查最终 worktree 相对于 {{workspace.baseCommit}} 的差异以及已通过的 QA 记录。报告行为意图、准确的变更文件、检查及其结果、{{candidate.path}} 不超过 {{lineThreshold}} 行的证明、QA 证据、残余风险和所有未经验证的内容。不要修改文件，也不要执行任何 Git 或 GitHub 写操作。已批准方案：{{plan}} 验收结果：{{acceptance}}",
-});
-const humanReview = human({
-  id: "human_delivery_review",
-  label: "Human final-artifact review",
-  description: "Review the final diff and RD + QA evidence before any commit, push, or pull request.",
-  inputs: { candidate, plan, acceptance, reviewPackage, workspace },
-  context: [
-    { label: "Candidate", value: "{{candidate}}", display: "json" },
-    { label: "Approved plan", value: "{{plan}}", display: "json" },
-    { label: "RD + QA acceptance", value: "{{acceptance}}", display: "json" },
-    { label: "Final review package", value: "{{reviewPackage}}", display: "json" },
-    { label: "Review worktree", value: "{{workspace}}", display: "json" },
-  ],
-  actions: [
-    {
-      id: "approve_delivery",
-      label: "Approve delivery",
-      intent: "primary",
-      fields: [
-        {
-          id: "rationale",
-          type: "textarea",
-          label: "Approval rationale",
-          required: true,
-        },
-      ],
-    },
-    {
-      id: "reject_delivery",
-      label: "Reject delivery",
-      intent: "danger",
-      fields: [
-        {
-          id: "reason",
-          type: "textarea",
-          label: "Blocking reason",
-          required: true,
-        },
-      ],
-    },
-  ],
-});
-const notAccepted = agent({
-  id: "qa_not_accepted_report",
-  label: "Report remaining QA blockers",
-  inputs: { candidate, plan, acceptance, workspace },
-  workspace,
-  execution: { access: "read", isolation: "required" },
-  output: "json",
-  prompt: "请检查代码仓库的实际状态并返回有效 JSON，将 result 设为 not_accepted，同时包含变更文件、剩余 QA 阻塞项、检查结果、风险和未验证区域。不要提交、推送或创建拉取请求。候选文件：{{candidate}} 已批准方案：{{plan}} 验收结果：{{acceptance}}",
 });
 const closeNotAcceptedIssue = effect({
   id: "close_qa_not_accepted_issue",
   file: "scripts/resolve-issue.mjs",
   secrets: ["GH_TOKEN"],
-  inputs: { issue, notAccepted },
+  inputs: { issue, acceptance },
   idempotencyKey: template("{{cycle.id}}:close-qa-not-accepted"),
 });
 const qaNotAccepted = completeCycle({
   id: "qa_not_accepted",
   outcome: "qa_not_accepted",
-  inputs: { closeNotAcceptedIssue, notAccepted },
+  inputs: { closeNotAcceptedIssue, acceptance },
   continue: "scheduled",
-});
-const closeHumanRejectedIssue = effect({
-  id: "close_human_rejected_issue",
-  file: "scripts/resolve-issue.mjs",
-  secrets: ["GH_TOKEN"],
-  inputs: { issue, humanReview, reviewPackage },
-  idempotencyKey: template("{{cycle.id}}:close-human-rejected"),
-});
-const humanRejected = completeCycle({
-  id: "human_rejected",
-  outcome: "human_rejected",
-  inputs: { closeHumanRejectedIssue, humanReview, reviewPackage },
-  continue: "scheduled",
-});
-const changes = script({
-  id: "check_changes",
-  file: "scripts/check-changes.mjs",
-  inputs: { implement, acceptance, reviewPackage, humanReview, workspace },
-  workspace,
-  execution: { access: "read", isolation: "required" },
-  outcomes: ["changed", "no_changes"],
-});
-const commit = effect({
-  id: "commit_changes",
-  file: "scripts/commit-changes.mjs",
-  inputs: { changes, candidate, workspace },
-  workspace,
-  execution: { access: "write", isolation: "required" },
-  idempotencyKey: template("{{cycle.id}}:commit"),
-});
-const push = effect({
-  id: "push_branch",
-  file: "scripts/push-branch.mjs",
-  inputs: { commit, workspace },
-  workspace,
-  execution: { access: "write", isolation: "required" },
-  idempotencyKey: template("{{cycle.id}}:push"),
 });
 const pullRequest = effect({
-  id: "create_pull_request",
-  file: "scripts/create-pr.mjs",
+  id: "publish_qa_approved_pr",
+  label: "QA PASS: commit, push, and open pull request",
+  file: "scripts/publish-qa-approved-pr.mjs",
   secrets: ["GH_TOKEN"],
   inputs: {
     issue,
     candidate,
     plan,
     acceptance,
-    reviewPackage,
-    humanReview,
-    commit,
-    push,
     workspace,
     mainBranch: ref("params.mainBranch"),
   },
   workspace,
   execution: { access: "write", isolation: "required" },
-  idempotencyKey: template("{{cycle.id}}:create-pr"),
-});
-const noChangesIssue = effect({
-  id: "close_no_changes_issue",
-  file: "scripts/resolve-issue.mjs",
-  secrets: ["GH_TOKEN"],
-  inputs: { issue, changes },
-  idempotencyKey: template("{{cycle.id}}:close-no-changes"),
-});
-const noChanges = completeCycle({
-  id: "no_changes",
-  outcome: "no_changes",
-  continue: "scheduled",
-  inputs: { noChangesIssue },
+  idempotencyKey: template("{{cycle.id}}:publish-qa-approved-pr"),
 });
 const merged = gate({
   id: "wait_pull_request_merge",
   file: "scripts/pr-merged.mjs",
   secrets: ["GH_TOKEN"],
   inputs: { pullRequest },
-  outcomes: ["merged", "closed"],
+  outcomes: ["merged"],
 });
 const closeIssue = effect({
   id: "close_issue",
@@ -469,36 +339,18 @@ const rejected = cancelCycle({
   inputs: { approval },
   continue: "scheduled",
 });
-const rejectedDeliveryIssue = effect({
-  id: "close_rejected_delivery_issue",
-  file: "scripts/resolve-issue.mjs",
-  secrets: ["GH_TOKEN"],
-  inputs: { issue, pullRequest, merged },
-  idempotencyKey: template("{{cycle.id}}:close-rejected-delivery"),
-});
-const pullRequestClosed = completeCycle({
-  id: "pull_request_closed",
-  outcome: "delivery_rejected",
-  inputs: { rejectedDeliveryIssue, merged },
-  continue: "scheduled",
-});
 finalize({
   id: "cleanup_workspace",
   file: "scripts/cleanup-worktree.mjs",
   runOn: ["completed", "failed", "canceled"],
   retainOnFailure: true,
 });
-route(approval, { approved: workspace, rejected });
+route(approval, { approved: acceptance, rejected });
 route(acceptance, {
-  matched: reviewPackage,
-  exhausted: notAccepted,
+  matched: pullRequest,
+  exhausted: closeNotAcceptedIssue,
 });
-route(humanReview, {
-  approve_delivery: changes,
-  reject_delivery: closeHumanRejectedIssue,
-});
-route(changes, { changed: commit, no_changes: noChangesIssue });
-route(merged, { merged: closeIssue, closed: rejectedDeliveryIssue });
+route(merged, { merged: closeIssue });
 route(candidate, { found: deliveryReady, empty: noWork });
 `,
       },
@@ -736,11 +588,26 @@ export async function apply(ctx) {
     "## Candidate",
     "\`" + ctx.candidate.path + "\` — " + ctx.candidate.lines + " lines",
     "",
+    "## Analysis snapshot",
+    "\`" + ctx.workspace.baseCommit + "\`",
+    "",
     "## Rationale",
     ctx.plan.rationale,
     "",
+    "## Current responsibilities",
+    bullets(ctx.plan.responsibilities),
+    "",
+    "## Repository evidence",
+    bullets(ctx.plan.evidence),
+    "",
     "## Boundaries",
     bullets(ctx.plan.boundaries),
+    "",
+    "## Affected files",
+    bullets(ctx.plan.affectedFiles),
+    "",
+    "## Behavior invariants",
+    bullets(ctx.plan.behaviorInvariants),
     "",
     "## Plan",
     bullets(ctx.plan.orderedSteps, "1. "),
@@ -750,6 +617,9 @@ export async function apply(ctx) {
     "",
     "## Risks",
     bullets(ctx.plan.risks),
+    "",
+    "## Unknowns",
+    bullets(ctx.plan.unknowns),
     "",
     "Add the \`" + ctx.approvalLabel.name + "\` label to approve this plan.",
   ].join("\\n");
@@ -858,103 +728,103 @@ export async function reconcile(ctx) {
 `,
       },
       {
-        path: "scripts/check-changes.mjs",
+        path: "scripts/publish-qa-approved-pr.mjs",
         content: `import { execFileSync } from "node:child_process";
 function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
-export async function run() {
-  const status = git(["status", "--porcelain"]);
-  return status
-    ? { outcome: "changed", output: { status } }
-    : { outcome: "no_changes", output: { reason: "Implementation produced no repository changes." } };
-}
-`,
-      },
-      {
-        path: "scripts/commit-changes.mjs",
-        content: `import { execFileSync } from "node:child_process";
-function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
+function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
 function marker(ctx) { return "Flow-Cycle: " + ctx.cycle.id; }
-export async function apply(ctx) {
-  git(["add", "-A"]);
-  git(["commit", "-s", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
-  return { externalRef: git(["rev-parse", "HEAD"]), output: { sha: git(["rev-parse", "HEAD"]) } };
+function bullets(values, fallback = "- None reported") {
+  return values.length ? values.map((value) => "- " + value).join("\\n") : fallback;
 }
-export async function reconcile(ctx) {
+function committedSha(ctx) {
   const records = git(["log", "-n", "100", "--format=%H%x00%B%x00"]).split("\\u0000");
   for (let index = 0; index + 1 < records.length; index += 2) {
     if (records[index + 1].includes(marker(ctx))) {
-      return { status: "completed", externalRef: records[index], output: { sha: records[index] } };
+      return records[index];
     }
   }
-  return { status: "not_applied" };
+  return "";
 }
-`,
-      },
-      {
-        path: "scripts/push-branch.mjs",
-        content: `import { execFileSync } from "node:child_process";
-function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
 function remoteSha(branch) {
   const line = git(["ls-remote", "origin", "refs/heads/" + branch]);
   return line ? line.split(/\\s+/u)[0] : "";
 }
-export async function apply(ctx) {
-  git(["push", "-u", "origin", ctx.commit.sha + ":refs/heads/" + ctx.workspace.branch]);
-  return { externalRef: ctx.workspace.branch, output: { branch: ctx.workspace.branch, sha: ctx.commit.sha } };
+function existingPullRequest(ctx) {
+  const raw = gh(["pr", "list", "--state", "all", "--head", ctx.workspace.branch, "--base", ctx.mainBranch, "--json", "url,headRefName,baseRefName"]);
+  return JSON.parse(raw)[0] || null;
 }
-export async function reconcile(ctx) {
-  return remoteSha(ctx.workspace.branch) === ctx.commit.sha
-    ? { status: "completed", externalRef: ctx.workspace.branch, output: { branch: ctx.workspace.branch, sha: ctx.commit.sha } }
-    : { status: "not_applied" };
+function output(ctx, url, commit) {
+  return {
+    url,
+    branch: ctx.workspace.branch,
+    commit,
+    qaConclusion: ctx.acceptance.final.conclusion,
+  };
 }
-`,
-      },
-      {
-        path: "scripts/create-pr.mjs",
-        content: `import { execFileSync } from "node:child_process";
-function run(command, args, cwd = process.cwd()) {
-  return execFileSync(command, args, { cwd, encoding: "utf8" }).trim();
-}
-export async function apply(ctx) {
-  const body = [
+function body(ctx) {
+  const qa = ctx.acceptance.final;
+  return [
     "## Summary",
     ctx.plan.title,
     "",
     "Refactors \`" + ctx.candidate.path + "\` from its previous " + ctx.candidate.lines + "-line form.",
     "",
-    "## Validation plan",
-    ctx.plan.tests.map((test) => "- " + test).join("\\n"),
+    "## QA conclusion",
+    qa.conclusion,
     "",
-    "## Accepted validation evidence",
-    ctx.reviewPackage.checks.map((check) => "- " + check).join("\\n"),
+    "## Acceptance criteria",
+    bullets(qa.criteria),
     "",
-    "## QA evidence",
-    ctx.reviewPackage.qaEvidence.map((item) => "- " + item).join("\\n"),
+    "## Checks",
+    bullets(qa.checks),
     "",
-    "## Residual risks",
-    ctx.reviewPackage.residualRisks.length
-      ? ctx.reviewPackage.residualRisks.map((risk) => "- " + risk).join("\\n")
-      : "- None reported",
+    "## Evidence",
+    bullets(qa.evidence),
     "",
-    "Human delivery review: approved." +
-      (ctx.humanReview.values?.rationale
-        ? " Rationale: " + ctx.humanReview.values.rationale
-        : ""),
+    "## Risks",
+    bullets(qa.risks),
+    "",
+    "## Unverified",
+    bullets(qa.unverified),
     "",
     "Closes " + ctx.issue.url,
   ].join("\\n");
-  const url = run("gh", ["pr", "create", "--head", ctx.push.branch, "--base", ctx.mainBranch, "--title", "Refactor " + ctx.candidate.path, "--body", body]);
-  return {
-    externalRef: url,
-    output: { url, branch: ctx.push.branch, commit: ctx.commit.sha },
-  };
+}
+export async function apply(ctx) {
+  if (ctx.acceptance.final.status !== "PASS") {
+    throw new Error("Pull request publication requires a final QA PASS.");
+  }
+  let commit = committedSha(ctx);
+  if (!commit) {
+    if (!git(["status", "--porcelain"])) {
+      throw new Error("QA passed but the implementation produced no repository changes.");
+    }
+    git(["add", "-A"]);
+    git(["commit", "-s", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
+    commit = git(["rev-parse", "HEAD"]);
+  } else if (git(["rev-parse", "HEAD"]) !== commit || git(["status", "--porcelain"])) {
+    throw new Error("The QA-approved worktree changed after its delivery commit.");
+  }
+  const publishedSha = remoteSha(ctx.workspace.branch);
+  if (publishedSha && publishedSha !== commit) {
+    throw new Error("Remote delivery branch exists at an unexpected commit.");
+  }
+  if (!publishedSha) {
+    git(["push", "-u", "origin", commit + ":refs/heads/" + ctx.workspace.branch]);
+  }
+  const existing = existingPullRequest(ctx);
+  const url = existing
+    ? existing.url
+    : gh(["pr", "create", "--head", ctx.workspace.branch, "--base", ctx.mainBranch, "--title", "Refactor " + ctx.candidate.path, "--body", body(ctx)]);
+  return { externalRef: url, output: output(ctx, url, commit) };
 }
 export async function reconcile(ctx) {
-  const branch = ctx.push.branch;
-  const raw = run("gh", ["pr", "list", "--state", "all", "--head", branch, "--json", "url,headRefName"]);
-  const pullRequest = JSON.parse(raw)[0];
+  const commit = committedSha(ctx);
+  const pullRequest = commit && remoteSha(ctx.workspace.branch) === commit
+    ? existingPullRequest(ctx)
+    : null;
   return pullRequest
-    ? { status: "completed", externalRef: pullRequest.url, output: { url: pullRequest.url, branch } }
+    ? { status: "completed", externalRef: pullRequest.url, output: output(ctx, pullRequest.url, commit) }
     : { status: "not_applied" };
 }
 `,
@@ -969,19 +839,13 @@ function issueApiPath(url) {
   return "repos/" + owner + "/" + repo + "/issues/" + number;
 }
 function reason(ctx) {
-  if (ctx.pullRequest?.url) {
-    return "Pull request was closed without merge: " + ctx.pullRequest.url;
-  }
-  if (ctx.humanReview) {
-    const detail = ctx.humanReview.values?.reason || ctx.humanReview.reason || "No reason recorded.";
-    return "Human rejected the final artifact before delivery: " + detail;
-  }
-  if (ctx.notAccepted) {
-    const blockers = ctx.notAccepted.remainingBlockers || ctx.notAccepted.blockers || [];
+  if (ctx.acceptance?.final) {
+    const blockers = ctx.acceptance.final.blockers || [];
     const detail = Array.isArray(blockers) && blockers.length
       ? " Remaining blockers: " + blockers.slice(0, 8).join("; ")
       : "";
-    return "RD + QA acceptance exhausted its iteration budget without PASS." + detail;
+    return "RD + QA acceptance exhausted its iteration budget without PASS. Final QA conclusion: " +
+      ctx.acceptance.final.conclusion + "." + detail;
   }
   return "Implementation produced no repository changes.";
 }
@@ -1063,7 +927,9 @@ export async function check(ctx) {
     const pr = JSON.parse(execFileSync("gh", ["api", apiPath], { encoding: "utf8" }));
     const output = { state: pr.state, mergedAt: pr.merged_at, url: pr.html_url };
     if (pr.merged_at) return { status: "completed", outcome: "merged", output };
-    if (pr.state === "closed") return { status: "completed", outcome: "closed", output };
+    if (pr.state === "closed") {
+      return { status: "waiting", reason: "Pull request was closed without merge; reopen and merge it before the Flow can continue." };
+    }
     return { status: "waiting", reason: "Pull request is still open." };
   } catch (error) {
     if (isTransient(error)) {

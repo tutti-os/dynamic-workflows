@@ -62,7 +62,7 @@ describe("official Blueprint behavior", () => {
     }
   });
 
-  it("puts adversarial QA, RD repair, and Human review before large-file delivery", () => {
+  it("publishes one QA-approved pull request after the RD and QA repair loop", () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
     if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
@@ -71,6 +71,59 @@ describe("official Blueprint behavior", () => {
 
     const flow = parseFlowV1Bundle(blueprint.bundle);
     expect(flow.diagnostics).toEqual([]);
+    const workspace = flow.nodes.find(
+      (node) => node.id === "prepare_workspace",
+    );
+    expect(workspace).toEqual(
+      expect.objectContaining({
+        kind: "effect",
+        inputs: expect.objectContaining({
+          deliveryReady: expect.objectContaining({
+            expression: "deliveryReady",
+          }),
+          sync: expect.objectContaining({ expression: "sync" }),
+        }),
+      }),
+    );
+    expect(workspace?.inputs).not.toHaveProperty("approval");
+
+    const plan = flow.nodes.find((node) => node.id === "plan_refactor");
+    expect(plan).toEqual(
+      expect.objectContaining({
+        kind: "agent",
+        session: { mode: "independent" },
+        execution: { access: "review", isolation: "required" },
+        workspace: expect.objectContaining({ expression: "workspace" }),
+        inputs: expect.objectContaining({
+          candidate: expect.objectContaining({ expression: "candidate" }),
+          sync: expect.objectContaining({ expression: "sync" }),
+          lineThreshold: expect.objectContaining({
+            expression: "params.lineThreshold",
+          }),
+        }),
+        prompt: expect.stringMatching(
+          /# 角色.*# 分析要求.*# 证据标准.*evidence.*affectedFiles.*behaviorInvariants.*unknowns.*# 约束.*<target>/su,
+        ),
+      }),
+    );
+    expect(plan?.prompt).not.toContain("确认 HEAD");
+    expect(plan?.prompt).not.toContain("{{sync.commit}}");
+    expect(plan?.prompt).toContain("snapshot_commit: {{workspace.baseCommit}}");
+    expect(plan?.output).toEqual(
+      expect.objectContaining({
+        kind: "json",
+        schema: expect.objectContaining({
+          required: expect.arrayContaining([
+            "responsibilities",
+            "evidence",
+            "affectedFiles",
+            "behaviorInvariants",
+            "unknowns",
+          ]),
+        }),
+      }),
+    );
+
     const acceptance = flow.nodes.find(
       (node) => node.id === "rd_qa_acceptance",
     );
@@ -83,22 +136,24 @@ describe("official Blueprint behavior", () => {
     );
     expect(acceptance?.loop).toEqual(
       expect.objectContaining({
-        firstIterationStartAt: "qa_review",
         onMaxIterations: "complete",
         until: { source: "qa_review", finalStatus: "PASS" },
       }),
     );
     expect(acceptance?.loop?.steps.map((step) => step.id)).toEqual([
-      "rd_repair",
+      "rd_work",
       "qa_review",
     ]);
-    expect(flow.nodes.find((node) => node.id === "implement_plan")?.session).toEqual(
-      { mode: "inherit", key: "rd_room" },
-    );
     expect(acceptance?.loop?.steps[0]).toEqual(
       expect.objectContaining({
+        label: "RD implement or repair",
         session: { mode: "inherit", key: "rd_room" },
-        appendPrompt: expect.stringContaining("QA 阻塞项"),
+        prompt: expect.stringMatching(
+          /# 角色.*# 工作规则.*# 约束.*<context>/su,
+        ),
+        appendPrompt: expect.stringMatching(
+          /# 本轮任务.*只处理 blockers.*suggestions 仅供参考.*<qa_feedback>/su,
+        ),
       }),
     );
     expect(acceptance?.loop?.steps[1]).toEqual(
@@ -106,50 +161,83 @@ describe("official Blueprint behavior", () => {
         label: "Adversarial QA acceptance",
         session: { mode: "independent" },
         execution: { access: "review", isolation: "shared" },
-        output: expect.objectContaining({ kind: "json" }),
-        prompt: expect.not.stringContaining("初始实现记录"),
+        output: expect.objectContaining({
+          kind: "json",
+          schema: expect.objectContaining({
+            required: expect.arrayContaining(["status", "conclusion"]),
+          }),
+        }),
+        prompt: expect.stringMatching(
+          /# 角色.*# 检查要求.*PASS 时 blockers 必须为空.*FAIL 时 blockers 必须至少包含一个可执行的阻塞项.*# 输出约束.*<context>/su,
+        ),
       }),
     );
 
-    const humanReview = flow.nodes.find(
-      (node) => node.id === "human_delivery_review",
+    const publish = flow.nodes.find(
+      (node) => node.id === "publish_qa_approved_pr",
     );
-    expect(humanReview).toEqual(
+    expect(publish).toEqual(
       expect.objectContaining({
-        kind: "human",
-        outcomes: ["approve_delivery", "reject_delivery"],
+        kind: "effect",
+        file: "scripts/publish-qa-approved-pr.mjs",
+        execution: { access: "write", isolation: "required" },
+        inputs: expect.objectContaining({
+          acceptance: expect.objectContaining({
+            expression: "acceptance",
+          }),
+          workspace: expect.objectContaining({
+            expression: "workspace",
+          }),
+        }),
       }),
     );
-    expect(humanReview?.human?.context.map((item) => item.label)).toEqual([
-      "Candidate",
-      "Approved plan",
-      "RD + QA acceptance",
-      "Final review package",
-      "Review worktree",
-    ]);
+    expect(
+      flow.nodes.find((node) => node.id === "wait_pull_request_merge"),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "gate",
+        outcomes: ["merged"],
+      }),
+    );
+    expect(
+      flow.nodes
+        .map((node) => node.id)
+        .filter((id) =>
+          [
+            "prepare_human_review",
+            "human_delivery_review",
+            "implement_plan",
+            "qa_not_accepted_report",
+            "check_changes",
+            "commit_changes",
+            "push_branch",
+            "create_pull_request",
+          ].includes(id),
+        ),
+    ).toEqual([]);
 
     const controlEdges = flow.edges.filter((edge) => edge.kind === "control");
     expect(controlEdges).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          sourceNodeId: "wait_issue_approval",
+          outcome: "approved",
+          targetNodeId: "rd_qa_acceptance",
+        }),
+        expect.objectContaining({
           sourceNodeId: "rd_qa_acceptance",
           outcome: "matched",
-          targetNodeId: "prepare_human_review",
+          targetNodeId: "publish_qa_approved_pr",
         }),
         expect.objectContaining({
           sourceNodeId: "rd_qa_acceptance",
           outcome: "exhausted",
-          targetNodeId: "qa_not_accepted_report",
+          targetNodeId: "close_qa_not_accepted_issue",
         }),
         expect.objectContaining({
-          sourceNodeId: "human_delivery_review",
-          outcome: "approve_delivery",
-          targetNodeId: "check_changes",
-        }),
-        expect.objectContaining({
-          sourceNodeId: "human_delivery_review",
-          outcome: "reject_delivery",
-          targetNodeId: "close_human_rejected_issue",
+          sourceNodeId: "wait_pull_request_merge",
+          outcome: "merged",
+          targetNodeId: "close_issue",
         }),
       ]),
     );
@@ -157,7 +245,12 @@ describe("official Blueprint behavior", () => {
       flow.nodes
         .filter((node) => node.kind === "complete_cycle")
         .map((node) => node.terminalOutcome),
-    ).toEqual(expect.arrayContaining(["qa_not_accepted", "human_rejected"]));
+    ).toContain("qa_not_accepted");
+    expect(
+      flow.nodes
+        .filter((node) => node.kind === "complete_cycle")
+        .map((node) => node.terminalOutcome),
+    ).not.toContain("delivery_rejected");
   });
 
   it("treats an empty large-file scan as a routable healthy outcome", async () => {
@@ -323,6 +416,29 @@ exec "$REAL_GIT" "$@"
 
     writeFileSync(
       fakeGh,
+      "#!/bin/sh\necho '{\"state\":\"closed\",\"merged_at\":null,\"html_url\":\"https://github.com/example/project/pull/2\"}'\n",
+    );
+    const closedPullRequest = await runFlowV1CodeModule({
+      versionId: "large-file-pr-gate-closed",
+      bundle: blueprint.bundle,
+      file: "scripts/pr-merged.mjs",
+      exportName: "check",
+      context: {
+        pullRequest: {
+          url: "https://github.com/example/project/pull/2",
+        },
+      },
+      environment,
+      projectCwd,
+    });
+    expect(closedPullRequest.value).toEqual({
+      status: "waiting",
+      reason:
+        "Pull request was closed without merge; reopen and merge it before the Flow can continue.",
+    });
+
+    writeFileSync(
+      fakeGh,
       "#!/bin/sh\necho 'HTTP 401: authentication required' >&2\nexit 1\n",
     );
     await expect(
@@ -479,11 +595,17 @@ esac
         plan: {
           title: "Extract focused modules",
           rationale: "Separate unrelated responsibilities.",
+          responsibilities: ["Coordinates parsing and persistence."],
+          evidence: ["src/large.ts:40 parseInput mixes parsing and storage."],
           boundaries: ["Preserve public APIs."],
+          affectedFiles: ["src/large.ts", "src/parser.ts"],
+          behaviorInvariants: ["Keep parseInput error semantics."],
           orderedSteps: ["Extract helpers.", "Update imports."],
           tests: ["Run focused unit tests."],
           risks: ["Import cycles."],
+          unknowns: ["No integration fixture covers malformed legacy input."],
         },
+        workspace: { baseCommit: "abc123" },
       },
       environment,
       projectCwd,
@@ -499,9 +621,136 @@ esac
     });
     const issueArguments = readFileSync(issueCall, "utf8");
     expect(issueArguments).toContain("## Candidate");
+    expect(issueArguments).toContain("## Analysis snapshot");
+    expect(issueArguments).toContain("## Repository evidence");
+    expect(issueArguments).toContain("## Behavior invariants");
     expect(issueArguments).toContain("## Plan");
     expect(issueArguments).toContain("## Validation");
+    expect(issueArguments).toContain("## Unknowns");
+    expect(issueArguments).toContain("abc123");
     expect(issueArguments).toContain("flow-approved");
+  });
+
+  it("publishes one pull request containing the final QA conclusion", async () => {
+    const blueprint = getWorkflowBlueprint("large-file-governance-v1");
+    expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
+    if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
+      throw new Error("Large-file Blueprint is unavailable.");
+    }
+    const root = mkdtempSync(path.join(tmpdir(), "flow-qa-publish-"));
+    temporaryDirectories.push(root);
+    const remote = path.join(root, "remote.git");
+    const projectCwd = path.join(root, "project");
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    git(["init", "--bare", remote], root);
+    git(["init", projectCwd], root);
+    git(["config", "user.name", "Flow Test"], projectCwd);
+    git(["config", "user.email", "flow@example.test"], projectCwd);
+    writeFileSync(path.join(projectCwd, "source.ts"), "export const value = 1;\n");
+    git(["add", "source.ts"], projectCwd);
+    git(["commit", "-m", "initial"], projectCwd);
+    git(["branch", "-M", "main"], projectCwd);
+    git(["remote", "add", "origin", remote], projectCwd);
+    git(["push", "-u", "origin", "main"], projectCwd);
+    const branch = "flow/large-file-cycle-publis";
+    git(["checkout", "-b", branch], projectCwd);
+    writeFileSync(path.join(projectCwd, "source.ts"), "export const value = 2;\n");
+
+    const fakeGh = path.join(bin, "gh");
+    const prState = path.join(root, "pr-created");
+    const prCall = path.join(root, "pr-call.txt");
+    writeFileSync(
+      fakeGh,
+      `#!/bin/sh
+state=${JSON.stringify(prState)}
+call=${JSON.stringify(prCall)}
+case "$1 $2" in
+  "pr list")
+    if test -f "$state"; then
+      echo '[{"url":"https://github.com/example/project/pull/9","headRefName":"${branch}","baseRefName":"main"}]'
+    else
+      echo '[]'
+    fi
+    ;;
+  "pr create")
+    printf '%s' "$*" > "$call"
+    touch "$state"
+    echo 'https://github.com/example/project/pull/9'
+    ;;
+  *) echo "unexpected gh call: $*" >&2; exit 2 ;;
+esac
+`,
+    );
+    chmodSync(fakeGh, 0o755);
+    const context = {
+      acceptance: {
+        final: {
+          status: "PASS",
+          conclusion: "QA verified behavior preservation and focused tests.",
+          criteria: ["Public behavior is preserved."],
+          blockers: [],
+          suggestions: [],
+          risks: ["Downstream integration remains CI-covered."],
+          checks: ["pnpm vitest run source.test.ts — passed"],
+          evidence: ["source.ts now delegates focused responsibilities."],
+          unverified: [],
+        },
+      },
+      candidate: { path: "source.ts", lines: 1500 },
+      cycle: { id: "cycle-publish", sequence: 1 },
+      issue: { url: "https://github.com/example/project/issues/4" },
+      mainBranch: "main",
+      plan: { title: "Split source responsibilities" },
+      workspace: { branch, path: projectCwd },
+    };
+    const environment = {
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    };
+
+    const published = await runFlowV1CodeModule({
+      versionId: "large-file-publish-qa-pass",
+      bundle: blueprint.bundle,
+      file: "scripts/publish-qa-approved-pr.mjs",
+      exportName: "apply",
+      context,
+      environment,
+      projectCwd,
+    });
+    const publishOutput = readOutputObject(published.value);
+    expect(publishOutput).toEqual(
+      expect.objectContaining({
+        url: "https://github.com/example/project/pull/9",
+        branch,
+        qaConclusion:
+          "QA verified behavior preservation and focused tests.",
+      }),
+    );
+    expect(readFileSync(prCall, "utf8")).toContain("## QA conclusion");
+    expect(readFileSync(prCall, "utf8")).toContain(
+      "QA verified behavior preservation and focused tests.",
+    );
+    expect(git(["ls-remote", "origin", `refs/heads/${branch}`], projectCwd)).toContain(
+      String(publishOutput.commit),
+    );
+
+    const reconciled = await runFlowV1CodeModule({
+      versionId: "large-file-publish-qa-pass-reconcile",
+      bundle: blueprint.bundle,
+      file: "scripts/publish-qa-approved-pr.mjs",
+      exportName: "reconcile",
+      context,
+      environment,
+      projectCwd,
+    });
+    expect(reconciled.value).toMatchObject({
+      status: "completed",
+      output: {
+        url: "https://github.com/example/project/pull/9",
+        branch,
+        commit: publishOutput.commit,
+      },
+    });
   });
 
   it("uses collision-free worktree branches and removes terminal local state", async () => {
@@ -539,6 +788,7 @@ esac
       });
       const preparedValue = prepared.value as FlowV1JsonObject;
       const output = preparedValue.output as FlowV1JsonObject;
+      expect(output.baseCommit).toBe(commit);
       branches.push(String(output.branch));
     }
     expect(branches).toEqual([

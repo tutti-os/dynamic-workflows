@@ -8,6 +8,7 @@ import {
   ReactFlow,
   type Edge as ReactFlowEdge,
   type Node as ReactFlowNode,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import {
   Button,
@@ -36,7 +37,14 @@ import {
   UserRound,
   Zap,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { AgentCatalogStatus } from "@/components/workflow/AgentCatalogStatus";
 import { SecretBindingField } from "@/components/workflow/SecretBindingField";
 import {
@@ -77,6 +85,7 @@ type RuntimeConfigDraft = {
 export function FlowRuntimeOverview(props: {
   workflowId: string;
   projection: FlowV1DetailProjection;
+  sourceFiles?: Array<{ path: string; content: string }>;
   view: FlowView;
   onViewChange: (view: FlowView) => void;
   onRefresh: () => Promise<unknown>;
@@ -232,7 +241,11 @@ export function FlowRuntimeOverview(props: {
   }
 
   return (
-    <section className="flow-runtime-overview" aria-label="Workflow activity">
+    <section
+      className="flow-runtime-overview"
+      data-view={props.view}
+      aria-label="Workflow activity"
+    >
       <div className="flow-runtime-heading">
         <div>
           <span className="flow-runtime-eyebrow">Workflow status</span>
@@ -458,6 +471,7 @@ export function FlowRuntimeOverview(props: {
       {props.view === "design" ? (
         <DesignView
           projection={projection}
+          sourceFiles={props.sourceFiles}
           workflowId={props.workflowId}
           onRefresh={props.onRefresh}
         />
@@ -465,6 +479,7 @@ export function FlowRuntimeOverview(props: {
       {props.view === "live" ? (
         <LiveView
           projection={projection}
+          sourceFiles={props.sourceFiles}
           workflowId={props.workflowId}
           onRefresh={props.onRefresh}
           onInspectCycle={inspectCycle}
@@ -485,10 +500,11 @@ export function FlowRuntimeOverview(props: {
 function DesignView(props: {
   workflowId: string;
   projection: FlowV1DetailProjection;
+  sourceFiles?: Array<{ path: string; content: string }>;
   onRefresh: () => Promise<unknown>;
 }) {
   return (
-    <div className="flow-runtime-panel">
+    <div className="flow-runtime-panel flow-design-workspace">
       <div className="flow-runtime-panel-title">
         <h3>Workflow map</h3>
         <span>
@@ -499,6 +515,7 @@ function DesignView(props: {
       <FlowGraph
         graph={props.projection.graph}
         mode="design"
+        sourceFiles={props.sourceFiles}
       />
       <ConfigurationEditor
         projection={props.projection}
@@ -897,6 +914,7 @@ function ConfigurationEditor(props: {
 function LiveView(props: {
   workflowId: string;
   projection: FlowV1DetailProjection;
+  sourceFiles?: Array<{ path: string; content: string }>;
   onRefresh: () => Promise<unknown>;
   onInspectCycle: (cycleId: string) => Promise<void>;
 }) {
@@ -915,6 +933,7 @@ function LiveView(props: {
         currentNodeId={props.projection.selectedCycle?.currentNodeId}
         graph={props.projection.graph}
         mode="live"
+        sourceFiles={props.sourceFiles}
       />
       <div className="flow-runtime-history-grid">
         <HistoryList
@@ -952,34 +971,171 @@ export function FlowGraph(props: {
   mode: "design" | "live";
   checkpoint?: FlowV1GraphCheckpoint | null;
   currentNodeId?: string | null;
+  sourceFiles?: Array<{ path: string; content: string }>;
 }) {
-  const elements = useMemo(
-    () => buildFlowGraphElements(props),
-    [props],
+  const preferredNodeId =
+    props.graph.nodes.find((node) => node.id === props.currentNodeId)?.id ??
+    props.graph.nodes[0]?.id ??
+    null;
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(
+    preferredNodeId,
   );
+  const [followCurrentNode, setFollowCurrentNode] = useState(
+    props.mode === "live",
+  );
+  const [inspectorWidth, setInspectorWidth] = useState(400);
+  const [flowInstance, setFlowInstance] =
+    useState<ReactFlowInstance | null>(null);
+  useEffect(() => {
+    setSelectedNodeId((current) =>
+      props.graph.nodes.some((node) => node.id === current)
+        ? current
+        : preferredNodeId,
+    );
+  }, [preferredNodeId, props.graph.nodes]);
+  useEffect(() => {
+    if (!followCurrentNode || !props.currentNodeId) {
+      return;
+    }
+    setSelectedNodeId(props.currentNodeId);
+    const node = flowInstance?.getNode(props.currentNodeId);
+    if (flowInstance && node) {
+      void flowInstance.fitView({
+        nodes: [node],
+        duration: 240,
+        padding: 1.2,
+        maxZoom: 1,
+      });
+    }
+  }, [
+    flowInstance,
+    followCurrentNode,
+    props.currentNodeId,
+    props.graph.nodes,
+  ]);
+  const elements = useMemo(
+    () => buildFlowGraphElements({ ...props, selectedNodeId }),
+    [
+      props.checkpoint,
+      props.currentNodeId,
+      props.graph,
+      props.mode,
+      selectedNodeId,
+    ],
+  );
+  const selectedNode =
+    props.graph.nodes.find((node) => node.id === selectedNodeId) ??
+    props.graph.nodes[0];
+
+  function resizeInspector(delta: number) {
+    setInspectorWidth((current) => {
+      const viewportLimit =
+        typeof window === "undefined" ? 640 : window.innerWidth * 0.48;
+      return Math.round(
+        Math.min(Math.min(640, viewportLimit), Math.max(300, current + delta)),
+      );
+    });
+  }
+
+  function startInspectorResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || window.matchMedia("(max-width: 900px)").matches) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = inspectorWidth;
+    const maxWidth = Math.min(640, window.innerWidth * 0.48);
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      setInspectorWidth(
+        Math.round(
+          Math.min(
+            maxWidth,
+            Math.max(300, startWidth + startX - moveEvent.clientX),
+          ),
+        ),
+      );
+    };
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      document.body.classList.remove("is-resizing-flow-inspector");
+    };
+    document.body.classList.add("is-resizing-flow-inspector");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+  }
+
+  function handleResizeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      resizeInspector(24);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      resizeInspector(-24);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setInspectorWidth(400);
+    }
+  }
+
   return (
     <div
-      className="flow-runtime-graph"
-      aria-label={
-        props.mode === "design"
-          ? "Workflow design graph"
-          : "Run execution graph"
+      className="flow-graph-workbench"
+      style={
+        {
+          "--flow-inspector-width": `${inspectorWidth}px`,
+        } as CSSProperties
       }
     >
-      <ReactFlow
-        nodes={elements.nodes}
-        edges={elements.edges}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.35}
-        maxZoom={1.5}
-        nodesConnectable={false}
-        nodesDraggable={false}
-        proOptions={{ hideAttribution: true }}
+      <div
+        className="flow-runtime-graph"
+        aria-label={
+          props.mode === "design"
+            ? "Workflow design graph"
+            : "Run execution graph"
+        }
       >
-        <Background gap={18} size={1} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+        <ReactFlow
+          nodes={elements.nodes}
+          edges={elements.edges}
+          fitView
+          fitViewOptions={{ padding: 0.24 }}
+          minZoom={0.3}
+          maxZoom={1.5}
+          nodesConnectable={false}
+          nodesDraggable={false}
+          onInit={setFlowInstance}
+          onNodeClick={(_event, node) => {
+            setSelectedNodeId(node.id);
+            setFollowCurrentNode(false);
+          }}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background gap={18} size={1} />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+      </div>
+      <div
+        aria-label="Resize node details"
+        aria-orientation="vertical"
+        aria-valuemax={640}
+        aria-valuemin={300}
+        aria-valuenow={inspectorWidth}
+        className="flow-inspector-resizer"
+        onDoubleClick={() => setInspectorWidth(400)}
+        onKeyDown={handleResizeKeyDown}
+        onPointerDown={startInspectorResize}
+        role="separator"
+        tabIndex={0}
+        title="Drag to resize node details"
+      />
+      <FlowNodeInspector
+        checkpoint={props.checkpoint}
+        edges={props.graph.edges}
+        mode={props.mode}
+        node={selectedNode}
+        sourceFiles={props.sourceFiles}
+      />
     </div>
   );
 }
@@ -990,6 +1146,7 @@ function buildFlowGraphElements(
     mode: "design" | "live";
     checkpoint?: FlowV1GraphCheckpoint | null;
     currentNodeId?: string | null;
+    selectedNodeId?: string | null;
   },
 ): { nodes: ReactFlowNode[]; edges: ReactFlowEdge[] } {
   const levels = layoutFlowGraph(projection);
@@ -998,6 +1155,7 @@ function buildFlowGraphElements(
     const level = levels.get(node.id) ?? 0;
     groups.set(level, [...(groups.get(level) ?? []), node.id]);
   }
+  orderFlowGraphGroups(groups, projection.graph.edges, levels);
   const currentNodeId = projection.currentNodeId;
   const selectedEdges = new Set(
     projection.checkpoint?.selectedControlEdgeIds ?? [],
@@ -1008,8 +1166,8 @@ function buildFlowGraphElements(
   const nodes = projection.graph.nodes.map((node) => {
     const level = levels.get(node.id) ?? 0;
     const levelNodes = groups.get(level) ?? [];
-    const column = levelNodes.indexOf(node.id);
-    const centeredColumn = column - (levelNodes.length - 1) / 2;
+    const row = levelNodes.indexOf(node.id);
+    const centeredRow = row - (levelNodes.length - 1) / 2;
     const state = projection.checkpoint?.nodes[node.id];
     const status =
       projection.mode === "live" ? state?.status ?? "idle" : "design";
@@ -1027,14 +1185,15 @@ function buildFlowGraphElements(
         : flowNodeDesignSummary(node);
     return {
       id: node.id,
-      position: { x: centeredColumn * 300, y: level * 178 },
-      sourcePosition: Position.Bottom,
-      targetPosition: Position.Top,
+      position: { x: level * 300, y: centeredRow * 134 },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
       className: [
         "flow-graph-node",
         `flow-graph-node-kind-${node.kind}`,
         `flow-graph-node-${status}`,
         currentNodeId === node.id ? "is-current" : "",
+        projection.selectedNodeId === node.id ? "is-inspected" : "",
       ]
         .filter(Boolean)
         .join(" "),
@@ -1092,6 +1251,396 @@ function buildFlowGraphElements(
     };
   });
   return { nodes, edges };
+}
+
+function FlowNodeInspector(props: {
+  node?: FlowV1Node;
+  edges: FlowV1Edge[];
+  mode: "design" | "live";
+  checkpoint?: FlowV1GraphCheckpoint | null;
+  sourceFiles?: Array<{ path: string; content: string }>;
+}) {
+  if (!props.node) {
+    return (
+      <aside className="flow-node-inspector flow-node-inspector-empty">
+        <CircleAlert size={20} />
+        <p>This workflow does not contain any nodes.</p>
+      </aside>
+    );
+  }
+  const node = props.node;
+  const state = props.checkpoint?.nodes[node.id];
+  const incoming = props.edges.filter((edge) => edge.targetNodeId === node.id);
+  const outgoing = props.edges.filter((edge) => edge.sourceNodeId === node.id);
+  const sourceFile = findNodeSourceFile(node, props.sourceFiles);
+  return (
+    <aside
+      className={`flow-node-inspector flow-node-inspector-kind-${node.kind}`}
+      aria-label={`${node.label} details`}
+    >
+      <div className="flow-node-inspector-header">
+        <span className="flow-node-inspector-icon" aria-hidden="true">
+          <FlowNodeKindIcon kind={node.kind} />
+        </span>
+        <div>
+          <span>{flowNodeKindLabel(node.kind)} node</span>
+          <h4>{node.label}</h4>
+          <code>{node.id}</code>
+        </div>
+      </div>
+
+      {props.mode === "live" ? (
+        <NodeDetailSection title="Execution">
+          <dl className="flow-node-detail-list">
+            <NodeDetailRow label="Status" value={state?.status ?? "idle"} />
+            <NodeDetailRow
+              label="Attempts"
+              value={String(state?.attemptCount ?? 0)}
+            />
+            {state?.outcome ? (
+              <NodeDetailRow label="Outcome" value={state.outcome} />
+            ) : null}
+          </dl>
+          {state?.waitingReason ? (
+            <p className="flow-node-detail-notice">{state.waitingReason}</p>
+          ) : null}
+          {state?.error?.message ? (
+            <p className="flow-node-detail-notice" data-tone="danger">
+              {state.error.message}
+            </p>
+          ) : null}
+        </NodeDetailSection>
+      ) : null}
+
+      <NodeLogicDetails node={node} sourceAvailable={Boolean(sourceFile)} />
+
+      {sourceFile ? (
+        <NodeDetailSection title="Source logic" primary={!node.prompt}>
+          <div className="flow-node-source-heading">
+            <code>{sourceFile.path}</code>
+            <span>{sourceFile.content.split("\n").length} lines</span>
+          </div>
+          <pre className="flow-node-source">
+            <code>{sourceFile.content}</code>
+          </pre>
+        </NodeDetailSection>
+      ) : null}
+
+      {Object.keys(node.inputs).length > 0 ? (
+        <NodeDetailSection title="Inputs">
+          <dl className="flow-node-reference-list">
+            {Object.entries(node.inputs).map(([name, reference]) => (
+              <div key={name}>
+                <dt>{name}</dt>
+                <dd>{reference.expression}</dd>
+              </div>
+            ))}
+          </dl>
+        </NodeDetailSection>
+      ) : null}
+
+      <NodeDetailSection
+        title="Routing"
+        primary={
+          node.kind === "gate" ||
+          node.kind === "complete_cycle" ||
+          node.kind === "cancel_cycle"
+        }
+      >
+        {node.outcomes.length > 0 ? (
+          <div className="flow-node-outcomes">
+            {node.outcomes.map((outcome) => (
+              <span key={outcome}>{outcome}</span>
+            ))}
+          </div>
+        ) : (
+          <p className="flow-node-detail-muted">No declared outcomes.</p>
+        )}
+        <div className="flow-node-route-summary">
+          <span>{incoming.length} incoming</span>
+          <span>{outgoing.length} outgoing</span>
+        </div>
+        {outgoing.length > 0 ? (
+          <ul className="flow-node-route-list">
+            {outgoing.map((edge) => (
+              <li key={edge.id}>
+                <code>
+                  {edge.kind === "control"
+                    ? edge.outcome
+                    : edge.sourcePath.join(".") || "data"}
+                </code>
+                <span aria-hidden="true">→</span>
+                <strong>{edge.targetNodeId}</strong>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </NodeDetailSection>
+
+      <details className="flow-node-raw">
+        <summary>Complete node definition</summary>
+        <pre>
+          <code>{JSON.stringify(node, null, 2)}</code>
+        </pre>
+      </details>
+    </aside>
+  );
+}
+
+function NodeLogicDetails(props: {
+  node: FlowV1Node;
+  sourceAvailable: boolean;
+}) {
+  const node = props.node;
+  const agent = formatResolvable(node.agent);
+  const model = formatResolvable(node.model);
+  const permissionMode = formatResolvable(node.permissionMode);
+  const hasRuntimeDetails =
+    agent ||
+    model ||
+    permissionMode ||
+    node.cwd ||
+    node.execution ||
+    node.session ||
+    node.file;
+  return (
+    <>
+      {node.prompt ? (
+        <NodeDetailSection title="Prompt" primary>
+          <pre className="flow-node-prompt">{node.prompt}</pre>
+        </NodeDetailSection>
+      ) : null}
+
+      {node.human ? (
+        <NodeDetailSection title="Human review" primary>
+          {node.human.description ? <p>{node.human.description}</p> : null}
+          <dl className="flow-node-detail-list">
+            <NodeDetailRow
+              label="Context"
+              value={`${node.human.context.length} item(s)`}
+            />
+            <NodeDetailRow
+              label="Actions"
+              value={node.human.actions.map((action) => action.label).join(", ")}
+            />
+          </dl>
+        </NodeDetailSection>
+      ) : null}
+
+      {node.loop ? (
+        <NodeDetailSection title="Loop logic" primary>
+          <dl className="flow-node-detail-list">
+            <NodeDetailRow
+              label="Max iterations"
+              value={formatResolvable(node.loop.maxIterations) ?? "—"}
+            />
+            <NodeDetailRow
+              label="On limit"
+              value={node.loop.onMaxIterations}
+            />
+            <NodeDetailRow
+              label="Until"
+              value={formatCompactJson(node.loop.until)}
+            />
+          </dl>
+          <CompositeSteps steps={node.loop.steps} />
+        </NodeDetailSection>
+      ) : null}
+
+      {node.map ? (
+        <NodeDetailSection title="Map logic" primary>
+          <dl className="flow-node-detail-list">
+            <NodeDetailRow label="Source" value={node.map.source.expression} />
+            <NodeDetailRow label="Max items" value={String(node.map.maxItems)} />
+            <NodeDetailRow
+              label="Item failure"
+              value={node.map.onItemFailure}
+            />
+            <NodeDetailRow
+              label="Rejected item"
+              value={node.map.onItemRejected}
+            />
+          </dl>
+          <CompositeSteps steps={node.map.steps} />
+        </NodeDetailSection>
+      ) : null}
+
+      {node.memorySections || node.memoryUpdates ? (
+        <NodeDetailSection title="Memory logic" primary>
+          <dl className="flow-node-detail-list">
+            {node.memorySections ? (
+              <NodeDetailRow
+                label="Reads"
+                value={node.memorySections.join(", ")}
+              />
+            ) : null}
+            {node.memoryUpdates ? (
+              <NodeDetailRow
+                label="Updates"
+                value={Object.keys(node.memoryUpdates).join(", ")}
+              />
+            ) : null}
+          </dl>
+        </NodeDetailSection>
+      ) : null}
+
+      {node.terminalOutcome || node.continueMode ? (
+        <NodeDetailSection title="Completion" primary>
+          <dl className="flow-node-detail-list">
+            {node.terminalOutcome ? (
+              <NodeDetailRow
+                label="Outcome"
+                value={node.terminalOutcome}
+              />
+            ) : null}
+            {node.continueMode ? (
+              <NodeDetailRow label="Continue" value={node.continueMode} />
+            ) : null}
+          </dl>
+        </NodeDetailSection>
+      ) : null}
+
+      {hasRuntimeDetails ? (
+        <NodeDetailSection
+          title="Implementation"
+          primary={
+            !node.prompt &&
+            !node.human &&
+            !node.loop &&
+            !node.map &&
+            !node.memorySections &&
+            !node.memoryUpdates &&
+            !node.terminalOutcome &&
+            !props.sourceAvailable
+          }
+        >
+          <dl className="flow-node-detail-list">
+            {node.file ? <NodeDetailRow label="File" value={node.file} /> : null}
+            {agent ? <NodeDetailRow label="Agent" value={agent} /> : null}
+            {model ? <NodeDetailRow label="Model" value={model} /> : null}
+            {permissionMode ? (
+              <NodeDetailRow label="Permissions" value={permissionMode} />
+            ) : null}
+            {node.cwd ? <NodeDetailRow label="Working dir" value={node.cwd} /> : null}
+            {node.execution ? (
+              <NodeDetailRow
+                label="Execution"
+                value={`${node.execution.access} · ${node.execution.isolation}`}
+              />
+            ) : null}
+            {node.session ? (
+              <NodeDetailRow
+                label="Session"
+                value={
+                  node.session.mode === "inherit"
+                    ? `inherit · ${node.session.key}`
+                    : "independent"
+                }
+              />
+            ) : null}
+          </dl>
+        </NodeDetailSection>
+      ) : null}
+
+      {node.retry ? (
+        <NodeDetailSection title="Retry policy">
+          <dl className="flow-node-detail-list">
+            <NodeDetailRow
+              label="Max attempts"
+              value={String(node.retry.maxAttempts)}
+            />
+            <NodeDetailRow
+              label="Backoff"
+              value={`${node.retry.backoffMs} ms`}
+            />
+            <NodeDetailRow
+              label="Error codes"
+              value={node.retry.errorCodes.join(", ") || "Any"}
+            />
+          </dl>
+        </NodeDetailSection>
+      ) : null}
+    </>
+  );
+}
+
+function NodeDetailSection(props: {
+  title: string;
+  children: React.ReactNode;
+  primary?: boolean;
+}) {
+  return (
+    <section
+      className={`flow-node-detail-section${props.primary ? " is-primary" : ""}`}
+    >
+      <h5>{props.title}</h5>
+      {props.children}
+    </section>
+  );
+}
+
+function NodeDetailRow(props: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{props.label}</dt>
+      <dd>{props.value}</dd>
+    </div>
+  );
+}
+
+function CompositeSteps(props: {
+  steps: Array<
+    NonNullable<FlowV1Node["loop"]>["steps"][number] |
+    NonNullable<FlowV1Node["map"]>["steps"][number]
+  >;
+}) {
+  return (
+    <ol className="flow-node-step-list">
+      {props.steps.map((step) => (
+        <li key={step.id}>
+          <span>{step.kind}</span>
+          <strong>{step.label}</strong>
+          {"prompt" in step && step.prompt ? <p>{step.prompt}</p> : null}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function formatResolvable(
+  value:
+    | FlowV1Node["agent"]
+    | FlowV1Node["model"]
+    | FlowV1Node["permissionMode"]
+    | NonNullable<FlowV1Node["loop"]>["maxIterations"],
+): string | null {
+  if (value === undefined) {
+    return null;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  return value.expression;
+}
+
+function formatCompactJson(value: unknown): string {
+  return JSON.stringify(value).replaceAll('"', "");
+}
+
+function findNodeSourceFile(
+  node: FlowV1Node,
+  files?: Array<{ path: string; content: string }>,
+): { path: string; content: string } | null {
+  if (!node.file || !files) {
+    return null;
+  }
+  const normalizedPath = node.file.replace(/^\.\//, "");
+  const file =
+    files.find((candidate) => candidate.path === node.file) ??
+    files.find(
+      (candidate) => candidate.path.replace(/^\.\//, "") === normalizedPath,
+    );
+  return file ? { path: file.path, content: file.content } : null;
 }
 
 function FlowNodeKindIcon(props: { kind: FlowV1Node["kind"] }) {
@@ -1184,22 +1733,73 @@ function layoutFlowGraph(
     graph: { nodes: FlowV1Node[]; edges: FlowV1Edge[] };
   },
 ): Map<string, number> {
-  const levels = new Map(
+  const nodeIds = new Set(projection.graph.nodes.map((node) => node.id));
+  const levels = new Map(projection.graph.nodes.map((node) => [node.id, 0]));
+  const incomingCount = new Map(
     projection.graph.nodes.map((node) => [node.id, 0]),
   );
-  for (let pass = 0; pass < projection.graph.nodes.length; pass += 1) {
-    let changed = false;
-    for (const edge of projection.graph.edges) {
-      const sourceLevel = levels.get(edge.sourceNodeId) ?? 0;
-      const targetLevel = levels.get(edge.targetNodeId) ?? 0;
-      if (targetLevel <= sourceLevel) {
-        levels.set(edge.targetNodeId, sourceLevel + 1);
-        changed = true;
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+  for (const edge of projection.graph.edges) {
+    if (
+      !nodeIds.has(edge.sourceNodeId) ||
+      !nodeIds.has(edge.targetNodeId) ||
+      edge.sourceNodeId === edge.targetNodeId
+    ) {
+      continue;
+    }
+    outgoing.set(edge.sourceNodeId, [
+      ...(outgoing.get(edge.sourceNodeId) ?? []),
+      edge.targetNodeId,
+    ]);
+    incoming.set(edge.targetNodeId, [
+      ...(incoming.get(edge.targetNodeId) ?? []),
+      edge.sourceNodeId,
+    ]);
+    incomingCount.set(
+      edge.targetNodeId,
+      (incomingCount.get(edge.targetNodeId) ?? 0) + 1,
+    );
+  }
+  const queue = projection.graph.nodes
+    .filter((node) => (incomingCount.get(node.id) ?? 0) === 0)
+    .map((node) => node.id);
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const sourceId = queue.shift();
+    if (!sourceId) {
+      continue;
+    }
+    visited.add(sourceId);
+    for (const targetId of outgoing.get(sourceId) ?? []) {
+      levels.set(
+        targetId,
+        Math.max(
+          levels.get(targetId) ?? 0,
+          (levels.get(sourceId) ?? 0) + 1,
+        ),
+      );
+      const remaining = (incomingCount.get(targetId) ?? 1) - 1;
+      incomingCount.set(targetId, remaining);
+      if (remaining === 0) {
+        queue.push(targetId);
       }
     }
-    if (!changed) {
-      break;
+  }
+  for (const node of projection.graph.nodes) {
+    if (visited.has(node.id)) {
+      continue;
     }
+    const resolvedPredecessorLevels = (incoming.get(node.id) ?? [])
+      .filter((sourceId) => visited.has(sourceId))
+      .map((sourceId) => levels.get(sourceId) ?? 0);
+    levels.set(
+      node.id,
+      resolvedPredecessorLevels.length > 0
+        ? Math.max(...resolvedPredecessorLevels) + 1
+        : levels.get(node.id) ?? 0,
+    );
+    visited.add(node.id);
   }
   const lastLevel = Math.max(0, ...levels.values());
   for (const node of projection.graph.nodes) {
@@ -1208,6 +1808,96 @@ function layoutFlowGraph(
     }
   }
   return levels;
+}
+
+function orderFlowGraphGroups(
+  groups: Map<number, string[]>,
+  edges: FlowV1Edge[],
+  levels: Map<string, number>,
+) {
+  const incoming = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const edge of edges) {
+    incoming.set(edge.targetNodeId, [
+      ...(incoming.get(edge.targetNodeId) ?? []),
+      edge.sourceNodeId,
+    ]);
+    outgoing.set(edge.sourceNodeId, [
+      ...(outgoing.get(edge.sourceNodeId) ?? []),
+      edge.targetNodeId,
+    ]);
+  }
+  const lastLevel = Math.max(0, ...groups.keys());
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (let level = 1; level <= lastLevel; level += 1) {
+      sortFlowGraphLevel(groups, level, incoming, levels);
+    }
+    for (let level = lastLevel - 1; level >= 0; level -= 1) {
+      sortFlowGraphLevel(groups, level, outgoing, levels);
+    }
+  }
+}
+
+function sortFlowGraphLevel(
+  groups: Map<number, string[]>,
+  level: number,
+  neighbors: Map<string, string[]>,
+  levels: Map<string, number>,
+) {
+  const nodes = groups.get(level);
+  if (!nodes || nodes.length < 2) {
+    return;
+  }
+  const previousOrder = new Map(nodes.map((nodeId, index) => [nodeId, index]));
+  const rowByNodeId = new Map<string, number>();
+  for (const [groupLevel, groupNodes] of groups) {
+    for (const [index, nodeId] of groupNodes.entries()) {
+      rowByNodeId.set(
+        nodeId,
+        index - (groupNodes.length - 1) / 2 + groupLevel * 0.0001,
+      );
+    }
+  }
+  nodes.sort((left, right) => {
+    const leftScore = flowGraphBarycenter(
+      left,
+      level,
+      neighbors,
+      levels,
+      rowByNodeId,
+    );
+    const rightScore = flowGraphBarycenter(
+      right,
+      level,
+      neighbors,
+      levels,
+      rowByNodeId,
+    );
+    return (
+      leftScore - rightScore ||
+      (previousOrder.get(left) ?? 0) - (previousOrder.get(right) ?? 0)
+    );
+  });
+}
+
+function flowGraphBarycenter(
+  nodeId: string,
+  level: number,
+  neighbors: Map<string, string[]>,
+  levels: Map<string, number>,
+  rowByNodeId: Map<string, number>,
+): number {
+  const relevantRows = (neighbors.get(nodeId) ?? [])
+    .filter((neighborId) => (levels.get(neighborId) ?? level) !== level)
+    .map((neighborId) => rowByNodeId.get(neighborId))
+    .filter((row): row is number => row !== undefined);
+  if (relevantRows.length === 0) {
+    return rowByNodeId.get(nodeId) ?? 0;
+  }
+  return (
+    relevantRows.reduce((total, row) => total + row, 0) /
+    relevantRows.length
+  );
 }
 
 function HumanTasks(props: {

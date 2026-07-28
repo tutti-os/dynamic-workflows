@@ -149,8 +149,10 @@ describe("Flow v1 Tick supervisor", () => {
         type: "text_delta",
         text:
           invocation === 1
-            ? '{"status":"MAYBE"}'
-            : '{"status":"PASS"}',
+            ? '{"status":"PASS","title":"","evidence":["proof"]}'
+            : invocation === 2
+              ? '{"status":"PASS","title":"Accepted","evidence":[]}'
+              : '{"status":"PASS","title":"Accepted","evidence":["proof"]}',
       };
       yield { type: "done", status: "completed" };
     });
@@ -164,12 +166,18 @@ describe("Flow v1 Tick supervisor", () => {
               id: "review",
               prompt: "Return the review result.",
               output: json({
-                validationMaxAttempts: 2,
+                validationMaxAttempts: 3,
                 schema: {
                   type: "object",
-                  required: ["status"],
+                  required: ["status", "title", "evidence"],
                   properties: {
                     status: { enum: ["PASS", "FAIL"] },
+                    title: { type: "string", minLength: 1 },
+                    evidence: {
+                      type: "array",
+                      minItems: 1,
+                      items: { type: "string", minLength: 1 },
+                    },
                   },
                 },
               }),
@@ -202,8 +210,11 @@ describe("Flow v1 Tick supervisor", () => {
     });
 
     expect(result.stopReason).toBe("cycle_completed");
-    expect(runAgentMock).toHaveBeenCalledTimes(2);
+    expect(runAgentMock).toHaveBeenCalledTimes(3);
     expect(runAgentMock.mock.calls[1]?.[0].prompt).toContain(
+      "failed schema validation",
+    );
+    expect(runAgentMock.mock.calls[2]?.[0].prompt).toContain(
       "failed schema validation",
     );
     expect(
@@ -211,7 +222,7 @@ describe("Flow v1 Tick supervisor", () => {
         .listFlowV1NodeAttempts(started.cycle.id)
         .filter((attempt) => attempt.nodeId === "review")
         .map((attempt) => attempt.status),
-    ).toEqual(["failed", "completed"]);
+    ).toEqual(["failed", "failed", "completed"]);
   });
 
   it("reuses the RD session while starting every reviewer round independently", async () => {

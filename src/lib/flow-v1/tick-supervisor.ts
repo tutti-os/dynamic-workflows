@@ -2830,6 +2830,13 @@ function validateJsonSchema(
                     : true;
     if (!matches) return `${pathLabel} must be ${type}`;
   }
+  if (
+    typeof value === "string" &&
+    typeof schema.minLength === "number" &&
+    value.length < schema.minLength
+  ) {
+    return `${pathLabel} must contain at least ${schema.minLength} characters`;
+  }
   if (isObject(value)) {
     const required = Array.isArray(schema.required)
       ? schema.required.filter((entry): entry is string => typeof entry === "string")
@@ -2846,10 +2853,18 @@ function validateJsonSchema(
       }
     }
   }
-  if (Array.isArray(value) && isObject(schema.items)) {
-    for (const [index, item] of value.entries()) {
-      const error = validateJsonSchema(item, schema.items, `${pathLabel}[${index}]`);
-      if (error) return error;
+  if (Array.isArray(value)) {
+    if (
+      typeof schema.minItems === "number" &&
+      value.length < schema.minItems
+    ) {
+      return `${pathLabel} must contain at least ${schema.minItems} items`;
+    }
+    if (isObject(schema.items)) {
+      for (const [index, item] of value.entries()) {
+        const error = validateJsonSchema(item, schema.items, `${pathLabel}[${index}]`);
+        if (error) return error;
+      }
     }
   }
   return null;

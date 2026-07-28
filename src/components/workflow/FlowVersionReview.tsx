@@ -210,7 +210,11 @@ export function FlowVersionReviewPanel(props: {
               {props.review.graph.edges.length} edges
             </span>
           </div>
-          <FlowGraph graph={props.review.graph} mode="design" />
+          <FlowGraph
+            graph={props.review.graph}
+            mode="design"
+            sourceFiles={props.review.bundle.files}
+          />
         </div>
       ) : null}
 
