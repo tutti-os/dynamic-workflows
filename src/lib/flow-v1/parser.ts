@@ -71,6 +71,16 @@ const CODE_NODE_EXPORTS: Partial<Record<FlowV1NodeKind, string[]>> = {
   finally: ["run"],
 };
 
+const DEFAULT_SCRIPT_RETRY_POLICY: FlowV1RetryPolicy = {
+  maxAttempts: 3,
+  errorCodes: [
+    "flow_runner_exit_nonzero",
+    "flow_runner_spawn_failed",
+    "flow_runner_timeout",
+  ],
+  backoffMs: 1_000,
+};
+
 const RESERVED_REFERENCE_ROOTS = new Set([
   "params",
   "inputs",
@@ -1046,7 +1056,9 @@ function addNode(
     readSingleStringCall(idempotencyNode, "template");
   const retry = properties?.has("retry")
     ? readRetryPolicy(properties.get("retry"), id, kind, state)
-    : undefined;
+    : kind === "script"
+      ? { ...DEFAULT_SCRIPT_RETRY_POLICY }
+      : undefined;
   const workspace =
     readReference(properties?.get("workspace")) ??
     readIdentifierReference(properties?.get("workspace"));

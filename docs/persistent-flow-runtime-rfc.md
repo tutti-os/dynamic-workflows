@@ -662,13 +662,15 @@ nodes, outputs, selected control paths, Effects, and worktree information
 remain durable.
 
 The next recurring Schedule does not automatically retry a
-`paused_failed`/`paused_uncertain` Cycle unless a node policy explicitly
-authorizes it.
+`paused_failed`/`paused_uncertain` Cycle. Runtime-owned bounded retries happen
+inside the active Tick before the Cycle is paused.
 
 ### 10.2 Script retry
 
-Scripts may declare bounded retry policies using stable structural error codes.
-The runtime never classifies retryability by matching provider prose.
+Scripts receive a bounded default retry policy for runner timeouts, spawn
+failures, and non-zero exits. A Script may declare an explicit policy to
+override the defaults. The runtime never classifies retryability by matching
+provider prose.
 
 ### 10.3 Agent retry
 
@@ -680,7 +682,11 @@ transitive downstream dependents while retaining unaffected upstream state.
 
 ### 10.4 Effect retry
 
-Effects always reconcile uncertain executions before re-applying.
+Effects always reconcile uncertain executions before re-applying. The runtime
+performs bounded same-Tick retries: `completed` restores the result,
+`not_applied` permits another `apply`, and `unknown` pauses the Cycle as
+`paused_uncertain`. Effects are not executed in parallel while they are using
+this shared retry and reconciliation policy.
 
 ### 10.5 Restart recovery
 

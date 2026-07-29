@@ -225,8 +225,9 @@ describe("Flow v1 creation, publication, and direct Invocation", () => {
     expect(
       attempts
         .listFlowV1NodeAttempts(first.tick.cycle.id)
-        .filter((attempt) => attempt.nodeId === "unstable"),
-    ).toHaveLength(2);
+        .filter((attempt) => attempt.nodeId === "unstable")
+        .map((attempt) => attempt.status),
+    ).toEqual(["failed", "failed", "failed", "completed"]);
   });
 
   it("publishes a new immutable Version and supersedes the previous one", async () => {

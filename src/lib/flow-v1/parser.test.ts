@@ -168,6 +168,39 @@ describe("flow v1 parser", () => {
     );
   });
 
+  it("applies a bounded retry policy to Script nodes by default", () => {
+    const parsed = parseFlowV1Bundle(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const scan = script({
+              id: "scan",
+              file: "scripts/scan.mjs",
+            });
+            completeCycle({ id: "done", inputs: { scan } });
+          `,
+        },
+        {
+          path: "scripts/scan.mjs",
+          content: "export async function run() { return {}; }",
+        },
+      ]),
+    );
+
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.nodes.find((node) => node.id === "scan")?.retry).toEqual({
+      maxAttempts: 3,
+      errorCodes: [
+        "flow_runner_exit_nonzero",
+        "flow_runner_spawn_failed",
+        "flow_runner_timeout",
+      ],
+      backoffMs: 1_000,
+    });
+  });
+
   it("rejects unknown schema helpers and invalid helper constraints", () => {
     const parsed = parseFlowV1Bundle(
       createFlowV1Bundle([

@@ -27,7 +27,10 @@ import {
 } from "@/lib/db/workflows/flow-runtime";
 import { getCurrentFlowV1Params } from "@/lib/db/workflows/flow-settings";
 import { hasWorkflowDiagnosticErrors } from "@/lib/workflow/validation";
-import { runFlowV1CodeModule } from "./code-runner";
+import {
+  FlowV1CodeRunnerError,
+  runFlowV1CodeModule,
+} from "./code-runner";
 import {
   FLOW_V1_MEMORY_TEMPLATE_FILE,
   getFlowV1BundleFile,
@@ -646,7 +649,7 @@ export async function runFlowV1Tick(input: {
         );
         persist(checkpoint, "running", node.id);
         await waitForRetry(
-          node.kind === "script" ? node.retry!.backoffMs : 0,
+          retryBackoffMs(node, nodeAttempt),
           executionSignal,
         );
       } while (true);
@@ -1161,7 +1164,7 @@ async function executeNode(input: {
     } catch (error) {
       return failure(
         readErrorCode(error, "flow_code_execution_failed"),
-        error instanceof Error ? error.message : String(error),
+        readExecutionErrorMessage(error),
       );
     }
   }
@@ -2287,12 +2290,12 @@ async function executeEffect(
       status: "uncertain",
       error: {
         code: readErrorCode(error, "flow_effect_apply_uncertain"),
-        message: error instanceof Error ? error.message : String(error),
+        message: readExecutionErrorMessage(error),
       },
     });
     return uncertain(
       readErrorCode(error, "flow_effect_apply_uncertain"),
-      error instanceof Error ? error.message : String(error),
+      readExecutionErrorMessage(error),
     );
   }
 }
@@ -2675,13 +2678,18 @@ function shouldRetryNode(
     node.retry !== undefined &&
     attempt < node.retry.maxAttempts &&
     node.retry.errorCodes.includes(result.error.code);
+  const effectRetry =
+    node.kind === "effect" &&
+    result.status === "uncertain" &&
+    result.error.code !== "flow_effect_reconcile_unknown" &&
+    attempt < DEFAULT_EFFECT_MAX_ATTEMPTS;
   const structuredAgentRetry =
     node.kind === "agent" &&
     node.output?.kind === "json" &&
     result.status === "failed" &&
     result.error.retryable === true &&
     attempt < structuredValidationMaxAttempts(node.output);
-  return scriptRetry || structuredAgentRetry;
+  return scriptRetry || effectRetry || structuredAgentRetry;
 }
 
 function isParallelReadyNode(node: FlowV1Node): boolean {
@@ -2692,8 +2700,29 @@ function isParallelReadyNode(node: FlowV1Node): boolean {
         structuredValidationMaxAttempts(node.output) > 1
       )) ||
     (node.kind === "script" && node.retry === undefined) ||
-    node.kind === "gate" ||
-    node.kind === "effect"
+    node.kind === "gate"
+  );
+}
+
+const DEFAULT_EFFECT_MAX_ATTEMPTS = 3;
+const DEFAULT_EFFECT_RETRY_BACKOFF_MS = 1_000;
+const MAX_RETRY_BACKOFF_MS = 30_000;
+
+function retryBackoffMs(node: FlowV1Node, attempt: number): number {
+  const configured =
+    node.kind === "script"
+      ? node.retry?.backoffMs ?? 0
+      : node.kind === "effect"
+        ? DEFAULT_EFFECT_RETRY_BACKOFF_MS
+        : 0;
+  const override = Number(
+    process.env.WORKFLOW_TRANSIENT_RETRY_BACKOFF_MS,
+  );
+  const base =
+    Number.isFinite(override) && override >= 0 ? override : configured;
+  return Math.min(
+    MAX_RETRY_BACKOFF_MS,
+    base * 2 ** Math.max(0, attempt - 1),
   );
 }
 
@@ -2885,6 +2914,17 @@ function readErrorCode(error: unknown, fallback: string): string {
     typeof error.code === "string"
     ? error.code
     : fallback;
+}
+
+function readExecutionErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof FlowV1CodeRunnerError)) {
+    return message;
+  }
+  const stderr = error.stderr.trim();
+  return stderr && !message.includes(stderr)
+    ? `${message}\n${stderr}`
+    : message;
 }
 
 function readPath(

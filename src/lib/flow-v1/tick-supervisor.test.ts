@@ -405,6 +405,40 @@ describe("Flow v1 Tick supervisor", () => {
     );
   });
 
+  it("uses the default Script retry policy and preserves stderr in the final error", async () => {
+    const fixture = await createRunnableFlow(failingScriptBundle());
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const attempts = await import("@/lib/db/workflows/flow-attempts");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "default-script-retry",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    const result = await runFlowV1Tick({ runId: started.run.id });
+    const scriptAttempts = attempts
+      .listFlowV1NodeAttempts(started.cycle.id)
+      .filter((attempt) => attempt.nodeId === "unstable");
+
+    expect(result.stopReason).toBe("paused_failed");
+    expect(scriptAttempts.map((attempt) => attempt.status)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(scriptAttempts.at(-1)?.error).toEqual(
+      expect.objectContaining({
+        code: "flow_runner_exit_nonzero",
+        message: expect.stringContaining("transient command detail"),
+      }),
+    );
+  });
+
   it("executes independent ready graph nodes in parallel before their join", async () => {
     let activeAgents = 0;
     let maxActiveAgents = 0;
@@ -563,7 +597,7 @@ describe("Flow v1 Tick supervisor", () => {
     expect(completed.executedNodeIds).toEqual(["review", "done"]);
   });
 
-  it("pauses an uncertain Effect and reconciles it before continuing in a later Tick", async () => {
+  it("reconciles an uncertain Effect inside the same Tick", async () => {
     const fixture = await createRunnableFlow(uncertainEffectBundle());
     const runtime = await import("@/lib/db/workflows/flow-runtime");
     const attempts = await import("@/lib/db/workflows/flow-attempts");
@@ -579,26 +613,55 @@ describe("Flow v1 Tick supervisor", () => {
       paramsSnapshot: {},
     });
 
-    const uncertain = await runFlowV1Tick({ runId: first.run.id });
-    expect(uncertain.stopReason).toBe("paused_uncertain");
-    expect(existsSync(markerPath)).toBe(true);
-    expect(attempts.listFlowV1Effects(first.cycle.id)[0]?.status).toBe(
-      "uncertain",
-    );
-
-    const retry = runtime.startFlowV1Tick({
-      cycleId: first.cycle.id,
-      origin: { kind: "recovery", reason: "reconcile uncertain Effect" },
-      idempotencyKey: "effect-reconcile",
-    });
-    const reconciled = await runFlowV1Tick({ runId: retry.run.id });
+    const reconciled = await runFlowV1Tick({ runId: first.run.id });
     expect(reconciled.stopReason).toBe("cycle_completed");
     expect(reconciled.executedNodeIds).toEqual(["write_external", "done"]);
+    expect(existsSync(markerPath)).toBe(true);
+    expect(
+      attempts
+        .listFlowV1NodeAttempts(first.cycle.id)
+        .filter((attempt) => attempt.nodeId === "write_external")
+        .map((attempt) => attempt.status),
+    ).toEqual(["uncertain", "completed"]);
     expect(attempts.listFlowV1Effects(first.cycle.id)).toEqual([
       expect.objectContaining({
         status: "completed",
         externalRef: "marker:created",
         result: { recovered: true },
+      }),
+    ]);
+  });
+
+  it("re-applies an Effect inside the same Tick after reconcile reports not_applied", async () => {
+    const fixture = await createRunnableFlow(retryableEffectBundle());
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const attempts = await import("@/lib/db/workflows/flow-attempts");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const markerPath = path.join(dataDir, "retryable-effect.marker");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "effect-not-applied",
+      inputSnapshot: { markerPath },
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    const result = await runFlowV1Tick({ runId: started.run.id });
+
+    expect(result.stopReason).toBe("cycle_completed");
+    expect(existsSync(markerPath)).toBe(true);
+    expect(
+      attempts
+        .listFlowV1NodeAttempts(started.cycle.id)
+        .filter((attempt) => attempt.nodeId === "write_external")
+        .map((attempt) => attempt.status),
+    ).toEqual(["uncertain", "completed"]);
+    expect(attempts.listFlowV1Effects(started.cycle.id)).toEqual([
+      expect.objectContaining({
+        status: "completed",
+        result: { applied: true },
       }),
     ]);
   });
@@ -1279,6 +1342,33 @@ function scriptRetryBundle() {
   ]);
 }
 
+function failingScriptBundle() {
+  return createFlowV1Bundle([
+    {
+      path: "flow.js",
+      content: `
+        export const schemaVersion = "tutti.flow.v1";
+        const unstable = script({
+          id: "unstable",
+          file: "scripts/unstable.mjs",
+        });
+        completeCycle({
+          id: "done",
+          inputs: { unstable },
+        });
+      `,
+    },
+    {
+      path: "scripts/unstable.mjs",
+      content: `
+        export async function run() {
+          throw new Error("transient command detail");
+        }
+      `,
+    },
+  ]);
+}
+
 function parallelBranchesBundle() {
   return createFlowV1Bundle([
     {
@@ -1627,6 +1717,57 @@ function uncertainEffectBundle() {
             };
           }
           return { status: "not_applied" };
+        }
+      `,
+    },
+  ]);
+}
+
+function retryableEffectBundle() {
+  return createFlowV1Bundle([
+    {
+      path: "flow.js",
+      content: `
+        export const schemaVersion = "tutti.flow.v1";
+        export const inputs = defineInputs({
+          markerPath: stringInput({ required: true }),
+        });
+        const write = effect({
+          id: "write_external",
+          file: "scripts/write.mjs",
+          inputs: { markerPath: ref("inputs.markerPath") },
+          idempotencyKey: template("{{cycle.id}}:write_external"),
+        });
+        completeCycle({
+          id: "done",
+          inputs: { write },
+        });
+      `,
+    },
+    {
+      path: "scripts/write.mjs",
+      content: `
+        import fs from "node:fs";
+        export async function apply(ctx) {
+          const attemptPath = ctx.markerPath + ".attempt";
+          if (!fs.existsSync(attemptPath)) {
+            fs.writeFileSync(attemptPath, "failed-before-apply", "utf8");
+            throw new Error("connection failed before external write");
+          }
+          fs.writeFileSync(ctx.markerPath, "created", "utf8");
+          return {
+            externalRef: "marker:created",
+            output: { applied: true },
+          };
+        }
+        export async function reconcile(ctx) {
+          return fs.existsSync(ctx.markerPath)
+            ? {
+                status: "completed",
+                externalRef: "marker:created",
+                output: { applied: true },
+              }
+            : { status: "not_applied" };
         }
       `,
     },
