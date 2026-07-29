@@ -28,16 +28,13 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "gate",
       "agent",
       "memory",
-      "worktree",
-      "finally",
       "immediate-continuation",
       "github-cli",
       "loop",
       "json-output",
-      "review-isolation",
     ],
     patternSummary:
-      "A scheduled singleton Cycle creates an Issue for one refactor, then RD and an independent Reviewer read that Issue as the source of truth. Failed reviews return one Markdown report to the RD repair Agent, while PASS commits, pushes, and opens a linked pull request.",
+      "A scheduled singleton Cycle checks out a fresh Flow branch from origin/main in the configured project directory, creates an Issue, then runs RD and an independent Reviewer serially in that directory. Failed reviews return one Markdown report to RD, while PASS commits, pushes, and opens a linked pull request.",
     useCases: [
       "Continuously reduce monolithic source files without spending Agent tokens while approvals or merges are pending.",
       "Make RD repairs and adversarial Reviewer findings visible before delivery.",
@@ -103,18 +100,18 @@ const preflight = script({
   file: "scripts/preflight-environment.mjs",
   inputs: { branch: ref("params.mainBranch") },
 });
-const sync = effect({
-  id: "sync_main",
-  file: "scripts/sync-main.mjs",
-  inputs: { preflight, branch: ref("params.mainBranch") },
-  idempotencyKey: template("{{cycle.id}}:sync-main"),
+const workspace = effect({
+  id: "prepare_workspace",
+  file: "scripts/prepare-branch.mjs",
+  inputs: { preflight, mainBranch: ref("params.mainBranch") },
+  idempotencyKey: template("{{cycle.id}}:prepare-workspace"),
 });
 const candidate = script({
   id: "find_large_file",
   file: "scripts/find-large-file.mjs",
   outcomes: ["found", "empty"],
   inputs: {
-    sync,
+    sync: workspace,
     threshold: ref("params.lineThreshold"),
     root: ref("params.scanRoot"),
   },
@@ -141,28 +138,16 @@ const approvalLabel = effect({
   },
   idempotencyKey: template("{{cycle.id}}:ensure-approval-label"),
 });
-const workspace = effect({
-  id: "prepare_workspace",
-  file: "scripts/prepare-worktree.mjs",
-  inputs: {
-    deliveryReady,
-    candidate,
-    sync,
-    mainBranch: ref("params.mainBranch"),
-  },
-  idempotencyKey: template("{{cycle.id}}:prepare-workspace"),
-});
 const plan = agent({
   id: "plan_refactor",
   label: "Analyze candidate and propose refactor plan",
   inputs: {
     candidate,
-    sync,
     workspace,
     lineThreshold: ref("params.lineThreshold"),
   },
   workspace,
-  execution: { access: "review", isolation: "required" },
+  execution: { access: "review", isolation: "shared" },
   session: { mode: "independent" },
   memory: { include: ["currentUnderstanding"] },
   output: json({ schema: {
@@ -200,7 +185,7 @@ const acceptance = loop({
     lineThreshold: ref("params.lineThreshold"),
   },
   workspace,
-  execution: { access: "write", isolation: "required" },
+  execution: { access: "write", isolation: "shared" },
   maxIterations: ref("params.maxAcceptanceRounds"),
   onMaxIterations: "complete",
   steps: [
@@ -208,8 +193,8 @@ const acceptance = loop({
       id: "rd_work",
       label: "RD implement or repair",
       session: { mode: "inherit", key: "rd_room" },
-      prompt: "# 角色\\n\\n你是负责实施重构的 RD。只在绑定的隔离 worktree 中工作。\\n\\n# 任务\\n\\n使用 gh 读取 Issue 的最新正文和评论，并以它们作为唯一需求来源。在保持现有行为的前提下，将目标文件缩减至目标行数以内。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前读取 Issue、检查 git status 和现有差异；仓库和 Issue 的实际状态优先于会话记忆。\\n3. 遵循 Issue 中的边界和行为约束，只修改完成 Issue 所需的文件。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 不修改父检出目录。\\n- 不执行 commit、push 或 GitHub 写操作。\\n- 不安装非必要依赖。\\n\\n<context>\\nissue_url: {{issue.url}}\\nworktree: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\n</context>",
-      appendPrompt: "# 本轮任务\\n\\n在同一个 RD 会话和 worktree 中继续处理最新一轮 Reviewer 的验收意见。\\n\\n# 修复规则\\n\\n1. 重新读取 Issue 的最新正文和评论，并检查 git status、git diff 和 Reviewer 指出的代码；实际状态优先。\\n2. 修复 review 中的阻塞问题，并保持 Issue 约定的范围。非阻塞建议仅供参考。\\n3. 运行覆盖修复内容的针对性测试，并检查最终 diff。\\n4. 保留更改为未提交状态；不要 commit、push 或执行 GitHub 写操作。\\n\\n<context>\\nissue_url: {{issue.url}}\\n</context>\\n\\n<reviewer_feedback>\\n{{previousIteration.outputs.qa_review.review}}\\n</reviewer_feedback>",
+      prompt: "# 角色\\n\\n你是负责实施重构的 RD。Flow 串行独占当前配置的项目目录。\\n\\n# 任务\\n\\n使用 gh 读取 Issue 的最新正文和评论，并以它们作为唯一需求来源。在保持现有行为的前提下，将目标文件缩减至目标行数以内。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前读取 Issue、检查 git status 和现有差异；仓库和 Issue 的实际状态优先于会话记忆。\\n3. 遵循 Issue 中的边界和行为约束，只修改完成 Issue 所需的文件。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 只在当前项目目录和 Flow 分支内工作。\\n- 不执行 commit、push 或 GitHub 写操作。\\n- 不安装非必要依赖。\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\n</context>",
+      appendPrompt: "# 本轮任务\\n\\n在同一个 RD 会话、项目目录和 Flow 分支中继续处理最新一轮 Reviewer 的验收意见。\\n\\n# 修复规则\\n\\n1. 重新读取 Issue 的最新正文和评论，并检查 git status、git diff 和 Reviewer 指出的代码；实际状态优先。\\n2. 修复 review 中的阻塞问题，并保持 Issue 约定的范围。非阻塞建议仅供参考。\\n3. 运行覆盖修复内容的针对性测试，并检查最终 diff。\\n4. 保留更改为未提交状态；不要 commit、push 或执行 GitHub 写操作。\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\n</context>\\n\\n<reviewer_feedback>\\n{{previousIteration.outputs.qa_review.review}}\\n</reviewer_feedback>",
     }),
     agent({
       id: "qa_review",
@@ -227,7 +212,7 @@ const acceptance = loop({
           review: { type: "string", minLength: 1 },
         },
       } }),
-      prompt: "# 角色\\n\\n你是独立的对抗式 Reviewer。Issue 是唯一需求来源；仓库状态和实际检查结果是唯一实现证据。不要采信 RD 的文字总结。\\n\\n# 验收目标\\n\\n使用 gh 读取 Issue 的最新正文和评论，判断当前实现是否满足其中的要求、保持既有行为、满足目标文件行数限制，并经过足够的针对性验证。\\n\\n# 检查要求\\n\\n1. 阅读适用的 AGENTS.md 和项目规范。\\n2. 读取 Issue 的最新正文和评论。\\n3. 检查 git status、完整 diff、所有受影响文件及相关测试。\\n4. 对照 Issue 中的职责边界、行为约束、风险和测试计划进行验收。\\n5. 必要时重新运行针对性测试。给出 PASS 前必须覆盖完整变更面。\\n6. review 使用 Markdown，写明结论、执行过的检查、证据、风险和未验证项。证据引用具体的 path:line、path#symbol、diff 或测试结果。\\n\\n# 判定规则\\n\\n- status 只能是 PASS 或 FAIL。\\n- 只有不存在阻塞性缺陷，并且每项必要结论都有证据时，才能给出 PASS。\\n- FAIL 时，review 必须明确列出每个阻塞项的位置、问题、影响和预期修复结果。\\n- 非阻塞建议必须明确标注，不得因此返回 FAIL。\\n\\n# 输出约束\\n\\n只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。以下是 PASS 示例；失败时将 status 改为 FAIL：\\n{\\n  \\\"status\\\": \\\"PASS\\\",\\n  \\\"review\\\": \\\"完整的 Markdown 验收报告\\\"\\n}\\n\\n<context>\\nissue_url: {{issue.url}}\\nworktree: {{workspace.path}}\\ntarget_path: {{candidate.path}}\\nmax_lines: {{lineThreshold}}\\n</context>",
+      prompt: "# 角色\\n\\n你是独立的对抗式 Reviewer。Issue 是唯一需求来源；仓库状态和实际检查结果是唯一实现证据。不要采信 RD 的文字总结。\\n\\n# 验收目标\\n\\n使用 gh 读取 Issue 的最新正文和评论，判断当前实现是否满足其中的要求、保持既有行为、满足目标文件行数限制，并经过足够的针对性验证。\\n\\n# 检查要求\\n\\n1. 阅读适用的 AGENTS.md 和项目规范。\\n2. 读取 Issue 的最新正文和评论。\\n3. 检查 git status、完整 diff、所有受影响文件及相关测试。\\n4. 对照 Issue 中的职责边界、行为约束、风险和测试计划进行验收。\\n5. 必要时重新运行针对性测试。给出 PASS 前必须覆盖完整变更面。\\n6. review 使用 Markdown，写明结论、执行过的检查、证据、风险和未验证项。证据引用具体的 path:line、path#symbol、diff 或测试结果。\\n\\n# 判定规则\\n\\n- status 只能是 PASS 或 FAIL。\\n- 只有不存在阻塞性缺陷，并且每项必要结论都有证据时，才能给出 PASS。\\n- FAIL 时，review 必须明确列出每个阻塞项的位置、问题、影响和预期修复结果。\\n- 非阻塞建议必须明确标注，不得因此返回 FAIL。\\n\\n# 输出约束\\n\\n只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。以下是 PASS 示例；失败时将 status 改为 FAIL：\\n{\\n  \\\"status\\\": \\\"PASS\\\",\\n  \\\"review\\\": \\\"完整的 Markdown 验收报告\\\"\\n}\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\nmax_lines: {{lineThreshold}}\\n</context>",
     }),
   ],
   until: { source: "qa_review", finalStatus: "PASS" },
@@ -258,7 +243,7 @@ const pullRequest = effect({
     mainBranch: ref("params.mainBranch"),
   },
   workspace,
-  execution: { access: "write", isolation: "required" },
+  execution: { access: "write", isolation: "shared" },
   idempotencyKey: template("{{cycle.id}}:publish-qa-approved-pr"),
 });
 const merged = gate({
@@ -309,12 +294,6 @@ const rejected = cancelCycle({
   outcome: "plan_rejected",
   inputs: { approval },
   continue: "scheduled",
-});
-finalize({
-  id: "cleanup_workspace",
-  file: "scripts/cleanup-worktree.mjs",
-  runOn: ["completed", "failed", "canceled"],
-  retainOnFailure: true,
 });
 route(approval, { approved: acceptance, rejected });
 route(acceptance, {
@@ -410,21 +389,45 @@ export async function run(ctx) {
 `,
       },
       {
-        path: "scripts/sync-main.mjs",
+        path: "scripts/prepare-branch.mjs",
         content: `import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
-function marker(ctx) {
+function identity(ctx) {
+  return {
+    path: fs.realpathSync(process.cwd()),
+    branch: "flow/large-file-" + ctx.cycle.id.slice(0, 12),
+  };
+}
+function marker(ctx, workspace = identity(ctx)) {
   const commonDir = path.resolve(process.cwd(), git(["rev-parse", "--git-common-dir"]));
-  return path.join(commonDir, "tutti-flow-state", "sync-" + ctx.cycle.id + ".json");
+  return path.join(commonDir, "tutti-flow-state", "workspace-" + ctx.cycle.id + ".json");
+}
+function assertClean() {
+  const status = git(["status", "--porcelain"]);
+  if (status) {
+    throw new Error(
+      "Configured project cwd has uncommitted changes. Resolve or preserve them before starting another Flow Cycle.\\n" +
+        status,
+    );
+  }
 }
 export async function apply(ctx) {
-  git(["fetch", "origin", ctx.branch]);
-  const output = { branch: ctx.branch, commit: git(["rev-parse", "origin/" + ctx.branch]) };
-  const file = marker(ctx);
+  assertClean();
+  const workspace = identity(ctx);
+  git(["fetch", "origin", ctx.mainBranch]);
+  const baseCommit = git(["rev-parse", "origin/" + ctx.mainBranch]);
+  git(["checkout", "-B", workspace.branch, baseCommit]);
+  const output = {
+    ...workspace,
+    mainBranch: ctx.mainBranch,
+    baseCommit,
+    commit: baseCommit,
+  };
+  const file = marker(ctx, workspace);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file + ".tmp", JSON.stringify(output));
   fs.renameSync(file + ".tmp", file);
@@ -432,10 +435,17 @@ export async function apply(ctx) {
 }
 export async function reconcile(ctx) {
   try {
-    const output = JSON.parse(fs.readFileSync(marker(ctx), "utf8"));
-    return output.branch === ctx.branch && typeof output.commit === "string"
-      ? { status: "completed", externalRef: marker(ctx), output }
-      : { status: "unknown", reason: "Sync marker does not match the requested branch." };
+    const workspace = identity(ctx);
+    const file = marker(ctx, workspace);
+    const output = JSON.parse(fs.readFileSync(file, "utf8"));
+    const branchExists = git(["show-ref", "--verify", "--hash", "refs/heads/" + workspace.branch]);
+    return output.path === workspace.path &&
+      output.branch === workspace.branch &&
+      output.mainBranch === ctx.mainBranch &&
+      typeof output.baseCommit === "string" &&
+      branchExists
+      ? { status: "completed", externalRef: file, output }
+      : { status: "unknown", reason: "Prepared branch marker does not match the configured project cwd." };
   } catch {
     return { status: "not_applied" };
   }
@@ -603,66 +613,6 @@ export async function check(ctx) {
 `,
       },
       {
-        path: "scripts/prepare-worktree.mjs",
-        content: `import fs from "node:fs";
-import path from "node:path";
-import { execFileSync } from "node:child_process";
-function git(args, cwd = process.cwd()) {
-  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
-function identity(ctx) {
-  const root = path.join(process.cwd(), ".tutti-flow-worktrees");
-  return {
-    root,
-    path: path.join(root, "cycle-" + ctx.cycle.id),
-    branch: "flow/large-file-" + ctx.cycle.id.slice(0, 12),
-  };
-}
-export async function apply(ctx) {
-  const workspace = identity(ctx);
-  fs.mkdirSync(workspace.root, { recursive: true });
-  if (!fs.existsSync(workspace.path)) {
-    git([
-      "worktree",
-      "add",
-      "-B",
-      workspace.branch,
-      workspace.path,
-      ctx.sync.commit,
-    ]);
-  }
-  return {
-    externalRef: workspace.path,
-    output: {
-      path: workspace.path,
-      branch: workspace.branch,
-      baseCommit: git(["rev-parse", "HEAD"], workspace.path),
-    },
-  };
-}
-export async function reconcile(ctx) {
-  const workspace = identity(ctx);
-  if (!fs.existsSync(workspace.path)) return { status: "not_applied" };
-  try {
-    return {
-      status: "completed",
-      externalRef: workspace.path,
-      output: {
-        path: workspace.path,
-        branch: workspace.branch,
-        baseCommit: git(["rev-parse", "HEAD"], workspace.path),
-      },
-    };
-  } catch {
-    return {
-      status: "unknown",
-      reason: "Worktree path exists but is not a readable git worktree.",
-    };
-  }
-}
-`,
-      },
-      {
         path: "scripts/publish-qa-approved-pr.mjs",
         content: `import { execFileSync } from "node:child_process";
 function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
@@ -721,7 +671,7 @@ export async function apply(ctx) {
     git(["commit", "-s", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
     commit = git(["rev-parse", "HEAD"]);
   } else if (git(["rev-parse", "HEAD"]) !== commit || git(["status", "--porcelain"])) {
-    throw new Error("The Reviewer-approved worktree changed after its delivery commit.");
+    throw new Error("The Reviewer-approved project directory changed after its delivery commit.");
   }
   const publishedSha = remoteSha(ctx.workspace.branch);
   if (publishedSha && publishedSha !== commit) {
@@ -772,54 +722,6 @@ export async function reconcile(ctx) {
   return issue.state === "closed"
     ? { status: "completed", externalRef: issue.html_url, output: { url: issue.html_url, closed: true } }
     : { status: "not_applied" };
-}
-`,
-      },
-      {
-        path: "scripts/cleanup-worktree.mjs",
-        content: `import fs from "node:fs";
-import path from "node:path";
-import { execFileSync } from "node:child_process";
-export async function run(ctx) {
-  const branch = "flow/large-file-" + ctx.cycle.id.slice(0, 12);
-  const workspace = path.join(
-    process.cwd(),
-    ".tutti-flow-worktrees",
-    "cycle-" + ctx.cycle.id,
-  );
-  if (fs.existsSync(workspace)) {
-    execFileSync("git", ["worktree", "remove", "--force", workspace], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-  }
-  execFileSync("git", ["worktree", "prune"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
-  try {
-    execFileSync("git", ["branch", "-D", branch], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-  } catch {}
-  const commonDir = path.resolve(
-    process.cwd(),
-    execFileSync("git", ["rev-parse", "--git-common-dir"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    }).trim(),
-  );
-  fs.rmSync(
-    path.join(commonDir, "tutti-flow-state", "sync-" + ctx.cycle.id + ".json"),
-    { force: true },
-  );
-  return {
-    cleaned: true,
-    workspace,
-    branch,
-    terminalStatus: ctx.terminal.status,
-  };
 }
 `,
       },

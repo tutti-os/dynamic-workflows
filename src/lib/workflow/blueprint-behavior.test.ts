@@ -1,8 +1,10 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -62,7 +64,7 @@ describe("official Blueprint behavior", () => {
     }
   });
 
-  it("publishes one QA-approved pull request after the RD and QA repair loop", () => {
+  it("publishes one Reviewer-approved pull request from the configured project cwd", () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
     if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
@@ -77,11 +79,14 @@ describe("official Blueprint behavior", () => {
     expect(workspace).toEqual(
       expect.objectContaining({
         kind: "effect",
+        file: "scripts/prepare-branch.mjs",
         inputs: expect.objectContaining({
-          deliveryReady: expect.objectContaining({
-            expression: "deliveryReady",
+          preflight: expect.objectContaining({
+            expression: "preflight",
           }),
-          sync: expect.objectContaining({ expression: "sync" }),
+          mainBranch: expect.objectContaining({
+            expression: "params.mainBranch",
+          }),
         }),
       }),
     );
@@ -92,11 +97,10 @@ describe("official Blueprint behavior", () => {
       expect.objectContaining({
         kind: "agent",
         session: { mode: "independent" },
-        execution: { access: "review", isolation: "required" },
+        execution: { access: "review", isolation: "shared" },
         workspace: expect.objectContaining({ expression: "workspace" }),
         inputs: expect.objectContaining({
           candidate: expect.objectContaining({ expression: "candidate" }),
-          sync: expect.objectContaining({ expression: "sync" }),
           lineThreshold: expect.objectContaining({
             expression: "params.lineThreshold",
           }),
@@ -124,7 +128,7 @@ describe("official Blueprint behavior", () => {
     expect(acceptance).toEqual(
       expect.objectContaining({
         kind: "loop",
-        execution: { access: "write", isolation: "required" },
+        execution: { access: "write", isolation: "shared" },
         outcomes: ["matched", "exhausted"],
       }),
     );
@@ -174,7 +178,7 @@ describe("official Blueprint behavior", () => {
       expect.objectContaining({
         kind: "effect",
         file: "scripts/publish-qa-approved-pr.mjs",
-        execution: { access: "write", isolation: "required" },
+        execution: { access: "write", isolation: "shared" },
         inputs: expect.objectContaining({
           acceptance: expect.objectContaining({
             expression: "acceptance",
@@ -189,6 +193,17 @@ describe("official Blueprint behavior", () => {
       }),
     );
     expect(publish?.inputs).not.toHaveProperty("plan");
+    expect(flow.nodes.some((node) => node.id === "sync_main")).toBe(false);
+    expect(flow.nodes.some((node) => node.id === "cleanup_workspace")).toBe(
+      false,
+    );
+    expect(
+      blueprint.bundle.files.some(
+        (file) =>
+          file.path === "scripts/prepare-worktree.mjs" ||
+          file.path === "scripts/cleanup-worktree.mjs",
+      ),
+    ).toBe(false);
     expect(
       flow.nodes.find((node) => node.id === "wait_pull_request_merge"),
     ).toEqual(
@@ -823,71 +838,123 @@ esac
     });
   });
 
-  it("uses collision-free worktree branches and removes terminal local state", async () => {
+  it("uses the configured cwd and refreshes each serial Cycle from origin/main", async () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
     if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
       throw new Error("Large-file Blueprint is unavailable.");
     }
-    const projectCwd = mkdtempSync(path.join(tmpdir(), "flow-worktree-blueprint-"));
-    temporaryDirectories.push(projectCwd);
-    git(["init"], projectCwd);
+    const root = mkdtempSync(path.join(tmpdir(), "flow-shared-cwd-blueprint-"));
+    temporaryDirectories.push(root);
+    const remote = path.join(root, "remote.git");
+    const projectCwd = path.join(root, "project");
+    const upstreamCwd = path.join(root, "upstream");
+    git(["init", "--bare", remote], root);
+    git(["init", projectCwd], root);
     git(["config", "user.name", "Flow Test"], projectCwd);
     git(["config", "user.email", "flow@example.test"], projectCwd);
     writeFileSync(path.join(projectCwd, "source.ts"), "export const value = 1;\n");
     git(["add", "source.ts"], projectCwd);
     git(["commit", "-m", "initial"], projectCwd);
-    const commit = git(["rev-parse", "HEAD"], projectCwd);
-    const cycleIds = [
-      "11111111-1111-4111-8111-111111111111",
-      "22222222-2222-4222-8222-222222222222",
-    ];
-    const branches: string[] = [];
+    git(["branch", "-M", "main"], projectCwd);
+    git(["remote", "add", "origin", remote], projectCwd);
+    git(["push", "-u", "origin", "main"], projectCwd);
+    const initialCommit = git(["rev-parse", "HEAD"], projectCwd);
 
-    for (const [index, cycleId] of cycleIds.entries()) {
-      const prepared = await runFlowV1CodeModule({
-        versionId: `large-file-worktree-${index}`,
+    const firstCycle = {
+      cycle: { id: "11111111-1111-4111-8111-111111111111", sequence: 1 },
+      mainBranch: "main",
+      preflight: { branch: "main", remote: "origin" },
+    };
+    const firstPrepared = await runFlowV1CodeModule({
+      versionId: "large-file-shared-cwd-first",
+      bundle: blueprint.bundle,
+      file: "scripts/prepare-branch.mjs",
+      exportName: "apply",
+      context: firstCycle,
+      projectCwd,
+    });
+    const firstWorkspace = readOutputObject(firstPrepared.value);
+    expect(firstWorkspace).toEqual({
+      path: realpathSync(projectCwd),
+      branch: "flow/large-file-11111111-111",
+      mainBranch: "main",
+      baseCommit: initialCommit,
+      commit: initialCommit,
+    });
+    expect(git(["branch", "--show-current"], projectCwd)).toBe(
+      firstWorkspace.branch,
+    );
+    expect(
+      existsSync(path.join(projectCwd, ".tutti-flow-worktrees")),
+    ).toBe(false);
+
+    const reconciled = await runFlowV1CodeModule({
+      versionId: "large-file-shared-cwd-reconcile",
+      bundle: blueprint.bundle,
+      file: "scripts/prepare-branch.mjs",
+      exportName: "reconcile",
+      context: firstCycle,
+      projectCwd,
+    });
+    expect(reconciled.value).toMatchObject({
+      status: "completed",
+      output: firstWorkspace,
+    });
+
+    git(["clone", "--branch", "main", remote, upstreamCwd], root);
+    git(["config", "user.name", "Flow Test"], upstreamCwd);
+    git(["config", "user.email", "flow@example.test"], upstreamCwd);
+    writeFileSync(path.join(upstreamCwd, "upstream.ts"), "export const fresh = true;\n");
+    git(["add", "upstream.ts"], upstreamCwd);
+    git(["commit", "-m", "upstream change"], upstreamCwd);
+    git(["push", "origin", "main"], upstreamCwd);
+    const latestRemoteCommit = git(["rev-parse", "HEAD"], upstreamCwd);
+
+    const secondCycle = {
+      cycle: { id: "22222222-2222-4222-8222-222222222222", sequence: 2 },
+      mainBranch: "main",
+      preflight: { branch: "main", remote: "origin" },
+    };
+    const secondPrepared = await runFlowV1CodeModule({
+      versionId: "large-file-shared-cwd-second",
+      bundle: blueprint.bundle,
+      file: "scripts/prepare-branch.mjs",
+      exportName: "apply",
+      context: secondCycle,
+      projectCwd,
+    });
+    const secondWorkspace = readOutputObject(secondPrepared.value);
+    expect(secondWorkspace).toMatchObject({
+      path: realpathSync(projectCwd),
+      branch: "flow/large-file-22222222-222",
+      mainBranch: "main",
+      baseCommit: latestRemoteCommit,
+      commit: latestRemoteCommit,
+    });
+    expect(git(["rev-parse", "HEAD"], projectCwd)).toBe(latestRemoteCommit);
+    expect(readFileSync(path.join(projectCwd, "upstream.ts"), "utf8")).toBe(
+      "export const fresh = true;\n",
+    );
+
+    writeFileSync(path.join(projectCwd, "dirty.ts"), "do not discard\n");
+    await expect(
+      runFlowV1CodeModule({
+        versionId: "large-file-shared-cwd-dirty",
         bundle: blueprint.bundle,
-        file: "scripts/prepare-worktree.mjs",
+        file: "scripts/prepare-branch.mjs",
         exportName: "apply",
         context: {
-          cycle: { id: cycleId, sequence: 1 },
-          sync: { commit },
+          cycle: {
+            id: "33333333-3333-4333-8333-333333333333",
+            sequence: 3,
+          },
+          mainBranch: "main",
+          preflight: { branch: "main", remote: "origin" },
         },
         projectCwd,
-      });
-      const preparedValue = prepared.value as FlowV1JsonObject;
-      const output = preparedValue.output as FlowV1JsonObject;
-      expect(output.baseCommit).toBe(commit);
-      branches.push(String(output.branch));
-    }
-    expect(branches).toEqual([
-      "flow/large-file-11111111-111",
-      "flow/large-file-22222222-222",
-    ]);
-
-    for (const [index, cycleId] of cycleIds.entries()) {
-      const cleaned = await runFlowV1CodeModule({
-        versionId: `large-file-cleanup-${index}`,
-        bundle: blueprint.bundle,
-        file: "scripts/cleanup-worktree.mjs",
-        exportName: "run",
-        context: {
-          cycle: { id: cycleId, sequence: 1 },
-          terminal: { status: "completed" },
-        },
-        projectCwd,
-      });
-      expect(cleaned.value).toEqual(
-        expect.objectContaining({
-          cleaned: true,
-          branch: branches[index],
-        }),
-      );
-      expect(git(["branch", "--list", branches[index]], projectCwd)).toBe(
-        "",
-      );
-    }
+      }),
+    ).rejects.toMatchObject({ code: "flow_runner_exit_nonzero" });
   });
 
   it("stores a compact completed-cycle memory summary", async () => {
