@@ -66,10 +66,12 @@ type NextopSessionsOutput = {
 
 type NextopSessionSummaryOutput = {
   agentSessionId?: unknown;
+  error?: unknown;
   hasMore?: unknown;
   latestVersion?: unknown;
   messages?: unknown;
   session?: unknown;
+  turnId?: unknown;
 };
 
 type NextopComposerOptionsOutput = {
@@ -102,6 +104,12 @@ type NextopSession = {
 type NextopTurnLifecycle = {
   phase?: unknown;
   outcome?: unknown;
+};
+
+type NextopTerminalError = {
+  code: string;
+  message: string;
+  retryable?: boolean;
 };
 
 const DEFAULT_CLI_PATH = "tutti-dev";
@@ -616,14 +624,20 @@ export function createNextopCliAgentAdapter(
           }
 
           if (reason === "failed" || rawTerminalStatus === "failed") {
-            const message =
-              readOptionalString(wait.session.lastError) ??
-              "Nextop agent session failed.";
+            const terminalError = readTerminalError(waitOutput);
+            const turnId = readOptionalString(
+              readRecord(waitOutput)?.turnId,
+            );
             yield {
               type: "error",
-              code: "NEXTOP_SESSION_FAILED",
-              message,
-              retryable: false,
+              code: terminalError?.code ?? "NEXTOP_SESSION_FAILED",
+              message:
+                terminalError?.message ??
+                readOptionalString(wait.session.lastError) ??
+                `Agent ${target.id} (model ${model}) failed in session ${agentSessionId}` +
+                  (turnId ? `, turn ${turnId}` : "") +
+                  ". The agent host did not provide terminal error details.",
+              retryable: terminalError?.retryable ?? false,
             };
             yield { type: "done", status: "failed", reason: "error" };
             return;
@@ -1202,6 +1216,30 @@ function assertSessionMatchesAgentTarget(
 export function readWaitReason(waitOutput: unknown): string | undefined {
   const output = readRecord(waitOutput);
   return readOptionalString(output?.reason);
+}
+
+export function readTerminalError(
+  waitOutput: unknown,
+): NextopTerminalError | undefined {
+  const output = readRecord(waitOutput);
+  const session = readRecord(output?.session);
+  const latestTurn = readRecord(session?.latestTurn);
+  const error = readRecord(output?.error) ?? readRecord(latestTurn?.error);
+  const message = readOptionalString(error?.message);
+  if (!message) {
+    return undefined;
+  }
+  const code =
+    readOptionalString(error?.code) ??
+    readOptionalString(error?.reasonCode) ??
+    "NEXTOP_SESSION_FAILED";
+  const retryable =
+    typeof error?.retryable === "boolean" ? error.retryable : undefined;
+  return {
+    code,
+    message,
+    ...(retryable === undefined ? {} : { retryable }),
+  };
 }
 
 /**

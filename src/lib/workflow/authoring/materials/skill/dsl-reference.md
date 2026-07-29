@@ -148,8 +148,10 @@ const acceptance = loop({
 - `inherit` resumes the latest Agent session with that key in the current Cycle.
   A key may cross Agent node and Loop-step boundaries when agent target,
   permission mode, model, and effective cwd remain compatible.
-- On an inherited Loop step, `prompt` initializes a missing session and
-  `appendPrompt` is the incremental turn sent when the session already exists.
+- On an inherited Loop step, `prompt` is used when there is no completed
+  previous Loop iteration, even if the session was inherited from an upstream
+  Agent. On later iterations, `appendPrompt` is the incremental turn sent when
+  that session already exists.
 - `independent` always creates a fresh session. Reviewer roles should normally
   use it and carry only compact structured criteria/blockers through Loop data.
 - Session keys are durable runtime state within a Cycle, not cross-Cycle Memory.

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -84,6 +85,64 @@ describe("Flow v1 Tick supervisor", () => {
           agentSessionId: "agent-session-1",
         }),
       ]),
+    );
+  });
+
+  it("records Agent runtime error details without treating them as structured-output retries", async () => {
+    runAgentMock.mockImplementation(async function* () {
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: "agent-session-failed",
+          agent: "codex",
+        },
+      };
+      yield {
+        type: "error",
+        code: "provider_error",
+        message:
+          "Selected model is at capacity. Please try a different model.",
+        retryable: true,
+      };
+      yield { type: "done", status: "failed", reason: "error" };
+    });
+    const fixture = await createRunnableFlow(agentBundle(), {
+      owner: "platform",
+    });
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const attempts = await import("@/lib/db/workflows/flow-attempts");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "agent-provider-error",
+      inputSnapshot: { target: "src/large.ts" },
+      paramsRevision: 2,
+      paramsSnapshot: { owner: "platform" },
+    });
+
+    const result = await runFlowV1Tick({
+      runId: started.run.id,
+      projectCwd: dataDir,
+    });
+
+    expect(result.stopReason).toBe("paused_failed");
+    expect(runAgentMock).toHaveBeenCalledTimes(1);
+    expect(
+      attempts.listFlowV1NodeAttempts(started.cycle.id),
+    ).toContainEqual(
+      expect.objectContaining({
+        nodeId: "plan",
+        status: "failed",
+        agentSessionId: "agent-session-failed",
+        error: {
+          code: "provider_error",
+          message:
+            "Selected model is at capacity. Please try a different model.",
+          retryable: true,
+        },
+      }),
     );
   });
 
@@ -365,6 +424,248 @@ describe("Flow v1 Tick supervisor", () => {
         .filter((attempt) => attempt.agentSessionKey === "rd_room")
         .map((attempt) => attempt.agentSessionId),
     ).toEqual(["rd-session-1", "rd-session-1"]);
+  });
+
+  it("uses the base prompt when an inherited session has no previous Loop iteration", async () => {
+    runAgentMock.mockImplementation(async function* (input) {
+      const isReviewer = input.title === "Independent QA";
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: isReviewer
+            ? "review-session-1"
+            : input.resumeSessionId ?? "rd-session-1",
+          agent: input.agent,
+        },
+      };
+      yield {
+        type: "text_delta",
+        text: isReviewer
+          ? JSON.stringify({ status: "PASS", review: "approved" })
+          : "implemented",
+      };
+      yield { type: "done", status: "completed" };
+    });
+    const fixture = await createRunnableFlow(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const implement = agent({
+              id: "implement",
+              label: "RD implement",
+              prompt: "Implement the requirement.",
+              session: { mode: "inherit", key: "rd_room" },
+            });
+            const acceptance = loop({
+              id: "acceptance",
+              inputs: { implement },
+              maxIterations: 1,
+              onMaxIterations: "fail",
+              steps: [
+                agent({
+                  id: "repair",
+                  label: "RD repair",
+                  session: { mode: "inherit", key: "rd_room" },
+                  prompt: "Start from the current issue.",
+                  appendPrompt: "Fix {{previousIteration.outputs.qa.review}}.",
+                }),
+                agent({
+                  id: "qa",
+                  label: "Independent QA",
+                  session: { mode: "independent" },
+                  prompt: "Review the result.",
+                  output: json({
+                    schema: {
+                      type: "object",
+                      required: ["status", "review"],
+                      properties: {
+                        status: { enum: ["PASS", "FAIL"] },
+                        review: { type: "string" },
+                      },
+                    },
+                  }),
+                }),
+              ],
+              until: { source: "qa", finalStatus: "PASS" },
+            });
+            completeCycle({ id: "done", inputs: { acceptance } });
+          `,
+        },
+      ]),
+    );
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "loop-without-previous-iteration",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    const result = await runFlowV1Tick({
+      runId: started.run.id,
+      projectCwd: dataDir,
+      defaultAgent: "local:codex",
+    });
+
+    expect(result.stopReason).toBe("cycle_completed");
+    expect(runAgentMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        title: "RD repair",
+        prompt: "Start from the current issue.",
+        resumeSessionId: "rd-session-1",
+      }),
+    );
+  });
+
+  it("delivers the previous Reviewer report after retrying a failed RD Loop step across Ticks", async () => {
+    let rdAttempt = 0;
+    let reviewerRound = 0;
+    runAgentMock.mockImplementation(async function* (input) {
+      const isReviewer = input.title === "Independent QA";
+      if (isReviewer) {
+        reviewerRound += 1;
+        yield {
+          type: "session_ref",
+          session: {
+            agentSessionId: `review-session-${reviewerRound}`,
+            agent: input.agent,
+          },
+        };
+        yield {
+          type: "text_delta",
+          text: JSON.stringify({
+            status: reviewerRound === 1 ? "FAIL" : "PASS",
+            review:
+              reviewerRound === 1
+                ? "Add the missing focused test."
+                : "Approved.",
+          }),
+        };
+        yield { type: "done", status: "completed" };
+        return;
+      }
+      rdAttempt += 1;
+      yield {
+        type: "session_ref",
+        session: {
+          agentSessionId: input.resumeSessionId ?? "rd-session-1",
+          agent: input.agent,
+        },
+      };
+      if (rdAttempt === 2) {
+        yield {
+          type: "error",
+          code: "provider_error",
+          message: "Temporary provider failure.",
+          retryable: true,
+        };
+        return;
+      }
+      yield {
+        type: "text_delta",
+        text: rdAttempt === 1 ? "implemented" : "repaired",
+      };
+      yield { type: "done", status: "completed" };
+    });
+    const fixture = await createRunnableFlow(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const acceptance = loop({
+              id: "acceptance",
+              maxIterations: 2,
+              onMaxIterations: "fail",
+              steps: [
+                agent({
+                  id: "rd",
+                  label: "RD",
+                  session: { mode: "inherit", key: "rd_room" },
+                  prompt: "Implement from the issue.",
+                  appendPrompt: "Fix this review: {{previousIteration.outputs.qa.review}}",
+                }),
+                agent({
+                  id: "qa",
+                  label: "Independent QA",
+                  session: { mode: "independent" },
+                  prompt: "Review independently.",
+                  output: json({
+                    schema: {
+                      type: "object",
+                      required: ["status", "review"],
+                      properties: {
+                        status: { enum: ["PASS", "FAIL"] },
+                        review: { type: "string" },
+                      },
+                    },
+                  }),
+                }),
+              ],
+              until: { source: "qa", finalStatus: "PASS" },
+            });
+            completeCycle({ id: "done", inputs: { acceptance } });
+          `,
+        },
+      ]),
+    );
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const service = await import("./flow-service");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "loop-retry-with-review",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    const first = await runFlowV1Tick({
+      runId: started.run.id,
+      projectCwd: dataDir,
+      defaultAgent: "local:codex",
+    });
+    expect(first.stopReason).toBe("paused_failed");
+
+    const retried = await service.retryFlowV1Node({
+      flowId: fixture.flowId,
+      cycleId: started.cycle.id,
+      nodeId: "acceptance",
+      projectCwd: dataDir,
+      defaultAgent: "local:codex",
+    });
+
+    expect(retried.execution?.stopReason).toBe("cycle_completed");
+    expect(runAgentMock).toHaveBeenCalledTimes(5);
+    expect(
+      runAgentMock.mock.calls
+        .filter(([input]) => input.title === "RD")
+        .map(([input]) => ({
+          prompt: input.prompt,
+          resumeSessionId: input.resumeSessionId,
+        })),
+    ).toEqual([
+      {
+        prompt: "Implement from the issue.",
+        resumeSessionId: undefined,
+      },
+      {
+        prompt: "Fix this review: Add the missing focused test.",
+        resumeSessionId: "rd-session-1",
+      },
+      {
+        prompt: "Fix this review: Add the missing focused test.",
+        resumeSessionId: "rd-session-1",
+      },
+    ]);
   });
 
   it("retries Script only for declared structural error codes and records every Attempt", async () => {
@@ -1104,6 +1405,93 @@ describe("Flow v1 Tick supervisor", () => {
       "cycle_completed",
     );
     expect(maxActiveAgents).toBe(1);
+  });
+
+  it("fails before starting a workspace Agent when the checked-out branch drifted", async () => {
+    const projectCwd = mkdtempSync(path.join(dataDir, "project-"));
+    execFileSync("git", ["init", "-b", "unexpected"], {
+      cwd: projectCwd,
+      stdio: "ignore",
+    });
+    const fixture = await createRunnableFlow(
+      createFlowV1Bundle([
+        {
+          path: "flow.js",
+          content: `
+            export const schemaVersion = "tutti.flow.v1";
+            const workspace = script({
+              id: "workspace",
+              file: "scripts/workspace.mjs",
+            });
+            const acceptance = loop({
+              id: "acceptance",
+              inputs: { workspace },
+              workspace,
+              execution: { access: "write", isolation: "shared" },
+              maxIterations: 1,
+              onMaxIterations: "fail",
+              steps: [
+                agent({
+                  id: "rd",
+                  label: "RD",
+                  prompt: "Implement.",
+                }),
+              ],
+              until: { source: "rd", equals: "done" },
+            });
+            completeCycle({ id: "done", inputs: { acceptance } });
+          `,
+        },
+        {
+          path: "scripts/workspace.mjs",
+          content: `
+            export async function run() {
+              return {
+                path: process.cwd(),
+                branch: "flow/expected",
+              };
+            }
+          `,
+        },
+      ]),
+    );
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const { runFlowV1Tick } = await import("./tick-supervisor");
+    const started = runtime.startFlowV1Cycle({
+      flowId: fixture.flowId,
+      flowVersionId: fixture.versionId,
+      origin: { kind: "user" },
+      idempotencyKey: "workspace-branch-drift",
+      inputSnapshot: {},
+      paramsRevision: 0,
+      paramsSnapshot: {},
+    });
+
+    const result = await runFlowV1Tick({
+      runId: started.run.id,
+      projectCwd,
+      defaultAgent: "local:codex",
+    });
+
+    expect(result.stopReason).toBe("paused_failed");
+    expect(runAgentMock).not.toHaveBeenCalled();
+    expect(
+      runtime.getFlowV1CycleCheckpoint(started.cycle.id)?.state,
+    ).toEqual(
+      expect.objectContaining({
+        nodes: expect.objectContaining({
+          acceptance: expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              code: "flow_workspace_drift",
+              message: expect.stringContaining(
+                "checked out on unexpected, expected flow/expected",
+              ),
+            }),
+          }),
+        }),
+      }),
+    );
   });
 });
 

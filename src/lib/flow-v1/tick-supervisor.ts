@@ -50,6 +50,7 @@ import {
 import { parseFlowV1Bundle } from "./parser";
 import { createFlowV1ReviewWorkspace } from "./review-workspace";
 import { resolveFlowV1ExecutionConfig } from "./runtime-config";
+import { assertFlowV1WorkspaceBranch } from "./workspace-guard";
 import {
   applyFlowV1MemoryUpdates,
   getLatestFlowV1MemoryHashForCycle,
@@ -1295,6 +1296,8 @@ type LoopProgress = {
   stepIndex: number;
   outputs: Record<string, FlowV1JsonValue>;
   history: FlowV1JsonValue[];
+  failedStepId?: string;
+  failureOrigin?: "agent_step";
 };
 
 async function executeLoop(
@@ -1392,9 +1395,13 @@ async function executeLoop(
           executionId: `loop:${progress.iteration}:${step.id}`,
         });
         if (result.status !== "completed") {
+          progress.failedStepId = step.id;
+          progress.failureOrigin = "agent_step";
           input.onNodeProgress(asProgress(progress));
           return result;
         }
+        delete progress.failedStepId;
+        delete progress.failureOrigin;
         progress.outputs[step.id] = result.output ?? null;
       }
       progress.stepIndex += 1;
@@ -1732,6 +1739,13 @@ async function executeCompositeAgentStep(input: {
         input.step.cwd,
       )
     : parentWorkspaceCwd;
+  const workspaceValue = input.step.workspace
+    ? input.parent.nodeInput[`$workspace.${input.step.id}`]
+    : input.parent.nodeInput["$workspace"];
+  const branchFailure = await checkWorkspaceBranch(cwd, workspaceValue);
+  if (branchFailure) {
+    return branchFailure;
+  }
   let reviewWorkspace: Awaited<
     ReturnType<typeof createFlowV1ReviewWorkspace>
   > | null = null;
@@ -1775,7 +1789,9 @@ async function executeCompositeAgentStep(input: {
         agentSessionId: validationSessionId,
       });
       const appendPrompt =
-        attempt.agentSessionId && input.step.appendPrompt
+        attempt.agentSessionId &&
+        input.step.appendPrompt &&
+        isObject(input.context.previousIteration)
           ? renderCompositeTemplate(input.step.appendPrompt, input.context)
           : undefined;
       const prompt =
@@ -1833,7 +1849,7 @@ async function executeCompositeAgentStep(input: {
           } else if (event.type === "text_delta") {
             text += event.text;
           } else if (event.type === "error") {
-            result = failure(event.code, event.message);
+            result = failure(event.code, event.message, event.retryable);
             finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
             return result;
           } else if (
@@ -1870,8 +1886,7 @@ async function executeCompositeAgentStep(input: {
       }
       finishCompositeAttempt(input.parent.ownerToken, attempt.id, result);
       if (
-        result.status !== "failed" ||
-        result.error.retryable !== true ||
+        !isStructuredValidationFailure(result) ||
         validationAttempt >= maxAttempts
       ) {
         return result;
@@ -1991,11 +2006,37 @@ function readLoopProgress(
     typeof value.iteration !== "number" ||
     typeof value.stepIndex !== "number" ||
     !isObject(value.outputs) ||
-    !Array.isArray(value.history)
+    !Array.isArray(value.history) ||
+    (value.failedStepId !== undefined &&
+      typeof value.failedStepId !== "string") ||
+    (value.failureOrigin !== undefined &&
+      value.failureOrigin !== "agent_step")
   ) {
     return null;
   }
   return structuredClone(value) as unknown as LoopProgress;
+}
+
+async function checkWorkspaceBranch(
+  cwd: string,
+  workspace: FlowV1JsonValue | undefined,
+): Promise<FlowV1NodeResult | null> {
+  if (!isObject(workspace) || typeof workspace.branch !== "string") {
+    return null;
+  }
+  const expectedBranch = workspace.branch.trim();
+  if (!expectedBranch) {
+    return null;
+  }
+  try {
+    await assertFlowV1WorkspaceBranch(cwd, expectedBranch);
+    return null;
+  } catch (error) {
+    return failure(
+      readErrorCode(error, "flow_workspace_drift"),
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 function readMapProgress(
@@ -2096,6 +2137,13 @@ async function executeAgent(
   const cwd = input.node.cwd
     ? path.resolve(workspaceCwd, input.node.cwd)
     : workspaceCwd;
+  const branchFailure = await checkWorkspaceBranch(
+    cwd,
+    input.nodeInput["$workspace"],
+  );
+  if (branchFailure) {
+    return branchFailure;
+  }
   let reviewWorkspace: Awaited<
     ReturnType<typeof createFlowV1ReviewWorkspace>
   > | null = null;
@@ -2158,7 +2206,7 @@ async function executeAgent(
       } else if (event.type === "text_delta") {
         text += event.text;
       } else if (event.type === "error") {
-        return failure(event.code, event.message);
+        return failure(event.code, event.message, event.retryable);
       } else if (
         event.type === "done" &&
         (event.status === "failed" || event.status === "canceled")
@@ -2686,10 +2734,20 @@ function shouldRetryNode(
   const structuredAgentRetry =
     node.kind === "agent" &&
     node.output?.kind === "json" &&
-    result.status === "failed" &&
-    result.error.retryable === true &&
+    isStructuredValidationFailure(result) &&
     attempt < structuredValidationMaxAttempts(node.output);
   return scriptRetry || effectRetry || structuredAgentRetry;
+}
+
+function isStructuredValidationFailure(
+  result: FlowV1NodeResult,
+): result is Extract<FlowV1NodeResult, { status: "failed" }> {
+  return (
+    result.status === "failed" &&
+    result.error.retryable === true &&
+    (result.error.code === "flow_agent_json_invalid" ||
+      result.error.code === "flow_agent_json_schema_invalid")
+  );
 }
 
 function isParallelReadyNode(node: FlowV1Node): boolean {
@@ -2899,8 +2957,19 @@ function validateJsonSchema(
   return null;
 }
 
-function failure(code: string, message: string): FlowV1NodeResult {
-  return { status: "failed", error: { code, message } };
+function failure(
+  code: string,
+  message: string,
+  retryable?: boolean,
+): FlowV1NodeResult {
+  return {
+    status: "failed",
+    error: {
+      code,
+      message,
+      ...(retryable === undefined ? {} : { retryable }),
+    },
+  };
 }
 
 function uncertain(code: string, message: string): FlowV1NodeResult {

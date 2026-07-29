@@ -938,6 +938,121 @@ describe("nextop cli adapter", () => {
     expect(events.some((event) => event.type === "text_delta")).toBe(false);
   });
 
+  it("surfaces the terminal provider error returned by agent wait", async () => {
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      runner: async (args) => {
+        if (isAgentListCall(args)) return currentAgentCatalog();
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "failed",
+            turnId: "turn-1",
+            latestVersion: 2,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "failed",
+            },
+            error: {
+              code: "provider_error",
+              message:
+                "Selected model is at capacity. Please try a different model.",
+              retryable: true,
+            },
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:review",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "review",
+      title: "Review",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({
+      type: "error",
+      code: "provider_error",
+      message:
+        "Selected model is at capacity. Please try a different model.",
+      retryable: true,
+    });
+    expect(events.at(-1)).toEqual({
+      type: "done",
+      status: "failed",
+      reason: "error",
+    });
+  });
+
+  it("includes session and turn identifiers when a failed wait has no error details", async () => {
+    const adapter = createNextopCliAgentAdapter({
+      includeMockTarget: false,
+      pollIntervalMs: 1,
+      runner: async (args) => {
+        if (isAgentListCall(args)) return currentAgentCatalog();
+        if (args.includes("start")) {
+          return {
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "running",
+            },
+          };
+        }
+        if (args.includes("wait")) {
+          return {
+            reason: "failed",
+            turnId: "turn-1",
+            latestVersion: 2,
+            session: {
+              agentSessionId: "session-1",
+              provider: "codex",
+              status: "failed",
+            },
+          };
+        }
+        throw new Error(`unexpected call: ${args.join(" ")}`);
+      },
+    });
+
+    const events = [];
+    for await (const event of adapter.run({
+      runId: "run-1:review",
+      agent: "local:codex",
+      cwd: "/tmp/project",
+      prompt: "review",
+      title: "Review",
+      model: "gpt-5",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual({
+      type: "error",
+      code: "NEXTOP_SESSION_FAILED",
+      message:
+        "Agent local:codex (model gpt-5) failed in session session-1, turn turn-1. The agent host did not provide terminal error details.",
+      retryable: false,
+    });
+  });
+
   it("completes on wait reason completed while session status stays created", async () => {
     const calls: string[][] = [];
     const adapter = createNextopCliAgentAdapter({

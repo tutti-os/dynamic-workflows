@@ -66,6 +66,7 @@ import type {
   FlowV1Bundle,
   FlowV1JsonObject,
   FlowV1JsonValue,
+  FlowV1Node,
   FlowV1Reference,
   FlowV1TickBundle,
   ParsedFlowV1,
@@ -920,14 +921,13 @@ export async function retryFlowV1Node(input: {
       `Node ${input.nodeId} is not the failed or uncertain node in Cycle ${cycle.id}.`,
     );
   }
-  const interruptedCompositeRecovery =
-    nodeState.error?.code === "flow_attempt_interrupted" &&
-    (node.kind === "loop" || node.kind === "map");
+  const resumableCompositeRecovery =
+    shouldPreserveCompositeProgressOnRetry(node, nodeState);
   const invalidated = invalidateFlowV1NodeAndDownstream(
     flow,
     checkpoint,
     input.nodeId,
-    { preserveRootProgress: interruptedCompositeRecovery },
+    { preserveRootProgress: resumableCompositeRecovery },
   );
   const invalidatesHumanDecision = flow.nodes.some(
     (candidate) =>
@@ -936,7 +936,7 @@ export async function retryFlowV1Node(input: {
         (candidate.kind === "loop" &&
           candidate.loop?.steps.some((step) => step.kind === "human"))),
   );
-  if (invalidatesHumanDecision && !interruptedCompositeRecovery) {
+  if (invalidatesHumanDecision && !resumableCompositeRecovery) {
     throw new FlowV1ServiceError(
       "flow_retry_human_decision_forbidden",
       "Retry would invalidate a Human decision. Start a new Cycle or retry a later node.",
@@ -985,6 +985,38 @@ export async function retryFlowV1Node(input: {
     tick,
     execution,
   };
+}
+
+function shouldPreserveCompositeProgressOnRetry(
+  node: FlowV1Node,
+  state: FlowV1GraphCheckpoint["nodes"][string],
+): boolean {
+  if (!state.error) {
+    return false;
+  }
+  if (node.kind === "map") {
+    return (
+      state.progress?.kind === "map" &&
+      state.error.code === "flow_attempt_interrupted"
+    );
+  }
+  if (node.kind !== "loop" || state.progress?.kind !== "loop") {
+    return false;
+  }
+  if (state.error.code === "flow_attempt_interrupted") {
+    return true;
+  }
+  const step =
+    typeof state.progress.stepIndex === "number"
+      ? node.loop?.steps[state.progress.stepIndex]
+      : undefined;
+  if (!step || step.kind !== "agent") {
+    return false;
+  }
+  return (
+    state.progress.failureOrigin === "agent_step" &&
+    state.progress.failedStepId === step.id
+  );
 }
 
 export async function resolveFlowV1MemoryConflict(input: {
