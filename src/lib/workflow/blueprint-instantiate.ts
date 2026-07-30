@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { WorkflowDetail } from "@/lib/db/workflows/types";
 import {
   updateWorkflowMetadata,
@@ -37,6 +40,7 @@ export function instantiateWorkflowBlueprint(
 
   const created = createFlowV1({
     bundle: blueprint.bundle,
+    ...resolveInstantiationDefaults(blueprint.instantiationDefaults),
     publish: true,
     activate: false,
   });
@@ -53,4 +57,47 @@ export function instantiateWorkflowBlueprint(
     });
   }
   return detail;
+}
+
+function resolveInstantiationDefaults(
+  defaults:
+    | {
+        projectCwd?: string;
+        defaultAgent?: string;
+        defaultModel?: string;
+        defaultPermissionMode?: string;
+      }
+    | undefined,
+) {
+  const configuredCwd = defaults?.projectCwd?.trim();
+  const expandedCwd = configuredCwd
+    ? expandHomeDirectory(configuredCwd)
+    : undefined;
+  const projectCwd =
+    expandedCwd && isDirectory(expandedCwd) ? expandedCwd : undefined;
+
+  return {
+    projectCwd,
+    defaultAgent: defaults?.defaultAgent,
+    defaultModel: defaults?.defaultModel,
+    defaultPermissionMode: defaults?.defaultPermissionMode,
+  };
+}
+
+function expandHomeDirectory(value: string): string {
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function isDirectory(value: string): boolean {
+  try {
+    return fs.statSync(value).isDirectory();
+  } catch {
+    return false;
+  }
 }

@@ -41,6 +41,10 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "Publish a linked pull request immediately after Reviewer acceptance.",
       "Use as a complete Bundle template for scheduled governance automations.",
     ],
+    instantiationDefaults: {
+      projectCwd: "~/tsh-project/tutti",
+      defaultAgent: "local:codex",
+    },
     bundle: createFlowV1Bundle([
       {
         path: "flow.js",
@@ -51,19 +55,16 @@ export const meta = {
   requiresCwd: true,
 };
 export const params = defineParams({
-  scanCron: cronParam({ default: "0 0 * * *" }),
-  timezone: stringParam({ default: "UTC" }),
+  scanCron: cronParam({ default: "*/30 * * * *" }),
+  timezone: stringParam({ default: "Asia/Singapore" }),
   mainBranch: stringParam({ default: "main", minLength: 1 }),
-  lineThreshold: numberParam({ default: 1200, min: 1, integer: true }),
+  lineThreshold: numberParam({ default: 800, min: 1, integer: true }),
   scanRoot: stringParam({ default: "" }),
   approvalLabel: stringParam({ default: "flow-approved", minLength: 1, maxLength: 50 }),
   maxAcceptanceRounds: numberParam({ default: 3, min: 1, max: 10, integer: true }),
   qaAgent: stringParam({ default: "" }),
   qaModel: stringParam({ default: "" }),
   qaPermission: stringParam({ default: "" }),
-});
-export const secrets = defineSecrets({
-  GH_TOKEN: connectionSecret({ provider: "github", required: false }),
 });
 export const cycles = defineCycles({ mode: "singleton" });
 export const runtime = {
@@ -122,16 +123,15 @@ const noWork = completeCycle({
   continue: "scheduled",
   inputs: { candidate },
 });
-const deliveryReady = script({
+const deliveryReady = gate({
   id: "preflight_delivery",
   file: "scripts/preflight-delivery.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: { candidate, preflight },
+  outcomes: ["ready"],
 });
 const approvalLabel = effect({
   id: "ensure_approval_label",
   file: "scripts/ensure-approval-label.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: {
     deliveryReady,
     label: ref("params.approvalLabel"),
@@ -163,14 +163,12 @@ const plan = agent({
 const issue = effect({
   id: "create_issue",
   file: "scripts/create-issue.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: { approvalLabel, plan },
   idempotencyKey: template("{{cycle.id}}:create-issue"),
 });
 const approval = gate({
   id: "wait_issue_approval",
   file: "scripts/issue-approval.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: { issue },
   outcomes: ["approved", "rejected"],
 });
@@ -220,7 +218,6 @@ const acceptance = loop({
 const closeNotAcceptedIssue = effect({
   id: "close_qa_not_accepted_issue",
   file: "scripts/resolve-issue.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: { issue, acceptance },
   idempotencyKey: template("{{cycle.id}}:close-qa-not-accepted"),
 });
@@ -234,7 +231,6 @@ const pullRequest = effect({
   id: "publish_qa_approved_pr",
   label: "Reviewer PASS: commit, push, and open pull request",
   file: "scripts/publish-qa-approved-pr.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: {
     issue,
     candidate,
@@ -249,14 +245,12 @@ const pullRequest = effect({
 const merged = gate({
   id: "wait_pull_request_merge",
   file: "scripts/pr-merged.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: { pullRequest },
   outcomes: ["merged"],
 });
 const closeIssue = effect({
   id: "close_issue",
   file: "scripts/close-issue.mjs",
-  secrets: ["GH_TOKEN"],
   inputs: { issue, pullRequest, merged },
   idempotencyKey: template("{{cycle.id}}:close-issue"),
 });
@@ -302,6 +296,7 @@ route(acceptance, {
 });
 route(merged, { merged: closeIssue });
 route(candidate, { found: deliveryReady, empty: noWork });
+route(deliveryReady, { ready: approvalLabel });
 `,
       },
       {
@@ -378,12 +373,17 @@ function exec(command, args) {
     throw new Error("Delivery preflight failed while running " + command + " " + args.join(" ") + ": " + detail);
   }
 }
-export async function run(ctx) {
+export async function check(ctx) {
   exec("git", ["config", "--get", "user.name"]);
   exec("git", ["config", "--get", "user.email"]);
-  exec("gh", ["auth", "status"]);
+  const login = exec("gh", ["api", "user", "--jq", ".login"]);
   return {
-    repository: ctx.preflight.repository,
+    status: "completed",
+    outcome: "ready",
+    output: {
+      repository: ctx.preflight.repository,
+      login,
+    },
   };
 }
 `,

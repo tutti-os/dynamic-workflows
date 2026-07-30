@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,8 +23,11 @@ describe("Flow v1 Blueprint instantiation", () => {
     const { instantiateWorkflowBlueprint } = await import(
       "./blueprint-instantiate"
     );
-    const { getFlowV1RuntimeSummary } = await import(
+    const { getCurrentFlowV1Params, getFlowV1RuntimeSummary } = await import(
       "@/lib/db/workflows/flow-settings"
+    );
+    const { getFlowV1RuntimeConfig } = await import(
+      "@/lib/flow-v1/runtime-config"
     );
 
     const blueprints = listWorkflowBlueprints();
@@ -48,5 +51,37 @@ describe("Flow v1 Blueprint instantiation", () => {
         cycleCount: 0,
       });
     }
+
+    const governance = created.find(
+      ({ blueprint }) => blueprint.id === "large-file-governance-v1",
+    );
+    expect(governance).toBeDefined();
+    const governanceFlowId = governance!.detail.workflow.id;
+    expect(getCurrentFlowV1Params(governanceFlowId)?.values).toMatchObject({
+      scanCron: "*/30 * * * *",
+      timezone: "Asia/Singapore",
+      lineThreshold: 800,
+      mainBranch: "main",
+      scanRoot: "",
+      approvalLabel: "flow-approved",
+      maxAcceptanceRounds: 3,
+      qaAgent: "",
+      qaModel: "",
+      qaPermission: "",
+    });
+    const runtimeConfig = getFlowV1RuntimeConfig(governanceFlowId);
+    expect(runtimeConfig.defaultAgent).toBe("local:codex");
+    const configuredProject = path.join(homedir(), "tsh-project", "tutti");
+    expect(runtimeConfig.projectCwd).toBe(
+      fsExistsAsDirectory(configuredProject) ? configuredProject : null,
+    );
   });
 });
+
+function fsExistsAsDirectory(value: string): boolean {
+  try {
+    return statSync(value).isDirectory();
+  } catch {
+    return false;
+  }
+}

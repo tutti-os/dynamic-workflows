@@ -31,6 +31,12 @@ export type WorkflowBlueprintSummary = {
 export type WorkflowBlueprintDetail = WorkflowBlueprintSummary & {
   schemaVersion: "tutti.flow.v1";
   bundle: FlowV1Bundle;
+  instantiationDefaults?: {
+    projectCwd?: string;
+    defaultAgent?: string;
+    defaultModel?: string;
+    defaultPermissionMode?: string;
+  };
   preview?: {
     nodes: FlowV1Node[];
     edges: FlowV1Edge[];

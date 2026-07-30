@@ -91,6 +91,20 @@ describe("official Blueprint behavior", () => {
       }),
     );
     expect(workspace?.inputs).not.toHaveProperty("approval");
+    expect(flow.secrets).toEqual({});
+
+    const deliveryPreflight = flow.nodes.find(
+      (node) => node.id === "preflight_delivery",
+    );
+    expect(deliveryPreflight).toEqual(
+      expect.objectContaining({
+        kind: "gate",
+        file: "scripts/preflight-delivery.mjs",
+        outcomes: ["ready"],
+      }),
+    );
+    expect(deliveryPreflight?.secretNames).toBeUndefined();
+    expect(deliveryPreflight?.retry).toBeUndefined();
 
     const plan = flow.nodes.find((node) => node.id === "plan_refactor");
     expect(plan).toEqual(
@@ -573,7 +587,7 @@ esac
 state=${JSON.stringify(labelState)}
 issue_call=${JSON.stringify(issueCall)}
 case "$1 $2" in
-  "auth status") exit 0 ;;
+  "api user") echo 'SingleMai' ;;
   "label create") touch "$state"; exit 0 ;;
   "issue create") printf '%s' "$*" > "$issue_call"; echo 'https://github.com/example/project/issues/1' ;;
   "api repos/example/project/labels/flow-approved")
@@ -612,7 +626,7 @@ esac
       versionId: "large-file-delivery-preflight",
       bundle: blueprint.bundle,
       file: "scripts/preflight-delivery.mjs",
-      exportName: "run",
+      exportName: "check",
       context: {
         candidate: { path: "src/large.ts", lines: 1500 },
         preflight: preflight.value,
@@ -621,11 +635,20 @@ esac
       projectCwd,
     });
     expect(deliveryReady.value).toEqual({
-      repository: "example/project",
+      status: "completed",
+      outcome: "ready",
+      output: {
+        repository: "example/project",
+        login: "SingleMai",
+      },
     });
 
     const labelContext = {
-      deliveryReady: deliveryReady.value,
+      deliveryReady: (
+        deliveryReady.value as {
+          output: FlowV1JsonObject;
+        }
+      ).output,
       label: "flow-approved",
       plan: { title: "Split module" },
     };
