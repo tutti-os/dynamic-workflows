@@ -761,6 +761,86 @@ export function cancelFlowV1Cycle(input: {
   };
 }
 
+export async function restartFlowV1Cycle(input: {
+  flowId: string;
+  cycleId: string;
+  executeTick?: boolean;
+  projectCwd?: string;
+  defaultAgent?: string;
+  defaultModel?: string;
+  defaultPermissionMode?: string;
+  environment?: Record<string, string>;
+  secrets?: Record<string, string>;
+  cancellationTimeoutMs?: number;
+}): Promise<{
+  previousCycleId: string;
+  cancellation: ReturnType<typeof cancelFlowV1Cycle>;
+  tick: FlowV1TickBundle;
+  execution: FlowV1TickExecutionResult | null;
+}> {
+  const cycle = getFlowV1Cycle(input.cycleId);
+  const activeCycle = getActiveFlowV1Cycle(input.flowId);
+  if (
+    !cycle ||
+    cycle.flowId !== input.flowId ||
+    activeCycle?.id !== cycle.id
+  ) {
+    throw new FlowV1ServiceError(
+      "flow_cycle_not_restartable",
+      "The selected Cycle is no longer active and cannot be restarted.",
+    );
+  }
+
+  const cancellation = cancelFlowV1Cycle({
+    flowId: input.flowId,
+    cycleId: cycle.id,
+  });
+  const timeoutMs = input.cancellationTimeoutMs ?? 15_000;
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const current = getFlowV1Cycle(cycle.id);
+    if (
+      !current ||
+      current.status === "completed" ||
+      current.status === "canceled"
+    ) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      throw new FlowV1ServiceError(
+        "flow_restart_cancel_timeout",
+        "The current run did not stop in time, so a new run was not started. Wait for it to finish stopping, then try again.",
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  const restarted = await invokeFlowV1({
+    flowId: input.flowId,
+    invocationInput: cycle.inputSnapshot,
+    idempotencyKey: `restart:${cycle.id}`,
+    executeTick: input.executeTick,
+    projectCwd: input.projectCwd,
+    defaultAgent: input.defaultAgent,
+    defaultModel: input.defaultModel,
+    defaultPermissionMode: input.defaultPermissionMode,
+    environment: input.environment,
+    secrets: input.secrets,
+  });
+  if (restarted.action !== "started_cycle") {
+    throw new FlowV1ServiceError(
+      "flow_restart_conflict",
+      "Another run started before the workflow could restart.",
+    );
+  }
+  return {
+    previousCycleId: cycle.id,
+    cancellation,
+    tick: restarted.tick,
+    execution: restarted.execution,
+  };
+}
+
 export async function respondToFlowV1HumanTask(input: {
   flowId: string;
   runId: string;

@@ -72,7 +72,7 @@ import type {
 } from "@/lib/workflow/types";
 
 export type FlowView = "design" | "live" | "review";
-type FlowAction = "start" | "resume" | "retry" | "cancel";
+type FlowAction = "start" | "resume" | "retry" | "cancel" | "restart";
 type RuntimeConfigDraft = {
   params: Record<string, string>;
   projectCwd: string;
@@ -98,6 +98,7 @@ export function FlowRuntimeOverview(props: {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [startDialogOpen, setStartDialogOpen] = useState(false);
   const [startDiscardOpen, setStartDiscardOpen] = useState(false);
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [startFieldErrors, setStartFieldErrors] = useState<
     Record<string, string>
   >({});
@@ -120,10 +121,17 @@ export function FlowRuntimeOverview(props: {
   const action = historicalProjection
     ? null
     : resolveFlowAction(projection);
+  const latestRun =
+    runtime.latestRun ?? projection.runs.at(-1) ?? null;
+  const canRestart =
+    !historicalProjection &&
+    Boolean(
+      runtime.activeCycle &&
+        selectedCycle?.id === runtime.activeCycle.id &&
+        latestRun,
+    );
 
   async function runAction(next: FlowAction) {
-    const latestRun =
-      runtime.latestRun ?? projection.runs.at(-1) ?? null;
     let endpoint = `/api/workflows/${props.workflowId}/run`;
     let body: Record<string, unknown> | undefined;
     setPendingAction(next);
@@ -148,6 +156,8 @@ export function FlowRuntimeOverview(props: {
           : undefined;
       } else if (next === "cancel" && latestRun) {
         endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/cancel`;
+      } else if (next === "restart" && latestRun) {
+        endpoint = `/api/workflows/${props.workflowId}/runs/${latestRun.id}/restart`;
       }
       const response = await fetch(endpoint, {
         method: "POST",
@@ -321,6 +331,21 @@ export function FlowRuntimeOverview(props: {
               Review conflict
             </button>
           ) : null}
+          {canRestart ? (
+            <button
+              className="flow-next-step-button flow-next-step-button-secondary"
+              disabled={pendingAction !== null}
+              onClick={() => setRestartConfirmOpen(true)}
+              type="button"
+            >
+              {pendingAction === "restart" ? null : (
+                <Repeat2 aria-hidden="true" size={15} />
+              )}
+              {pendingAction === "restart"
+                ? "Restarting…"
+                : "Restart from beginning"}
+            </button>
+          ) : null}
           {historicalProjection ? (
             <button
               className="flow-next-step-button flow-next-step-button-secondary"
@@ -430,6 +455,19 @@ export function FlowRuntimeOverview(props: {
         onOpenChange={setStartDiscardOpen}
         open={startDiscardOpen}
         title="Discard run inputs?"
+        tone="destructive"
+      />
+      <ConfirmationDialog
+        cancelLabel="Keep current run"
+        confirmLabel="Restart workflow"
+        description="The current run will stop and its progress will be discarded. A new run will start from the first step with the same inputs."
+        onConfirm={() => {
+          setRestartConfirmOpen(false);
+          void runAction("restart");
+        }}
+        onOpenChange={setRestartConfirmOpen}
+        open={restartConfirmOpen}
+        title="Restart from the beginning?"
         tone="destructive"
       />
 
@@ -2638,6 +2676,13 @@ function flowGuidance(
         "You can follow its progress below. Stop it only if you do not want the current run to continue.",
     };
   }
+  if (action === "restart") {
+    return {
+      title: "Restart from the beginning",
+      description:
+        "Stop the current run and start a new one from the first step with the same inputs.",
+    };
+  }
   if (projection.selectedCycle?.status === "waiting_human") {
     return {
       title: "Your decision is needed",
@@ -2666,7 +2711,11 @@ function flowGuidanceIcon(
   if (action === "start") {
     return <Play size={20} />;
   }
-  if (action === "resume" || action === "retry") {
+  if (
+    action === "resume" ||
+    action === "retry" ||
+    action === "restart"
+  ) {
     return <RefreshCw size={19} />;
   }
   if (action === "cancel") {
@@ -2685,6 +2734,8 @@ function flowActionIcon(action: FlowAction) {
     case "resume":
     case "retry":
       return <RefreshCw aria-hidden="true" size={14} />;
+    case "restart":
+      return <Repeat2 aria-hidden="true" size={14} />;
     case "cancel":
       return <Square aria-hidden="true" size={13} />;
   }
@@ -2731,6 +2782,8 @@ function flowActionLabel(action: FlowAction): string {
       return "Retry step";
     case "cancel":
       return "Stop current run";
+    case "restart":
+      return "Restart from beginning";
   }
 }
 
@@ -2744,6 +2797,8 @@ function flowActionSuccessMessage(action: FlowAction): string {
       return "Retry started. This page will update automatically.";
     case "cancel":
       return "Stop requested.";
+    case "restart":
+      return "Workflow restarted from the beginning.";
   }
 }
 

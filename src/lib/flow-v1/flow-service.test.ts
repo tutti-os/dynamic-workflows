@@ -230,6 +230,42 @@ describe("Flow v1 creation, publication, and direct Invocation", () => {
     ).toEqual(["failed", "failed", "failed", "completed"]);
   });
 
+  it("restarts an active Cycle from the beginning with the same inputs", async () => {
+    const service = await import("./flow-service");
+    const runtime = await import("@/lib/db/workflows/flow-runtime");
+    const created = service.createFlowV1({
+      bundle: directGateBundle(),
+      activate: true,
+    });
+    const first = await service.invokeFlowV1({
+      flowId: created.flowId,
+      invocationInput: { item: "large.ts" },
+      idempotencyKey: "restart-first",
+      environment: { FLOW_DIRECT_APPROVED: "false" },
+    });
+    expect(first.execution?.stopReason).toBe("waiting_gate");
+
+    const restarted = await service.restartFlowV1Cycle({
+      flowId: created.flowId,
+      cycleId: first.tick.cycle.id,
+      executeTick: false,
+      cancellationTimeoutMs: 1_000,
+    });
+
+    expect(restarted.previousCycleId).toBe(first.tick.cycle.id);
+    expect(runtime.getFlowV1Cycle(first.tick.cycle.id)?.status).toBe(
+      "canceled",
+    );
+    expect(restarted.tick.cycle).toEqual(
+      expect.objectContaining({
+        sequence: 2,
+        status: "running",
+        inputSnapshot: { item: "large.ts" },
+      }),
+    );
+    expect(restarted.tick.run.status).toBe("pending");
+  });
+
   it("publishes a new immutable Version and supersedes the previous one", async () => {
     const service = await import("./flow-service");
     const { getDb } = await import("@/lib/db/client");
