@@ -57,18 +57,19 @@ describe("Flow v1 Blueprint instantiation", () => {
     );
     expect(governance).toBeDefined();
     const governanceFlowId = governance!.detail.workflow.id;
-    expect(getCurrentFlowV1Params(governanceFlowId)?.values).toMatchObject({
+    const governanceParams = getCurrentFlowV1Params(governanceFlowId)?.values;
+    expect(governanceParams).toMatchObject({
       scanCron: "*/30 * * * *",
       timezone: "Asia/Singapore",
       lineThreshold: 800,
       mainBranch: "main",
       scanRoot: "",
       approvalLabel: "flow-approved",
-      maxAcceptanceRounds: 3,
-      qaAgent: "",
-      qaModel: "",
-      qaPermission: "",
     });
+    expect(governanceParams).not.toHaveProperty("maxAcceptanceRounds");
+    expect(governanceParams).not.toHaveProperty("qaAgent");
+    expect(governanceParams).not.toHaveProperty("qaModel");
+    expect(governanceParams).not.toHaveProperty("qaPermission");
     const runtimeConfig = getFlowV1RuntimeConfig(governanceFlowId);
     expect(runtimeConfig.defaultAgent).toBe("local:codex");
     const configuredProject = path.join(homedir(), "tsh-project", "tutti");

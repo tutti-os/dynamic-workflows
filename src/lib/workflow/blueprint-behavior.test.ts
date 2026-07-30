@@ -64,7 +64,7 @@ describe("official Blueprint behavior", () => {
     }
   });
 
-  it("publishes one Reviewer-approved pull request from the configured project cwd", () => {
+  it("publishes one RD-ready pull request from the configured project cwd", () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
     if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
@@ -136,66 +136,59 @@ describe("official Blueprint behavior", () => {
       }),
     );
 
-    const acceptance = flow.nodes.find(
-      (node) => node.id === "rd_qa_acceptance",
+    const rdWork = flow.nodes.find(
+      (node) => node.id === "rd_work",
     );
-    expect(acceptance).toEqual(
+    expect(rdWork).toEqual(
       expect.objectContaining({
-        kind: "loop",
-        execution: { access: "write", isolation: "shared" },
-        outcomes: ["matched", "exhausted"],
-      }),
-    );
-    expect(acceptance?.loop).toEqual(
-      expect.objectContaining({
-        onMaxIterations: "complete",
-        until: { source: "qa_review", finalStatus: "PASS" },
-      }),
-    );
-    expect(acceptance?.loop?.steps.map((step) => step.id)).toEqual([
-      "rd_work",
-      "qa_review",
-    ]);
-    expect(acceptance?.loop?.steps[0]).toEqual(
-      expect.objectContaining({
-        label: "RD implement or repair",
-        session: { mode: "inherit", key: "rd_room" },
-        prompt: expect.stringMatching(
-          /# 角色.*Issue.*唯一需求来源.*# 工作规则.*# 约束.*issue_url: \{\{issue\.url\}\}/su,
-        ),
-        appendPrompt: expect.stringMatching(
-          /# 本轮任务.*重新读取 Issue.*review 中的阻塞问题.*<reviewer_feedback>.*qa_review\.review/su,
-        ),
-      }),
-    );
-    expect(acceptance?.loop?.steps[1]).toEqual(
-      expect.objectContaining({
-        label: "Adversarial Reviewer acceptance",
+        kind: "agent",
+        label: "RD implement with independent sub-agent review",
         session: { mode: "independent" },
-        execution: { access: "review", isolation: "shared" },
+        execution: { access: "write", isolation: "shared" },
+        prompt: expect.stringMatching(
+          /# 角色.*独立、只读的 Sub-agent.*# 工作规则.*必须启动至少一个独立只读 Sub-agent.*不得把尚未发生的 commit.*只有实现和复审均满足 Issue 时才能返回 READY.*# 输出格式.*"status".*"summary".*issue_url: \{\{issue\.url\}\}/su,
+        ),
         output: expect.objectContaining({
           kind: "json",
           schema: expect.objectContaining({
-            required: ["status", "review"],
+            required: ["status", "summary"],
           }),
         }),
-        prompt: expect.stringMatching(
-          /# 角色.*Issue 是唯一需求来源.*# 检查要求.*FAIL 时.*review 必须明确列出.*# 输出约束.*"status".*"review".*issue_url: \{\{issue\.url\}\}/su,
-        ),
+      }),
+    );
+    expect(flow.nodes.filter((node) => node.kind === "loop")).toEqual([]);
+    expect(
+      flow.nodes.filter((node) => node.kind === "agent").map((node) => node.id),
+    ).toEqual(["plan_refactor", "rd_work"]);
+
+    const rdDecision = flow.nodes.find(
+      (node) => node.id === "check_rd_delivery_status",
+    );
+    expect(rdDecision).toEqual(
+      expect.objectContaining({
+        kind: "gate",
+        file: "scripts/rd-delivery-status.mjs",
+        outcomes: ["ready", "blocked"],
+        inputs: expect.objectContaining({
+          rdWork: expect.objectContaining({ expression: "rdWork" }),
+        }),
       }),
     );
 
     const publish = flow.nodes.find(
-      (node) => node.id === "publish_qa_approved_pr",
+      (node) => node.id === "publish_rd_ready_pr",
     );
     expect(publish).toEqual(
       expect.objectContaining({
         kind: "effect",
-        file: "scripts/publish-qa-approved-pr.mjs",
+        file: "scripts/publish-rd-ready-pr.mjs",
         execution: { access: "write", isolation: "shared" },
         inputs: expect.objectContaining({
-          acceptance: expect.objectContaining({
-            expression: "acceptance",
+          rdWork: expect.objectContaining({
+            expression: "rdWork",
+          }),
+          rdDecision: expect.objectContaining({
+            expression: "rdDecision",
           }),
           issue: expect.objectContaining({
             expression: "issue",
@@ -234,7 +227,10 @@ describe("official Blueprint behavior", () => {
             "prepare_human_review",
             "human_delivery_review",
             "implement_plan",
+            "rd_qa_acceptance",
+            "qa_review",
             "qa_not_accepted_report",
+            "close_qa_not_accepted_issue",
             "check_changes",
             "commit_changes",
             "push_branch",
@@ -249,17 +245,17 @@ describe("official Blueprint behavior", () => {
         expect.objectContaining({
           sourceNodeId: "wait_issue_approval",
           outcome: "approved",
-          targetNodeId: "rd_qa_acceptance",
+          targetNodeId: "rd_work",
         }),
         expect.objectContaining({
-          sourceNodeId: "rd_qa_acceptance",
-          outcome: "matched",
-          targetNodeId: "publish_qa_approved_pr",
+          sourceNodeId: "check_rd_delivery_status",
+          outcome: "ready",
+          targetNodeId: "publish_rd_ready_pr",
         }),
         expect.objectContaining({
-          sourceNodeId: "rd_qa_acceptance",
-          outcome: "exhausted",
-          targetNodeId: "close_qa_not_accepted_issue",
+          sourceNodeId: "check_rd_delivery_status",
+          outcome: "blocked",
+          targetNodeId: "implementation_blocked",
         }),
         expect.objectContaining({
           sourceNodeId: "wait_pull_request_merge",
@@ -272,7 +268,7 @@ describe("official Blueprint behavior", () => {
       flow.nodes
         .filter((node) => node.kind === "complete_cycle")
         .map((node) => node.terminalOutcome),
-    ).toContain("qa_not_accepted");
+    ).toContain("implementation_blocked");
     expect(
       flow.nodes
         .filter((node) => node.kind === "complete_cycle")
@@ -734,13 +730,50 @@ esac
     );
   });
 
-  it("publishes one pull request containing the final QA conclusion", async () => {
+  it("routes RD READY and BLOCKED results without a Flow-level review loop", async () => {
     const blueprint = getWorkflowBlueprint("large-file-governance-v1");
     expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
     if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
       throw new Error("Large-file Blueprint is unavailable.");
     }
-    const root = mkdtempSync(path.join(tmpdir(), "flow-qa-publish-"));
+    const projectCwd = mkdtempSync(path.join(tmpdir(), "flow-rd-status-"));
+    temporaryDirectories.push(projectCwd);
+
+    for (const [status, outcome] of [
+      ["READY", "ready"],
+      ["BLOCKED", "blocked"],
+    ] as const) {
+      const result = await runFlowV1CodeModule({
+        versionId: `large-file-rd-${outcome}`,
+        bundle: blueprint.bundle,
+        file: "scripts/rd-delivery-status.mjs",
+        exportName: "check",
+        context: {
+          rdWork: {
+            status,
+            summary: `${status} summary`,
+          },
+        },
+        projectCwd,
+      });
+      expect(result.value).toEqual({
+        status: "completed",
+        outcome,
+        output: {
+          status,
+          summary: `${status} summary`,
+        },
+      });
+    }
+  });
+
+  it("publishes one pull request containing the RD and sub-agent conclusion", async () => {
+    const blueprint = getWorkflowBlueprint("large-file-governance-v1");
+    expect(blueprint?.schemaVersion).toBe("tutti.flow.v1");
+    if (!blueprint || blueprint.schemaVersion !== "tutti.flow.v1") {
+      throw new Error("Large-file Blueprint is unavailable.");
+    }
+    const root = mkdtempSync(path.join(tmpdir(), "flow-rd-publish-"));
     temporaryDirectories.push(root);
     const remote = path.join(root, "remote.git");
     const projectCwd = path.join(root, "project");
@@ -787,17 +820,16 @@ esac
     );
     chmodSync(fakeGh, 0o755);
     const context = {
-      acceptance: {
-        final: {
-          status: "PASS",
-          review: [
-            "QA verified behavior preservation and focused tests.",
-            "",
-            "## Checks",
-            "- `pnpm vitest run source.test.ts` — passed",
-          ].join("\n"),
-        },
+      rdWork: {
+        status: "READY",
+        summary: [
+          "RD completed the implementation and independent sub-agent review.",
+          "",
+          "## Checks",
+          "- `pnpm vitest run source.test.ts` — passed",
+        ].join("\n"),
       },
+      rdDecision: { status: "READY" },
       candidate: { path: "source.ts", lines: 1500 },
       cycle: { id: "cycle-publish", sequence: 1 },
       issue: { url: "https://github.com/example/project/issues/4" },
@@ -809,9 +841,9 @@ esac
     };
 
     const published = await runFlowV1CodeModule({
-      versionId: "large-file-publish-qa-pass",
+      versionId: "large-file-publish-rd-ready",
       bundle: blueprint.bundle,
-      file: "scripts/publish-qa-approved-pr.mjs",
+      file: "scripts/publish-rd-ready-pr.mjs",
       exportName: "apply",
       context,
       environment,
@@ -822,8 +854,8 @@ esac
       expect.objectContaining({
         url: "https://github.com/example/project/pull/9",
         branch,
-        qaReview: expect.stringContaining(
-          "QA verified behavior preservation and focused tests.",
+        rdSummary: expect.stringContaining(
+          "RD completed the implementation and independent sub-agent review.",
         ),
       }),
     );
@@ -831,9 +863,11 @@ esac
     expect(readFileSync(prCall, "utf8")).toContain(
       "https://github.com/example/project/issues/4",
     );
-    expect(readFileSync(prCall, "utf8")).toContain("## Reviewer Report");
     expect(readFileSync(prCall, "utf8")).toContain(
-      "QA verified behavior preservation and focused tests.",
+      "## RD Implementation and Sub-agent Review",
+    );
+    expect(readFileSync(prCall, "utf8")).toContain(
+      "RD completed the implementation and independent sub-agent review.",
     );
     expect(readFileSync(prCall, "utf8")).toContain(
       "Closes https://github.com/example/project/issues/4",
@@ -843,9 +877,9 @@ esac
     );
 
     const reconciled = await runFlowV1CodeModule({
-      versionId: "large-file-publish-qa-pass-reconcile",
+      versionId: "large-file-publish-rd-ready-reconcile",
       bundle: blueprint.bundle,
-      file: "scripts/publish-qa-approved-pr.mjs",
+      file: "scripts/publish-rd-ready-pr.mjs",
       exportName: "reconcile",
       context,
       environment,

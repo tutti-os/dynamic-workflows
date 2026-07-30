@@ -6,9 +6,9 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
   ...PRESERVED_FLOW_V1_BLUEPRINTS,
   {
     id: "large-file-governance-v1",
-    title: "Large File Governance Loop",
+    title: "Large File Governance",
     description:
-      "Periodically plans and refactors one oversized file, runs an adversarial RD and Reviewer acceptance loop, then publishes and tracks a pull request when review passes.",
+      "Periodically plans and refactors one oversized file, lets RD use a read-only sub-agent for implementation review, then publishes and tracks a linked pull request.",
     category: "coding",
     tags: [
       "large-file",
@@ -17,7 +17,7 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "pull-request",
       "schedule",
       "memory",
-      "acceptance",
+      "sub-agent",
     ],
     difficulty: "advanced",
     requiresCwd: true,
@@ -30,15 +30,14 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
       "memory",
       "immediate-continuation",
       "github-cli",
-      "loop",
       "json-output",
     ],
     patternSummary:
-      "A scheduled singleton Cycle checks out a fresh Flow branch from origin/main in the configured project directory, creates an Issue, then runs RD and an independent Reviewer serially in that directory. Failed reviews return one Markdown report to RD, while PASS commits, pushes, and opens a linked pull request.",
+      "A scheduled singleton Cycle checks out a fresh Flow branch from origin/main in the configured project directory, creates an Issue, then gives one RD Agent ownership of implementation and read-only sub-agent review before publishing a linked pull request.",
     useCases: [
       "Continuously reduce monolithic source files without spending Agent tokens while approvals or merges are pending.",
-      "Make RD repairs and adversarial Reviewer findings visible before delivery.",
-      "Publish a linked pull request immediately after Reviewer acceptance.",
+      "Let one RD Agent implement, delegate read-only review, and repair findings before delivery.",
+      "Publish a linked pull request immediately after RD reports the implementation ready.",
       "Use as a complete Bundle template for scheduled governance automations.",
     ],
     instantiationDefaults: {
@@ -50,8 +49,8 @@ export const BUILTIN_FLOW_V1_BLUEPRINTS: WorkflowBlueprintDetail[] = [
         path: "flow.js",
         content: `export const schemaVersion = "tutti.flow.v1";
 export const meta = {
-  name: "Large File Governance Loop",
-  description: "Find, plan, refactor, adversarially accept, and publish one oversized file per Cycle.",
+  name: "Large File Governance",
+  description: "Find, plan, refactor with RD-owned sub-agent review, and publish one oversized file per Cycle.",
   requiresCwd: true,
 };
 export const params = defineParams({
@@ -61,10 +60,6 @@ export const params = defineParams({
   lineThreshold: numberParam({ default: 800, min: 1, integer: true }),
   scanRoot: stringParam({ default: "" }),
   approvalLabel: stringParam({ default: "flow-approved", minLength: 1, maxLength: 50 }),
-  maxAcceptanceRounds: numberParam({ default: 3, min: 1, max: 10, integer: true }),
-  qaAgent: stringParam({ default: "" }),
-  qaModel: stringParam({ default: "" }),
-  qaPermission: stringParam({ default: "" }),
 });
 export const cycles = defineCycles({ mode: "singleton" });
 export const runtime = {
@@ -158,7 +153,7 @@ const plan = agent({
       body: { type: "string", minLength: 1 },
     },
   } }),
-  prompt: "# 角色\\n\\n你是只读的代码重构分析员。你的职责是调查代码并起草一份可直接提交的 GitHub Issue，不实施修改。\\n\\n# 目标\\n\\n为目标文件制定安全、可执行的重构方案，使其在保持现有行为的前提下降至目标行数以内。\\n\\n# Issue 正文要求\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 写明目标、现状职责、仓库证据、修改边界、受影响文件、行为约束、按依赖排序的实施步骤、验证命令、风险和未知项。\\n3. 每个关键结论引用具体的 path:line 或 path#symbol。\\n4. 验证部分同时写明执行命令及其验证目标。\\n5. 无法从仓库确认的内容明确标为未知；不要将推测写成事实。\\n6. Flow Memory 仅作历史背景；如果它与仓库实际内容冲突，以仓库为准。\\n\\n# 约束\\n\\n- 不修改任何文件。\\n- 不执行 Git 或 GitHub 写操作。\\n- title 是简洁的 Issue 标题，不包含 Flow marker。\\n- body 是完整的 GitHub Markdown Issue 正文。\\n- 只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。\\n\\n# 输出格式\\n\\n{\\n  \\\"title\\\": \\\"Issue title\\\",\\n  \\\"body\\\": \\\"Complete GitHub Issue Markdown body\\\"\\n}\\n\\n<target>\\npath: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\nsnapshot_commit: {{workspace.baseCommit}}\\n</target>",
+  prompt: "# 角色\\n\\n你是只读的代码重构分析员。你的职责是调查代码并起草一份可直接提交的 GitHub Issue，不实施修改。\\n\\n# 目标\\n\\n为目标文件制定安全、可执行的重构方案，我们将这些单体大文件视为一种潜在的架构不合理的疑点，基于这个文件出发你围绕评估当前涉及模块架构是否合理（文件是否单职责、高内聚低耦合、是否具备可维护性）。重构的要求是在保障原功能不被破坏的前提下，让后续代码更利于后续的开发维护工作。\\n\\n# Issue 正文要求\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 写明目标、现状职责、仓库证据、修改边界、受影响文件、行为约束、按依赖排序的实施步骤、验证命令、风险和未知项。\\n3. 每个关键结论引用具体的 path:line 或 path#symbol。\\n4. 验证部分同时写明执行命令及其验证目标。\\n5. 无法从仓库确认的内容明确标为未知；不要将推测写成事实。\\n6. Flow Memory 仅作历史背景；如果它与仓库实际内容冲突，以仓库为准。\\n\\n# 约束\\n\\n- 不修改任何文件。\\n- 不执行 Git 或 GitHub 写操作。\\n- title 是简洁的 Issue 标题，不包含 Flow marker。\\n- body 是完整的 GitHub Markdown Issue 正文。\\n- 只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。\\n\\n# 输出格式\\n\\n{\\n  \\\"title\\\": \\\"Issue title\\\",\\n  \\\"body\\\": \\\"Complete GitHub Issue Markdown body\\\"\\n}\\n\\n<target>\\npath: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\nsnapshot_commit: {{workspace.baseCommit}}\\n</target>",
 });
 const issue = effect({
   id: "create_issue",
@@ -172,9 +167,9 @@ const approval = gate({
   inputs: { issue },
   outcomes: ["approved", "rejected"],
 });
-const acceptance = loop({
-  id: "rd_qa_acceptance",
-  label: "RD + Reviewer adversarial acceptance",
+const rdWork = agent({
+  id: "rd_work",
+  label: "RD implement with independent sub-agent review",
   inputs: {
     candidate,
     issue,
@@ -184,63 +179,44 @@ const acceptance = loop({
   },
   workspace,
   execution: { access: "write", isolation: "shared" },
-  maxIterations: ref("params.maxAcceptanceRounds"),
-  onMaxIterations: "complete",
-  steps: [
-    agent({
-      id: "rd_work",
-      label: "RD implement or repair",
-      session: { mode: "inherit", key: "rd_room" },
-      prompt: "# 角色\\n\\n你是负责实施重构的 RD。Flow 串行独占当前配置的项目目录。\\n\\n# 任务\\n\\n使用 gh 读取 Issue 的最新正文和评论，并以它们作为唯一需求来源。在保持现有行为的前提下，将目标文件缩减至目标行数以内。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前读取 Issue、检查 git status 和现有差异；仓库和 Issue 的实际状态优先于会话记忆。\\n3. 遵循 Issue 中的边界和行为约束，只修改完成 Issue 所需的文件。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 只在当前项目目录和 Flow 分支内工作。\\n- 不执行 commit、push 或 GitHub 写操作。\\n- 不安装非必要依赖。\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\n</context>",
-      appendPrompt: "# 本轮任务\\n\\n在同一个 RD 会话、项目目录和 Flow 分支中继续处理最新一轮 Reviewer 的验收意见。\\n\\n# 修复规则\\n\\n1. 重新读取 Issue 的最新正文和评论，并检查 git status、git diff 和 Reviewer 指出的代码；实际状态优先。\\n2. 修复 review 中的阻塞问题，并保持 Issue 约定的范围。非阻塞建议仅供参考。\\n3. 运行覆盖修复内容的针对性测试，并检查最终 diff。\\n4. 保留更改为未提交状态；不要 commit、push 或执行 GitHub 写操作。\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\n</context>\\n\\n<reviewer_feedback>\\n{{previousIteration.outputs.qa_review.review}}\\n</reviewer_feedback>",
-    }),
-    agent({
-      id: "qa_review",
-      label: "Adversarial Reviewer acceptance",
-      agent: ref("params.qaAgent"),
-      model: ref("params.qaModel"),
-      permissionMode: ref("params.qaPermission"),
-      session: { mode: "independent" },
-      execution: { access: "review", isolation: "shared" },
-      output: json({ schema: {
-        type: "object",
-        required: ["status", "review"],
-        properties: {
-          status: { enum: ["PASS", "FAIL"] },
-          review: { type: "string", minLength: 1 },
-        },
-      } }),
-      prompt: "# 角色\\n\\n你是独立的对抗式 Reviewer。Issue 是唯一需求来源；仓库状态和实际检查结果是唯一实现证据。不要采信 RD 的文字总结。\\n\\n# 验收目标\\n\\n使用 gh 读取 Issue 的最新正文和评论，判断当前实现是否满足其中的要求、保持既有行为、满足目标文件行数限制，并经过足够的针对性验证。\\n\\n# 检查要求\\n\\n1. 阅读适用的 AGENTS.md 和项目规范。\\n2. 读取 Issue 的最新正文和评论。\\n3. 检查 git status、完整 diff、所有受影响文件及相关测试。\\n4. 对照 Issue 中的职责边界、行为约束、风险和测试计划进行验收。\\n5. 必要时重新运行针对性测试。给出 PASS 前必须覆盖完整变更面。\\n6. review 使用 Markdown，写明结论、执行过的检查、证据、风险和未验证项。证据引用具体的 path:line、path#symbol、diff 或测试结果。\\n\\n# 判定规则\\n\\n- status 只能是 PASS 或 FAIL。\\n- 只有不存在阻塞性缺陷，并且每项必要结论都有证据时，才能给出 PASS。\\n- FAIL 时，review 必须明确列出每个阻塞项的位置、问题、影响和预期修复结果。\\n- 非阻塞建议必须明确标注，不得因此返回 FAIL。\\n\\n# 输出约束\\n\\n只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。以下是 PASS 示例；失败时将 status 改为 FAIL：\\n{\\n  \\\"status\\\": \\\"PASS\\\",\\n  \\\"review\\\": \\\"完整的 Markdown 验收报告\\\"\\n}\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\nmax_lines: {{lineThreshold}}\\n</context>",
-    }),
-  ],
-  until: { source: "qa_review", finalStatus: "PASS" },
+  session: { mode: "independent" },
+  output: json({ schema: {
+    type: "object",
+    required: ["status", "summary"],
+    properties: {
+      status: { enum: ["READY", "BLOCKED"] },
+      summary: { type: "string", minLength: 1 },
+    },
+  } }),
+  prompt: "# 角色\\n\\n你是负责实施重构的 RD，并负责协调独立、只读的 Sub-agent 完成实现复审。\\n\\n# 任务\\n\\n使用 gh 读取 Issue 的最新正文和评论，并以它们作为唯一需求来源。\\n\\n# 工作规则\\n\\n1. 阅读仓库中适用的 AGENTS.md 和项目规范。\\n2. 开始前读取 Issue、检查 git status 和现有差异；仓库和 Issue 的实际状态优先于会话记忆。\\n3. 遵循 Issue 中的边界和行为约束，只修改完成 Issue 提及的任务内容。\\n4. 优先运行覆盖本次变更的针对性测试；仅在这些测试不足或不可用时扩大检查范围。\\n5. 实现完成后，必须启动至少一个独立只读 Sub-agent。让它直接检查 Issue、完整工作区差异、未跟踪文件和实际测试结果，不得仅审查你的总结。\\n6. Sub-agent 只验收当前实现，不得把尚未发生的 commit、push、PR、DCO、CI、合并或 Issue 关闭状态作为阻塞项。修复所有复审发现后再次复审，直到没有异常。\\n7. 完成后检查最终 diff，并将所有更改保留为未提交状态。\\n\\n# 约束\\n\\n- 只在当前项目目录和 Flow 分支内工作。\\n- 不执行 commit、push 或 GitHub 写操作；这些由后续交付节点负责。\\n- 不安装非必要依赖。\\n- 只有实现和复审均满足 Issue 时才能返回 READY。\\n- 无法完成实现或独立复审时返回 BLOCKED，并在 summary 中说明原因。\\n- 只返回一个 JSON 对象，不附加解释或 Markdown 代码围栏。\\n\\n# 输出格式\\n\\n{\\n  \\\"status\\\": \\\"READY\\\",\\n  \\\"summary\\\": \\\"实现、验证和只读 Sub-agent 复审的简要结论\\\"\\n}\\n\\n<context>\\nissue_url: {{issue.url}}\\nproject_cwd: {{workspace.path}}\\nbranch: {{workspace.branch}}\\ntarget_path: {{candidate.path}}\\ncurrent_lines: {{candidate.lines}}\\nmax_lines: {{lineThreshold}}\\n</context>",
 });
-const closeNotAcceptedIssue = effect({
-  id: "close_qa_not_accepted_issue",
-  file: "scripts/resolve-issue.mjs",
-  inputs: { issue, acceptance },
-  idempotencyKey: template("{{cycle.id}}:close-qa-not-accepted"),
+const rdDecision = gate({
+  id: "check_rd_delivery_status",
+  file: "scripts/rd-delivery-status.mjs",
+  inputs: { rdWork },
+  outcomes: ["ready", "blocked"],
 });
-const qaNotAccepted = completeCycle({
-  id: "qa_not_accepted",
-  outcome: "qa_not_accepted",
-  inputs: { closeNotAcceptedIssue, acceptance },
+const implementationBlocked = completeCycle({
+  id: "implementation_blocked",
+  outcome: "implementation_blocked",
+  inputs: { rdDecision, rdWork, issue },
   continue: "scheduled",
 });
 const pullRequest = effect({
-  id: "publish_qa_approved_pr",
-  label: "Reviewer PASS: commit, push, and open pull request",
-  file: "scripts/publish-qa-approved-pr.mjs",
+  id: "publish_rd_ready_pr",
+  label: "RD READY: commit, push, and open pull request",
+  file: "scripts/publish-rd-ready-pr.mjs",
   inputs: {
     issue,
     candidate,
-    acceptance,
+    rdWork,
+    rdDecision,
     workspace,
     mainBranch: ref("params.mainBranch"),
   },
   workspace,
   execution: { access: "write", isolation: "shared" },
-  idempotencyKey: template("{{cycle.id}}:publish-qa-approved-pr"),
+  idempotencyKey: template("{{cycle.id}}:publish-rd-ready-pr"),
 });
 const merged = gate({
   id: "wait_pull_request_merge",
@@ -289,11 +265,8 @@ const rejected = cancelCycle({
   inputs: { approval },
   continue: "scheduled",
 });
-route(approval, { approved: acceptance, rejected });
-route(acceptance, {
-  matched: pullRequest,
-  exhausted: closeNotAcceptedIssue,
-});
+route(approval, { approved: rdWork, rejected });
+route(rdDecision, { ready: pullRequest, blocked: implementationBlocked });
 route(merged, { merged: closeIssue });
 route(candidate, { found: deliveryReady, empty: noWork });
 route(deliveryReady, { ready: approvalLabel });
@@ -613,7 +586,34 @@ export async function check(ctx) {
 `,
       },
       {
-        path: "scripts/publish-qa-approved-pr.mjs",
+        path: "scripts/rd-delivery-status.mjs",
+        content: `export async function check(ctx) {
+  if (ctx.rdWork?.status === "READY") {
+    return {
+      status: "completed",
+      outcome: "ready",
+      output: {
+        status: "READY",
+        summary: ctx.rdWork.summary,
+      },
+    };
+  }
+  if (ctx.rdWork?.status === "BLOCKED") {
+    return {
+      status: "completed",
+      outcome: "blocked",
+      output: {
+        status: "BLOCKED",
+        summary: ctx.rdWork.summary,
+      },
+    };
+  }
+  throw new Error("RD output must contain status READY or BLOCKED.");
+}
+`,
+      },
+      {
+        path: "scripts/publish-rd-ready-pr.mjs",
         content: `import { execFileSync } from "node:child_process";
 function git(args) { return execFileSync("git", args, { encoding: "utf8" }).trim(); }
 function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
@@ -640,11 +640,10 @@ function output(ctx, url, commit) {
     url,
     branch: ctx.workspace.branch,
     commit,
-    qaReview: ctx.acceptance.final.review,
+    rdSummary: ctx.rdWork.summary,
   };
 }
 function body(ctx) {
-  const qa = ctx.acceptance.final;
   return [
     "## Source Issue",
     ctx.issue.url,
@@ -652,26 +651,26 @@ function body(ctx) {
     "## Change",
     "Refactors \`" + ctx.candidate.path + "\` from its previous " + ctx.candidate.lines + "-line form.",
     "",
-    "## Reviewer Report",
-    qa.review,
+    "## RD Implementation and Sub-agent Review",
+    ctx.rdWork.summary,
     "",
     "Closes " + ctx.issue.url,
   ].join("\\n");
 }
 export async function apply(ctx) {
-  if (ctx.acceptance.final.status !== "PASS") {
-    throw new Error("Pull request publication requires a final Reviewer PASS.");
+  if (ctx.rdWork.status !== "READY") {
+    throw new Error("Pull request publication requires RD status READY.");
   }
   let commit = committedSha(ctx);
   if (!commit) {
     if (!git(["status", "--porcelain"])) {
-      throw new Error("Reviewer passed but the implementation produced no repository changes.");
+      throw new Error("RD reported READY but the implementation produced no repository changes.");
     }
     git(["add", "-A"]);
     git(["commit", "-s", "-m", "refactor: split " + ctx.candidate.path, "-m", marker(ctx)]);
     commit = git(["rev-parse", "HEAD"]);
   } else if (git(["rev-parse", "HEAD"]) !== commit || git(["status", "--porcelain"])) {
-    throw new Error("The Reviewer-approved project directory changed after its delivery commit.");
+    throw new Error("The RD-approved project directory changed after its delivery commit.");
   }
   const publishedSha = remoteSha(ctx.workspace.branch);
   if (publishedSha && publishedSha !== commit) {
@@ -693,34 +692,6 @@ export async function reconcile(ctx) {
     : null;
   return pullRequest
     ? { status: "completed", externalRef: pullRequest.url, output: output(ctx, pullRequest.url, commit) }
-    : { status: "not_applied" };
-}
-`,
-      },
-      {
-        path: "scripts/resolve-issue.mjs",
-        content: `import { execFileSync } from "node:child_process";
-function gh(args) { return execFileSync("gh", args, { encoding: "utf8" }).trim(); }
-function issueApiPath(url) {
-  const [owner, repo, kind, number] = new URL(url).pathname.split("/").filter(Boolean);
-  if (!owner || !repo || kind !== "issues" || !number) throw new Error("Invalid GitHub Issue URL: " + url);
-  return "repos/" + owner + "/" + repo + "/issues/" + number;
-}
-function reason(ctx) {
-  if (ctx.acceptance?.final) {
-    return "RD + Reviewer acceptance exhausted its iteration budget without PASS. Final review:\\n\\n" +
-      ctx.acceptance.final.review;
-  }
-  return "Implementation produced no repository changes.";
-}
-export async function apply(ctx) {
-  gh(["issue", "close", ctx.issue.url, "--comment", reason(ctx)]);
-  return { externalRef: ctx.issue.url, output: { url: ctx.issue.url, closed: true, reason: reason(ctx) } };
-}
-export async function reconcile(ctx) {
-  const issue = JSON.parse(gh(["api", issueApiPath(ctx.issue.url)]));
-  return issue.state === "closed"
-    ? { status: "completed", externalRef: issue.html_url, output: { url: issue.html_url, closed: true } }
     : { status: "not_applied" };
 }
 `,
