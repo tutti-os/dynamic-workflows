@@ -265,6 +265,13 @@ export function FlowVersionReviewPanel(props: {
               {props.review.configuration.defaultModel ?? "agent default"}
             </dd>
           </div>
+          <div>
+            <dt>Thinking depth</dt>
+            <dd>
+              {props.review.configuration.defaultReasoningEffort ??
+                "agent default"}
+            </dd>
+          </div>
         </dl>
         {canPublish ? (
           <div className="flow-version-publish">

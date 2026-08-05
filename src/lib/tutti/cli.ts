@@ -638,6 +638,12 @@ function importCommand(input: CliInput) {
       "default-permission-mode",
       "defaultPermissionMode",
     ]),
+    defaultReasoningEffort: readOptionalString(input, [
+      "reasoning-effort",
+      "reasoningEffort",
+      "default-reasoning-effort",
+      "defaultReasoningEffort",
+    ]),
     secretBindings: readSecretBindings(input),
     publish: readOptionalBoolean(input, ["publish"]) ?? true,
     activate: readOptionalBoolean(input, ["activate"]) ?? false,
@@ -762,6 +768,10 @@ async function runCommand(input: CliInput) {
     "permission-mode",
     "permissionMode",
   ]);
+  const reasoningEffort = readOptionalString(input, [
+    "reasoning-effort",
+    "reasoningEffort",
+  ]);
   const cwd = readOptionalString(input, ["cwd"]);
   const detail = getWorkflowDetail(workflowId);
   if (
@@ -790,6 +800,7 @@ async function runCommand(input: CliInput) {
       defaultAgent: agent,
       defaultModel: model,
       defaultPermissionMode: permissionMode,
+      defaultReasoningEffort: reasoningEffort,
     });
     return {
       action: result.action,
@@ -891,6 +902,12 @@ function configureCommand(input: CliInput) {
           "permissionMode",
           "default-permission-mode",
           "defaultPermissionMode",
+        ]),
+        defaultReasoningEffort: readOptionalString(input, [
+          "reasoning-effort",
+          "reasoningEffort",
+          "default-reasoning-effort",
+          "defaultReasoningEffort",
         ]),
         secretBindings: readSecretBindings(input),
       }),

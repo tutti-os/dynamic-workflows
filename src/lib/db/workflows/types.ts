@@ -95,6 +95,7 @@ export type WorkflowVersionReview = {
     defaultAgent: string | null;
     defaultModel: string | null;
     defaultPermissionMode: string | null;
+    defaultReasoningEffort: string | null;
   };
   diagnostics: WorkflowDiagnostic[];
   comparison: {

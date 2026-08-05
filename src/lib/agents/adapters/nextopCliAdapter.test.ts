@@ -78,6 +78,17 @@ describe("nextop cli adapter", () => {
                 { id: "full-access", label: "Full access" },
               ],
             },
+            reasoningConfig: {
+              defaultValue: "high",
+              options: [
+                {
+                  id: "medium",
+                  label: "Medium",
+                  description: "Balanced reasoning.",
+                },
+                { id: "high", label: "High" },
+              ],
+            },
           };
         }
         throw new Error(`unexpected call: ${args.join(" ")}`);
@@ -101,6 +112,15 @@ describe("nextop cli adapter", () => {
           { id: "full-access", label: "Full access" },
         ],
         defaultPermissionMode: "full-access",
+        reasoningEfforts: [
+          {
+            id: "medium",
+            label: "Medium",
+            description: "Balanced reasoning.",
+          },
+          { id: "high", label: "High" },
+        ],
+        defaultReasoningEffort: "high",
         isDefault: false,
         reason: undefined,
       },
@@ -120,6 +140,15 @@ describe("nextop cli adapter", () => {
           { id: "full-access", label: "Full access" },
         ],
         defaultPermissionMode: "full-access",
+        reasoningEfforts: [
+          {
+            id: "medium",
+            label: "Medium",
+            description: "Balanced reasoning.",
+          },
+          { id: "high", label: "High" },
+        ],
+        defaultReasoningEffort: "high",
         isDefault: true,
         reason: undefined,
       },
@@ -732,6 +761,7 @@ describe("nextop cli adapter", () => {
       title: "Scan repository",
       model: "gpt-5",
       permissionMode: "auto",
+      reasoningEffort: "high",
     })) {
       events.push(event);
     }
@@ -746,6 +776,8 @@ describe("nextop cli adapter", () => {
       "gpt-5",
       "--permission-mode",
       "auto",
+      "--reasoning-effort",
+      "high",
       "--prompt",
       "scan",
       "--title",

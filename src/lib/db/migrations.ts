@@ -13,8 +13,11 @@ import { looksLikeSecretValue } from "@/lib/flow-v1/secret-bindings";
  * Version 21 removes legacy environment bindings that contain GitHub token
  * values. Those values were accepted as syntactically valid environment names
  * and could be returned through configuration projections.
+ *
+ * Version 22 adds the optional default reasoning effort to Flow runtime
+ * configuration.
  */
-export const CURRENT_SCHEMA_VERSION = 21;
+export const CURRENT_SCHEMA_VERSION = 22;
 
 export function migrateDb(database: Database.Database): void {
   database.pragma("secure_delete = ON");
@@ -39,13 +42,19 @@ export function migrateDb(database: Database.Database): void {
         migrateFlowV1Schema18To19(database);
         migrateFlowV1Schema19To20(database);
         migrateFlowV1Schema20To21(database);
+        migrateFlowV1Schema21To22(database);
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       } else if (currentVersion === 19) {
         migrateFlowV1Schema19To20(database);
         migrateFlowV1Schema20To21(database);
+        migrateFlowV1Schema21To22(database);
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       } else if (currentVersion === 20) {
         migrateFlowV1Schema20To21(database);
+        migrateFlowV1Schema21To22(database);
+        recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
+      } else if (currentVersion === 21) {
+        migrateFlowV1Schema21To22(database);
         recordSchemaVersion(database, CURRENT_SCHEMA_VERSION);
       } else {
         dropWorkflowSchema(database);
@@ -140,6 +149,24 @@ function migrateFlowV1Schema20To21(database: Database.Database): void {
   }
 }
 
+function migrateFlowV1Schema21To22(database: Database.Database): void {
+  const workflowsTable = database
+    .prepare(
+      `
+      SELECT 1 AS present
+      FROM sqlite_master
+      WHERE type = 'table' AND name = 'workflows'
+    `,
+    )
+    .get() as { present: number } | undefined;
+  if (!workflowsTable) {
+    return;
+  }
+  database.exec(
+    "ALTER TABLE workflows ADD COLUMN default_reasoning_effort TEXT;",
+  );
+}
+
 function getCurrentSchemaVersion(database: Database.Database): number {
   const row = database
     .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")
@@ -184,6 +211,7 @@ function createFlowV1Schema(database: Database.Database): void {
       default_agent TEXT,
       default_model TEXT,
       default_permission_mode TEXT,
+      default_reasoning_effort TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

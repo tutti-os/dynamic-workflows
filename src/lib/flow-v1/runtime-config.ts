@@ -34,6 +34,7 @@ export type FlowV1RuntimeConfig = {
   defaultAgent: string | null;
   defaultModel: string | null;
   defaultPermissionMode: string | null;
+  defaultReasoningEffort: string | null;
   secretBindings: Record<string, FlowV1SecretBinding>;
 };
 
@@ -43,6 +44,7 @@ export function setFlowV1RuntimeConfig(input: {
   defaultAgent?: string | null;
   defaultModel?: string | null;
   defaultPermissionMode?: string | null;
+  defaultReasoningEffort?: string | null;
   secretBindings?: Record<string, FlowV1SecretBinding>;
 }): FlowV1RuntimeConfig {
   const database = getDb();
@@ -87,7 +89,8 @@ export function setFlowV1RuntimeConfig(input: {
     if (
       input.defaultAgent !== undefined ||
       input.defaultModel !== undefined ||
-      input.defaultPermissionMode !== undefined
+      input.defaultPermissionMode !== undefined ||
+      input.defaultReasoningEffort !== undefined
     ) {
       const defaultAgent = normalizeRuntimeSetting(
         input.defaultAgent,
@@ -101,6 +104,10 @@ export function setFlowV1RuntimeConfig(input: {
         input.defaultPermissionMode,
         "Permission mode",
       );
+      const defaultReasoningEffort = normalizeRuntimeSetting(
+        input.defaultReasoningEffort,
+        "Reasoning effort",
+      );
       const updated = database
         .prepare(
           `
@@ -111,6 +118,10 @@ export function setFlowV1RuntimeConfig(input: {
             default_permission_mode = CASE
               WHEN ? = 1 THEN ?
               ELSE default_permission_mode
+            END,
+            default_reasoning_effort = CASE
+              WHEN ? = 1 THEN ?
+              ELSE default_reasoning_effort
             END,
             updated_at = ?
           WHERE id = ?
@@ -123,6 +134,8 @@ export function setFlowV1RuntimeConfig(input: {
           defaultModel,
           input.defaultPermissionMode !== undefined ? 1 : 0,
           defaultPermissionMode,
+          input.defaultReasoningEffort !== undefined ? 1 : 0,
+          defaultReasoningEffort,
           new Date().toISOString(),
           input.flowId,
         ).changes;
@@ -182,7 +195,7 @@ export function getFlowV1RuntimeConfig(
     .prepare(
       `
       SELECT project_cwd, default_agent, default_model,
-        default_permission_mode
+        default_permission_mode, default_reasoning_effort
       FROM workflows
       WHERE id = ?
     `,
@@ -193,6 +206,7 @@ export function getFlowV1RuntimeConfig(
         default_agent: string | null;
         default_model: string | null;
         default_permission_mode: string | null;
+        default_reasoning_effort: string | null;
       }
     | undefined;
   if (!flow) {
@@ -238,6 +252,7 @@ export function getFlowV1RuntimeConfig(
     defaultAgent: flow.default_agent,
     defaultModel: flow.default_model,
     defaultPermissionMode: flow.default_permission_mode,
+    defaultReasoningEffort: flow.default_reasoning_effort,
     secretBindings,
   };
 }
@@ -250,6 +265,7 @@ export async function resolveFlowV1ExecutionConfig(input: {
   defaultAgent: string | undefined;
   defaultModel: string | undefined;
   defaultPermissionMode: string | undefined;
+  defaultReasoningEffort: string | undefined;
   secrets: Record<string, string>;
   missingSecretNames: string[];
 }> {
@@ -295,6 +311,7 @@ export async function resolveFlowV1ExecutionConfig(input: {
     defaultAgent: config.defaultAgent ?? undefined,
     defaultModel: config.defaultModel ?? undefined,
     defaultPermissionMode: config.defaultPermissionMode ?? undefined,
+    defaultReasoningEffort: config.defaultReasoningEffort ?? undefined,
     secrets,
     missingSecretNames,
   };

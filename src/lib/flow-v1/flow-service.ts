@@ -90,6 +90,7 @@ export function createFlowV1(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   secretBindings?: Record<string, FlowV1SecretBinding>;
   publish?: boolean;
   activate?: boolean;
@@ -148,6 +149,7 @@ export function createFlowV1(input: {
       input.defaultAgent !== undefined ||
       input.defaultModel !== undefined ||
       input.defaultPermissionMode !== undefined ||
+      input.defaultReasoningEffort !== undefined ||
       input.secretBindings
     ) {
       setFlowV1RuntimeConfig({
@@ -156,6 +158,7 @@ export function createFlowV1(input: {
         defaultAgent: input.defaultAgent,
         defaultModel: input.defaultModel,
         defaultPermissionMode: input.defaultPermissionMode,
+        defaultReasoningEffort: input.defaultReasoningEffort,
         secretBindings: input.secretBindings,
       });
     }
@@ -240,6 +243,7 @@ export async function invokeFlowV1(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
 }): Promise<{
@@ -370,6 +374,7 @@ export async function invokeFlowV1(input: {
           defaultAgent: input.defaultAgent,
           defaultModel: input.defaultModel,
           defaultPermissionMode: input.defaultPermissionMode,
+          defaultReasoningEffort: input.defaultReasoningEffort,
           environment: input.environment,
           secrets: input.secrets,
         });
@@ -391,6 +396,7 @@ export async function dispatchFlowV1(
         defaultAgent: input.defaultAgent,
         defaultModel: input.defaultModel,
         defaultPermissionMode: input.defaultPermissionMode,
+        defaultReasoningEffort: input.defaultReasoningEffort,
         environment: input.environment,
         secrets: input.secrets,
       }).catch((error) => {
@@ -618,6 +624,7 @@ export function configureFlowV1(input: {
   defaultAgent?: string | null;
   defaultModel?: string | null;
   defaultPermissionMode?: string | null;
+  defaultReasoningEffort?: string | null;
   secretBindings?: Record<string, FlowV1SecretBinding>;
 }): {
   params: FlowV1JsonObject;
@@ -626,6 +633,7 @@ export function configureFlowV1(input: {
   defaultAgent: string | null;
   defaultModel: string | null;
   defaultPermissionMode: string | null;
+  defaultReasoningEffort: string | null;
   secretBindings: Record<string, FlowV1SecretBinding>;
 } {
   const row = getDb()
@@ -679,6 +687,9 @@ export function configureFlowV1(input: {
         : {}),
       ...(input.defaultPermissionMode !== undefined
         ? { defaultPermissionMode: input.defaultPermissionMode }
+        : {}),
+      ...(input.defaultReasoningEffort !== undefined
+        ? { defaultReasoningEffort: input.defaultReasoningEffort }
         : {}),
       ...(input.secretBindings !== undefined
         ? { secretBindings: input.secretBindings }
@@ -769,6 +780,7 @@ export async function restartFlowV1Cycle(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
   cancellationTimeoutMs?: number;
@@ -824,6 +836,7 @@ export async function restartFlowV1Cycle(input: {
     defaultAgent: input.defaultAgent,
     defaultModel: input.defaultModel,
     defaultPermissionMode: input.defaultPermissionMode,
+    defaultReasoningEffort: input.defaultReasoningEffort,
     environment: input.environment,
     secrets: input.secrets,
   });
@@ -942,6 +955,7 @@ export async function retryFlowV1Node(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
 }): Promise<{
@@ -1057,6 +1071,7 @@ export async function retryFlowV1Node(input: {
           defaultAgent: input.defaultAgent,
           defaultModel: input.defaultModel,
           defaultPermissionMode: input.defaultPermissionMode,
+          defaultReasoningEffort: input.defaultReasoningEffort,
           environment: input.environment,
           secrets: input.secrets,
         });

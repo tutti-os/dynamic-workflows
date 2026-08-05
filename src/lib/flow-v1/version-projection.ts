@@ -67,6 +67,7 @@ export function getFlowV1VersionReview(
       defaultAgent: runtimeConfig.defaultAgent,
       defaultModel: runtimeConfig.defaultModel,
       defaultPermissionMode: runtimeConfig.defaultPermissionMode,
+      defaultReasoningEffort: runtimeConfig.defaultReasoningEffort,
     },
     diagnostics: flow.diagnostics,
     comparison: baseVersion

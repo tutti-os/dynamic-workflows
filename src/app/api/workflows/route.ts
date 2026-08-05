@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     defaultAgent?: string;
     defaultModel?: string;
     defaultPermissionMode?: string;
+    defaultReasoningEffort?: string;
     secretBindings?: unknown;
   };
 
@@ -63,6 +64,7 @@ export async function POST(request: Request) {
         defaultAgent: body.defaultAgent,
         defaultModel: body.defaultModel,
         defaultPermissionMode: body.defaultPermissionMode,
+        defaultReasoningEffort: body.defaultReasoningEffort,
         secretBindings,
       });
       return NextResponse.json(created, { status: 201 });

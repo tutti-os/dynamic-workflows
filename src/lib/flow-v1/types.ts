@@ -635,6 +635,7 @@ export type FlowV1DetailProjection = {
     defaultAgent: string | null;
     defaultModel: string | null;
     defaultPermissionMode: string | null;
+    defaultReasoningEffort: string | null;
     secretBindings: Record<
       string,
       import("./secret-bindings").FlowV1SecretBinding

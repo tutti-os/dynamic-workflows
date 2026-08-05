@@ -116,6 +116,7 @@ export async function runFlowV1Tick(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
   signal?: AbortSignal;
@@ -196,6 +197,9 @@ export async function runFlowV1Tick(input: {
   const executionDefaultPermissionMode =
     input.defaultPermissionMode ??
     storedExecutionConfig.defaultPermissionMode;
+  const executionDefaultReasoningEffort =
+    input.defaultReasoningEffort ??
+    storedExecutionConfig.defaultReasoningEffort;
   if (flow.meta.requiresCwd && !executionProjectCwd) {
     throw new FlowV1TickSupervisorError(
       "flow_project_cwd_missing",
@@ -297,6 +301,7 @@ export async function runFlowV1Tick(input: {
         defaultAgent: executionDefaultAgent,
         defaultModel: executionDefaultModel,
         defaultPermissionMode: executionDefaultPermissionMode,
+        defaultReasoningEffort: executionDefaultReasoningEffort,
         environment: executionEnvironment,
         secrets: executionSecrets,
         signal:
@@ -486,6 +491,7 @@ export async function runFlowV1Tick(input: {
             defaultAgent: executionDefaultAgent,
             defaultModel: executionDefaultModel,
             defaultPermissionMode: executionDefaultPermissionMode,
+            defaultReasoningEffort: executionDefaultReasoningEffort,
             agentPrompt: job.agentPrompt,
             environment: executionEnvironment,
             secrets: executionSecrets,
@@ -591,6 +597,7 @@ export async function runFlowV1Tick(input: {
           defaultAgent: executionDefaultAgent,
           defaultModel: executionDefaultModel,
           defaultPermissionMode: executionDefaultPermissionMode,
+          defaultReasoningEffort: executionDefaultReasoningEffort,
           agentPrompt:
             baseAgentPrompt && validationError
               ? validationSessionId
@@ -754,6 +761,7 @@ export async function runFlowV1Tick(input: {
                     defaultModel: executionDefaultModel,
                     defaultPermissionMode:
                       executionDefaultPermissionMode,
+                    defaultReasoningEffort: executionDefaultReasoningEffort,
                     environment: executionEnvironment,
                     secrets: executionSecrets,
                     depth:
@@ -860,6 +868,7 @@ export async function runFlowV1Tick(input: {
                 defaultAgent: executionDefaultAgent,
                 defaultModel: executionDefaultModel,
                 defaultPermissionMode: executionDefaultPermissionMode,
+                defaultReasoningEffort: executionDefaultReasoningEffort,
                 environment: executionEnvironment,
                 secrets: executionSecrets,
                 depth: (input.immediateContinuationDepth ?? 0) + 1,
@@ -1003,6 +1012,7 @@ async function runImmediateContinuation(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   environment?: Record<string, string>;
   secrets?: Record<string, string>;
   depth: number;
@@ -1071,6 +1081,7 @@ async function runImmediateContinuation(input: {
       defaultAgent: input.defaultAgent,
       defaultModel: input.defaultModel,
       defaultPermissionMode: input.defaultPermissionMode,
+      defaultReasoningEffort: input.defaultReasoningEffort,
       environment: input.environment,
       secrets: input.secrets,
       immediateContinuationDepth: input.depth,
@@ -1093,6 +1104,7 @@ async function executeNode(input: {
   defaultAgent?: string;
   defaultModel?: string;
   defaultPermissionMode?: string;
+  defaultReasoningEffort?: string;
   agentPrompt?: string;
   nodeProgress?: FlowV1JsonObject;
   onNodeProgress?: (progress: FlowV1JsonObject) => void;
@@ -1828,6 +1840,7 @@ async function executeCompositeAgentStep(input: {
               input.parent.nodeInput,
               `$config.${input.step.id}.permissionMode`,
             ) ?? input.parent.defaultPermissionMode,
+          reasoningEffort: input.parent.defaultReasoningEffort,
           resumeSessionId: attempt.agentSessionId ?? undefined,
           signal: input.parent.signal,
           metadata: {
@@ -2187,6 +2200,7 @@ async function executeAgent(
           input.nodeInput,
           "$config.permissionMode",
         ) ?? input.defaultPermissionMode,
+      reasoningEffort: input.defaultReasoningEffort,
       resumeSessionId: attempt?.agentSessionId ?? undefined,
       signal: input.signal,
       metadata: {

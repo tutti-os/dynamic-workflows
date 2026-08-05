@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type {
   AgentPermissionModeOption,
+  AgentReasoningEffortOption,
   AgentConversationMessage,
   AgentRunInput,
   AgentRuntimeAdapter,
@@ -78,6 +79,7 @@ type NextopComposerOptionsOutput = {
   effectiveSettings?: unknown;
   modelConfig?: unknown;
   permissionConfig?: unknown;
+  reasoningConfig?: unknown;
 };
 
 type NextopMessage = {
@@ -268,7 +270,7 @@ export function createNextopCliAgentAdapter(
       loaded.catalog.targets.map(async (spec): Promise<AgentTargetOption> => {
         const composerOptions = spec.supported
           ? await readAgentComposerOptions(spec, runner, providerModelsTimeoutMs)
-          : { models: [], permissionModes: [] };
+          : { models: [], permissionModes: [], reasoningEfforts: [] };
         return {
           id: spec.id,
           name: spec.name,
@@ -280,6 +282,12 @@ export function createNextopCliAgentAdapter(
             : {}),
           ...(composerOptions.defaultPermissionMode
             ? { defaultPermissionMode: composerOptions.defaultPermissionMode }
+            : {}),
+          ...(composerOptions.reasoningEfforts.length > 0
+            ? { reasoningEfforts: composerOptions.reasoningEfforts }
+            : {}),
+          ...(composerOptions.defaultReasoningEffort
+            ? { defaultReasoningEffort: composerOptions.defaultReasoningEffort }
             : {}),
           isDefault: spec.isDefault,
           reason: spec.reason,
@@ -319,6 +327,7 @@ export function createNextopCliAgentAdapter(
     async startSession(input: {
       agent: string;
       model?: string;
+      reasoningEffort?: string;
       cwd: string;
       prompt: string;
     }): Promise<AgentSessionRef> {
@@ -337,6 +346,9 @@ export function createNextopCliAgentAdapter(
         ...startCommand(target),
         "--model",
         model,
+        ...(input.reasoningEffort
+          ? ["--reasoning-effort", input.reasoningEffort]
+          : []),
         "--prompt",
         input.prompt,
         "--cwd",
@@ -496,6 +508,9 @@ export function createNextopCliAgentAdapter(
                 model,
                 ...(input.permissionMode
                   ? ["--permission-mode", input.permissionMode]
+                  : []),
+                ...(input.reasoningEffort
+                  ? ["--reasoning-effort", input.reasoningEffort]
                   : []),
                 "--prompt",
                 input.prompt,
@@ -1485,6 +1500,8 @@ async function readAgentComposerOptions(
   models: string[];
   permissionModes: AgentPermissionModeOption[];
   defaultPermissionMode?: string;
+  reasoningEfforts: AgentReasoningEffortOption[];
+  defaultReasoningEffort?: string;
 }> {
   try {
     const output = (await runner(composerOptionsCommand(target), {
@@ -1493,10 +1510,46 @@ async function readAgentComposerOptions(
     return {
       models: parseComposerModels(output),
       ...parseComposerPermissions(output),
+      ...parseComposerReasoning(output),
     };
   } catch {
-    return { models: [], permissionModes: [] };
+    return { models: [], permissionModes: [], reasoningEfforts: [] };
   }
+}
+
+function parseComposerReasoning(output: NextopComposerOptionsOutput): {
+  reasoningEfforts: AgentReasoningEffortOption[];
+  defaultReasoningEffort?: string;
+} {
+  const reasoningConfig = readRecord(output.reasoningConfig);
+  const defaultReasoningEffort = readOptionalString(
+    reasoningConfig?.defaultValue,
+  );
+  const options = Array.isArray(reasoningConfig?.options)
+    ? reasoningConfig.options
+    : [];
+  const reasoningEfforts = options.flatMap(
+    (option): AgentReasoningEffortOption[] => {
+      const record = readRecord(option);
+      const id =
+        readOptionalString(record?.id) ?? readOptionalString(record?.value);
+      if (!id) {
+        return [];
+      }
+      const description = readOptionalString(record?.description);
+      return [
+        {
+          id,
+          label: readOptionalString(record?.label) ?? id,
+          ...(description ? { description } : {}),
+        },
+      ];
+    },
+  );
+  return {
+    reasoningEfforts,
+    ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+  };
 }
 
 function parseComposerPermissions(output: NextopComposerOptionsOutput): {

@@ -8,9 +8,11 @@ import {
 import {
   DEFAULT_MODEL_VALUE,
   DEFAULT_PERMISSION_MODE_VALUE,
+  DEFAULT_REASONING_EFFORT_VALUE,
 } from "@/components/workflow/useWorkflowRunSettings";
 import type {
   AgentPermissionModeOption,
+  AgentReasoningEffortOption,
   AgentTargetOption,
 } from "@/lib/agents/types";
 
@@ -109,6 +111,48 @@ export function WorkflowPermissionModeSelect(props: {
         {props.modes.map((mode) => (
           <SelectItem key={mode.id} value={mode.id}>
             {mode.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function WorkflowReasoningEffortSelect(props: {
+  efforts: AgentReasoningEffortOption[];
+  value: string;
+  disabled?: boolean;
+  onValueChange: (value: string) => void;
+}) {
+  const selected = props.efforts.find((effort) => effort.id === props.value);
+  const hasCurrentValue =
+    Boolean(props.value) && !selected && props.value !== DEFAULT_REASONING_EFFORT_VALUE;
+
+  return (
+    <Select
+      value={props.value || DEFAULT_REASONING_EFFORT_VALUE}
+      disabled={props.disabled}
+      onValueChange={(value) =>
+        props.onValueChange(
+          value === DEFAULT_REASONING_EFFORT_VALUE ? "" : value,
+        )
+      }
+    >
+      <SelectTrigger className="control-select">
+        <span className="select-display">
+          {selected?.label ?? (hasCurrentValue ? props.value : "Agent default")}
+        </span>
+      </SelectTrigger>
+      <SelectContent align="start" className="workflow-select-content">
+        <SelectItem value={DEFAULT_REASONING_EFFORT_VALUE}>
+          Agent default
+        </SelectItem>
+        {hasCurrentValue ? (
+          <SelectItem value={props.value}>{props.value}</SelectItem>
+        ) : null}
+        {props.efforts.map((effort) => (
+          <SelectItem key={effort.id} value={effort.id}>
+            {effort.label}
           </SelectItem>
         ))}
       </SelectContent>

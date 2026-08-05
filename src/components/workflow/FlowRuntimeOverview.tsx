@@ -51,6 +51,7 @@ import {
   WorkflowAgentSelect,
   WorkflowModelSelect,
   WorkflowPermissionModeSelect,
+  WorkflowReasoningEffortSelect,
 } from "@/components/workflow/WorkflowRunSelectors";
 import { useWorkflowRunSettings } from "@/components/workflow/useWorkflowRunSettings";
 import {
@@ -80,6 +81,7 @@ type RuntimeConfigDraft = {
   agent: string;
   model: string;
   permissionMode: string;
+  reasoningEffort: string;
 };
 
 export function FlowRuntimeOverview(props: {
@@ -574,6 +576,7 @@ function ConfigurationEditor(props: {
     agent: configuration.defaultAgent ?? undefined,
     model: configuration.defaultModel ?? undefined,
     permissionMode: configuration.defaultPermissionMode ?? undefined,
+    reasoningEffort: configuration.defaultReasoningEffort ?? undefined,
   });
   const [paramsDraft, setParamsDraft] = useState<Record<string, string>>(() =>
     createSchemaValueDraft(
@@ -605,6 +608,7 @@ function ConfigurationEditor(props: {
     agent: runSettings.effectiveAgent,
     model: runSettings.model,
     permissionMode: runSettings.permissionMode,
+    reasoningEffort: runSettings.reasoningEffort,
   };
   const configDirty =
     configBaseline !== null &&
@@ -624,6 +628,7 @@ function ConfigurationEditor(props: {
     runSettings.setAgent(snapshot.agent);
     runSettings.setModel(snapshot.model);
     runSettings.setPermissionMode(snapshot.permissionMode);
+    runSettings.setReasoningEffort(snapshot.reasoningEffort);
   }
 
   function requestConfigDialogClose() {
@@ -657,6 +662,8 @@ function ConfigurationEditor(props: {
         defaultModel: runSettings.model.trim() || null,
         defaultPermissionMode:
           runSettings.permissionMode.trim() || null,
+        defaultReasoningEffort:
+          runSettings.reasoningEffort.trim() || null,
         secretBindings: savedSecretBindings,
       });
       await props.onRefresh();
@@ -753,6 +760,10 @@ function ConfigurationEditor(props: {
           <dd>{configuration.defaultModel || "Default"}</dd>
         </div>
         <div>
+          <dt>Thinking depth</dt>
+          <dd>{configuration.defaultReasoningEffort || "Agent default"}</dd>
+        </div>
+        <div>
           <dt>Parameters</dt>
           <dd>
             {Object.keys(configuration.params?.values ?? {}).length} configured
@@ -783,8 +794,8 @@ function ConfigurationEditor(props: {
           <DialogHeader>
             <DialogTitle>Runtime configuration</DialogTitle>
             <DialogDescription>
-              Set the project, Agent, model, parameters, and secret bindings
-              used by this workflow.
+              Set the project, Agent, model, thinking depth, parameters, and
+              secret bindings used by this workflow.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -833,6 +844,17 @@ function ConfigurationEditor(props: {
                   onValueChange={runSettings.setPermissionMode}
                 />
               </label>
+              {runSettings.reasoningEffortOptions.length > 0 ? (
+                <label>
+                  <span>Thinking depth</span>
+                  <WorkflowReasoningEffortSelect
+                    efforts={runSettings.reasoningEffortOptions}
+                    value={runSettings.reasoningEffort}
+                    disabled={runSettings.agentsLoading}
+                    onValueChange={runSettings.setReasoningEffort}
+                  />
+                </label>
+              ) : null}
               {Object.entries(configuration.secretsSchema).map(
                 ([name, definition]) => (
                   <SecretBindingField

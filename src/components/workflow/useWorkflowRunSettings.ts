@@ -10,6 +10,7 @@ import type {
 
 export const DEFAULT_MODEL_VALUE = "__default__";
 export const DEFAULT_PERMISSION_MODE_VALUE = "__default_permission__";
+export const DEFAULT_REASONING_EFFORT_VALUE = "__default_reasoning_effort__";
 
 const FALLBACK_AGENTS: AgentTargetOption[] = [
   {
@@ -71,6 +72,7 @@ export function useWorkflowRunSettings(initial?: {
   agent?: string;
   model?: string;
   permissionMode?: string;
+  reasoningEffort?: string;
 }): {
   agents: AgentTargetOption[];
   effectiveAgent: string;
@@ -78,6 +80,10 @@ export function useWorkflowRunSettings(initial?: {
   modelOptions: string[];
   permissionMode: string;
   permissionModeOptions: NonNullable<AgentTargetOption["permissionModes"]>;
+  reasoningEffort: string;
+  reasoningEffortOptions: NonNullable<
+    AgentTargetOption["reasoningEfforts"]
+  >;
   cwd: string;
   agentsLoading: boolean;
   agentsError?: string;
@@ -86,6 +92,7 @@ export function useWorkflowRunSettings(initial?: {
   setAgent: (value: string) => void;
   setModel: (value: string) => void;
   setPermissionMode: (value: string) => void;
+  setReasoningEffort: (value: string) => void;
   setCwd: (value: string) => void;
 } {
   const [agents, setAgents] = useState<AgentTargetOption[]>(FALLBACK_AGENTS);
@@ -93,6 +100,9 @@ export function useWorkflowRunSettings(initial?: {
   const [model, setModel] = useState(initial?.model ?? "");
   const [permissionMode, setPermissionMode] = useState(
     initial?.permissionMode ?? "",
+  );
+  const [reasoningEffort, setReasoningEffort] = useState(
+    initial?.reasoningEffort ?? "",
   );
   const [cwd, setCwd] = useState("");
   const [agentsLoading, setAgentsLoading] = useState(true);
@@ -131,6 +141,7 @@ export function useWorkflowRunSettings(initial?: {
               setAgentState(nextAgent);
               setModel("");
               setPermissionMode("");
+              setReasoningEffort("");
             }
           }
           hasLoadedCatalogRef.current = true;
@@ -174,12 +185,27 @@ export function useWorkflowRunSettings(initial?: {
     () => selectedAgent?.permissionModes ?? [],
     [selectedAgent?.permissionModes],
   );
+  const reasoningEffortOptions = useMemo(
+    () => selectedAgent?.reasoningEfforts ?? [],
+    [selectedAgent?.reasoningEfforts],
+  );
 
   function setAgent(value: string) {
     agentRef.current = value;
     setAgentState(value);
     setModel("");
     setPermissionMode("");
+    setReasoningEffort("");
+  }
+
+  function setModelValue(value: string) {
+    setModel(value);
+    if (
+      reasoningEffort &&
+      !reasoningEffortOptions.some((option) => option.id === reasoningEffort)
+    ) {
+      setReasoningEffort("");
+    }
   }
 
   return {
@@ -189,14 +215,17 @@ export function useWorkflowRunSettings(initial?: {
     modelOptions,
     permissionMode,
     permissionModeOptions,
+    reasoningEffort,
+    reasoningEffortOptions,
     cwd,
     agentsLoading,
     agentsError,
     agentsWarning,
     retryAgents: loadAgents,
     setAgent,
-    setModel,
+    setModel: setModelValue,
     setPermissionMode,
+    setReasoningEffort,
     setCwd,
   };
 }

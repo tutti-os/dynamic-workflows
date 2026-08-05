@@ -5,6 +5,12 @@ export type AgentPermissionModeOption = {
   semantic?: string;
 };
 
+export type AgentReasoningEffortOption = {
+  id: string;
+  label: string;
+  description?: string;
+};
+
 export type AgentTargetOption = {
   id: string;
   name: string;
@@ -13,6 +19,8 @@ export type AgentTargetOption = {
   models: string[];
   permissionModes?: AgentPermissionModeOption[];
   defaultPermissionMode?: string;
+  reasoningEfforts?: AgentReasoningEffortOption[];
+  defaultReasoningEffort?: string;
   isDefault?: boolean;
   reason?: string;
 };
@@ -32,6 +40,7 @@ export type AgentRunInput = {
   title?: string;
   model?: string;
   permissionMode?: string;
+  reasoningEffort?: string;
   resumeSessionId?: string;
   attachSessionId?: string;
   signal?: AbortSignal;
@@ -122,6 +131,7 @@ export type AgentRuntimeEvent =
 export type AgentSessionStartInput = {
   agent: string;
   model?: string;
+  reasoningEffort?: string;
   cwd: string;
   prompt: string;
 };

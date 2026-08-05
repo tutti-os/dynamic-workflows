@@ -60,6 +60,7 @@ describe("migrateDb", () => {
           "default_agent",
           "default_model",
           "default_permission_mode",
+          "default_reasoning_effort",
         ]),
       );
       expect(readColumnNames(database, "workflow_cycles")).toContain(
@@ -292,7 +293,7 @@ describe("migrateDb", () => {
           .prepare(
             `
             SELECT name, lifecycle, default_agent, default_model,
-              default_permission_mode
+              default_permission_mode, default_reasoning_effort
             FROM workflows
             WHERE id = ?
           `,
@@ -304,6 +305,7 @@ describe("migrateDb", () => {
         default_agent: null,
         default_model: null,
         default_permission_mode: null,
+        default_reasoning_effort: null,
       });
       expect(readColumnNames(database, "workflow_node_attempts")).toContain(
         "agent_session_key",

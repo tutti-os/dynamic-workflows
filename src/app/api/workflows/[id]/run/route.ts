@@ -42,6 +42,10 @@ export async function POST(
         typeof body.permissionMode === "string"
           ? body.permissionMode
           : undefined,
+      defaultReasoningEffort:
+        typeof body.reasoningEffort === "string"
+          ? body.reasoningEffort
+          : undefined,
     });
     return Response.json({
       run: result.tick.run,

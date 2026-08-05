@@ -172,6 +172,7 @@ describe("Flow v1 Tick supervisor", () => {
       defaultAgent: "local:codex",
       defaultModel: "gpt-5",
       defaultPermissionMode: "workspace-write",
+      defaultReasoningEffort: "high",
     });
     const started = runtime.startFlowV1Cycle({
       flowId: created.flowId,
@@ -195,6 +196,7 @@ describe("Flow v1 Tick supervisor", () => {
         agent: "local:codex",
         model: "gpt-5",
         permissionMode: "workspace-write",
+        reasoningEffort: "high",
         cwd: realpathSync(dataDir),
       }),
     );

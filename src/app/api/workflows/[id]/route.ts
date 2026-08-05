@@ -69,6 +69,7 @@ export async function PATCH(
     defaultAgent?: string | null;
     defaultModel?: string | null;
     defaultPermissionMode?: string | null;
+    defaultReasoningEffort?: string | null;
     secretBindings?: unknown;
   };
   const parsedSecretBindings =
@@ -91,6 +92,7 @@ export async function PATCH(
     body.defaultAgent !== undefined ||
     body.defaultModel !== undefined ||
     body.defaultPermissionMode !== undefined ||
+    body.defaultReasoningEffort !== undefined ||
     body.secretBindings !== undefined
   ) {
     try {
@@ -102,6 +104,7 @@ export async function PATCH(
         defaultAgent: body.defaultAgent,
         defaultModel: body.defaultModel,
         defaultPermissionMode: body.defaultPermissionMode,
+        defaultReasoningEffort: body.defaultReasoningEffort,
         secretBindings,
       });
       return NextResponse.json({

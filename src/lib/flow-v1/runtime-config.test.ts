@@ -73,6 +73,7 @@ describe("Flow v1 runtime configuration", () => {
       defaultAgent: null,
       defaultModel: null,
       defaultPermissionMode: null,
+      defaultReasoningEffort: null,
       secretBindings: {
         GH_TOKEN: {
           kind: "environment",
